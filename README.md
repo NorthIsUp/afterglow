@@ -1,23 +1,25 @@
 # screensaver — HDMI ASCII screensaver on `spruce`
 
 A deliberately thin workload that paints an ASCII screensaver onto the HDMI
-display attached to the Talos Pi5 worker **`spruce`**. First
-demo: **`aafire`** (the aalib fire animation).
+display attached to the Talos Pi5 worker **`spruce`**. Current
+demo: **`cacafire`** (the libcaca colour fire animation).
 
 ## How it works
 
-`aafire` targets a *terminal*, not a framebuffer. So the container runs
-[`fbterm`] (a framebuffer terminal emulator) which paints onto the Linux
-framebuffer `/dev/fb0`, and launches `aafire` inside it:
+`cacafire` (like `aafire`) targets a _terminal_, not a framebuffer — libcaca
+ships terminal drivers (`ncurses`/`slang`) but **no** framebuffer/KMS output
+driver. So the container runs [`fbterm`] (a framebuffer terminal emulator)
+which paints onto the Linux framebuffer `/dev/fb0`, and launches `cacafire`
+inside it with the ncurses libcaca driver:
 
 ```
-fbterm -- aafire
+CACA_DRIVER=ncurses fbterm -- cacafire
 ```
 
-- Base image: `debian:bookworm-slim` + `libaa-bin` (provides `aafire`) +
-  `fbterm` + `fbset`.
+- Base image: `debian:bookworm-slim` + `caca-utils` (provides `cacafire`) +
+  `libaa-bin` (mono `aafire` fallback) + `fbterm` + `fbset`.
 - Entry point (`image/entrypoint.sh`) checks for `/dev/fb0` (or
-  `/dev/dri/card0`). If present it launches fbterm/aafire; if **absent** it logs
+  `/dev/dri/card0`). If present it launches fbterm/cacafire; if **absent** it logs
   framebuffer diagnostics and idles (re-checking every `RETRY_SECONDS`) so the
   pod stays `Running` and you can read the logs instead of crash-looping.
 - Scheduling: `nodeSelector: kubernetes.io/hostname: spruce`,
@@ -34,7 +36,7 @@ As of this writing **spruce has no usable framebuffer**:
   is not loaded**.
 - `dmesg` shows the legacy fb driver failing:
   `bcm2708_fb soc@107c000000:fb: Unable to determine number of FBs. Disabling
-  driver. ... probe ... failed with error -2`.
+driver. ... probe ... failed with error -2`.
 - No `vc4` / `v3d` / `drm` / `simplefb` modules are loaded.
 
 So the pod will run but only log the "framebuffer not present" diagnostic until
@@ -54,7 +56,7 @@ investigate (spruce-only, does not affect cedar/fir):
 2. **Talos machine config kernel args** for `spruce`: add the vc4/v3d modules /
    `video=` if the driver is built but not auto-probing. (Current cmdline has
    `console=tty0 ... talos.dashboard.disabled=1` — the dashboard is already
-   disabled, so Talos is *not* fighting for the framebuffer; the device simply
+   disabled, so Talos is _not_ fighting for the framebuffer; the device simply
    isn't created.)
 3. Confirm the talos-rpi5 kernel actually has `CONFIG_DRM_VC4` / `CONFIG_DRM_V3D`
    built; if not, a custom image/extension is required.
@@ -74,8 +76,8 @@ the private ghcr package:
 cd k8s/apps/screensaver/image
 echo "$(gh auth token)" | docker login ghcr.io -u NorthIsUp --password-stdin
 docker buildx build --platform linux/arm64 \
-  -t ghcr.io/northisup/screensaver:0.1.0 --push .
-docker buildx imagetools inspect ghcr.io/northisup/screensaver:0.1.0   # get @sha256
+  -t ghcr.io/northisup/screensaver:0.2.0 --push .
+docker buildx imagetools inspect ghcr.io/northisup/screensaver:0.2.0   # get @sha256
 ```
 
 Then pin `image:` in `deployment.yaml` to the new tag + digest. Renovate is
