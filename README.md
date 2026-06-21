@@ -10,8 +10,18 @@ framebuffer.
 `fbfire` (`image/fbfire.c`) opens `/dev/fb0`, queries its geometry/format via
 `ioctl` (`FBIOGET_VSCREENINFO`/`FSCREENINFO`), `mmap`s it, and renders the
 classic Doom PSX fire — a low-res heat grid seeded white-hot along the bottom
-and propagated upward each frame, palette-mapped and block-scaled to the panel —
-**directly into the mmap'd framebuffer**. No terminal, no `fbterm`, no VT.
+and propagated upward each frame, palette-mapped — **directly into the mmap'd
+framebuffer**. No terminal, no `fbterm`, no VT.
+
+Two render styles (`FIRE_STYLE`):
+
+- **`ascii`** (default) — the retro/lo-fi look: the panel is divided into
+  `FIRE_CELL`-pixel character cells; each cell samples the fire heat, maps it to
+  a glyph from an ASCII ramp (`" .:-=+*#%@"`), and blits a built-in 8×8 font
+  glyph (nearest-scaled to the cell) coloured by the heat palette. Recreates the
+  cacafire/aalib ASCII vibe at direct-framebuffer speed.
+- **`blocks`** — chunky-pixel fire: the low-res grid is block-scaled straight to
+  the panel. Chunkiness set by `FIRE_SCALE` (bigger = blockier).
 
 This replaced an earlier `cacafire`+`fbterm`+`ncurses` path. That route rendered
 ASCII fire into a terminal that `fbterm` repainted onto `/dev/fb0` — indirect
@@ -27,8 +37,9 @@ directly is the fast path: **~30 fps at a fraction of the CPU.**
   `fbfire` (loops forever); if **absent** it logs diagnostics and idles
   (re-checking every `RETRY_SECONDS`) so the pod stays `Running` instead of
   crash-looping.
-- Tunables (env): `FIRE_FPS` (default 30), `FIRE_SCALE` (low-res grid =
-  panel width / scale, default 4), `FB_DEVICE` (default `/dev/fb0`).
+- Tunables (env): `FIRE_FPS` (default 30), `FIRE_STYLE` (`ascii`|`blocks`,
+  default `ascii`), `FIRE_CELL` (ascii cell px, 8..64, default 16), `FIRE_SCALE`
+  (blocks grid = panel width / scale, default 4), `FB_DEVICE` (`/dev/fb0`).
 - Scheduling: `nodeSelector: kubernetes.io/hostname: fir`,
   `securityContext.privileged: true`, host `/dev` mounted so the framebuffer is
   visible.
@@ -70,8 +81,8 @@ the private ghcr package:
 cd k8s/apps/screensaver/image
 echo "$(gh auth token)" | docker login ghcr.io -u NorthIsUp --password-stdin
 docker buildx build --platform linux/arm64 \
-  -t ghcr.io/northisup/screensaver:0.4.0 --push .
-docker buildx imagetools inspect ghcr.io/northisup/screensaver:0.4.0   # get @sha256
+  -t ghcr.io/northisup/screensaver:0.5.0 --push .
+docker buildx imagetools inspect ghcr.io/northisup/screensaver:0.5.0   # get @sha256
 ```
 
 Then pin `image:` in `deployment.yaml` to the new tag + digest. Renovate is
@@ -79,13 +90,20 @@ wired (the `# renovate:` comment) to bump it like tinyframe. The image is
 **private**; the `ghcr` pull secret is delivered to the `screensaver` namespace
 via `k8s/secrets/ghcr-screensaver.sops.yaml`.
 
-## Tuning the framerate
+## Tuning the look + framerate
 
-- `FIRE_FPS` caps the frame rate (default 30). Raise it if you want a faster
-  flame and have CPU headroom; lower it to save power.
-- `FIRE_SCALE` sets the low-res fire grid (panel width / scale). Default 4 gives
-  a 480-wide grid block-scaled to 1920 — a good speed/look balance. Smaller =
-  finer + more CPU; larger = chunkier + cheaper.
+- `FIRE_STYLE` — `ascii` (retro glyph fire, default) or `blocks` (chunky pixels).
+- `FIRE_CELL` — ascii character cell size in px (8..64, default 16). Bigger =
+  chunkier/more retro, fewer cells. This is the main "more ASCII-ish" knob.
+- `FIRE_SCALE` — blocks-mode chunkiness (panel width / scale, default 4). Bigger
+  = blockier. Ignored in ascii mode.
+- `FIRE_FPS` — frame-rate cap (default 30). Raise for a faster flame if you have
+  CPU headroom; lower to save power.
+
+Measured on fir @ 1920×1080 16bpp: `ascii` cell=16 ≈ 30 fps @ **216m CPU**;
+`blocks` scale=4 ≈ 30 fps @ 379m CPU. Both well under the 500m limit. These are
+plain deployment env changes — tweak `FIRE_*` in `deployment.yaml` with **no
+image rebuild**.
 
 ## Future enhancement: more effects
 
