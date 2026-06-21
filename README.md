@@ -1,33 +1,34 @@
-# screensaver — HDMI ASCII screensaver on `fir`
+# screensaver — HDMI fire screensaver on `fir`
 
-A deliberately thin workload that paints an ASCII screensaver onto the HDMI
-display attached to the Talos Pi5 worker **`fir`**. Current
-demo: **`cacafire`** (the libcaca colour fire animation).
+A deliberately thin workload that paints a fire animation onto the HDMI display
+attached to the Talos Pi5 worker **`fir`**. Renderer:
+**`fbfire`**, a tiny C program that writes a Doom-fire straight to the
+framebuffer.
 
 ## How it works
 
-`cacafire` (like `aafire`) targets a _terminal_, not a framebuffer — libcaca
-ships terminal drivers (`ncurses`/`slang`) but **no** framebuffer/KMS output
-driver. So the container runs [`fbterm`] (a framebuffer terminal emulator)
-which paints onto the Linux framebuffer `/dev/fb0`, and launches `cacafire`
-inside it with the ncurses libcaca driver:
+`fbfire` (`image/fbfire.c`) opens `/dev/fb0`, queries its geometry/format via
+`ioctl` (`FBIOGET_VSCREENINFO`/`FSCREENINFO`), `mmap`s it, and renders the
+classic Doom PSX fire — a low-res heat grid seeded white-hot along the bottom
+and propagated upward each frame, palette-mapped and block-scaled to the panel —
+**directly into the mmap'd framebuffer**. No terminal, no `fbterm`, no VT.
 
-```
-CACA_DRIVER=ncurses setsid -c sh -c 'fbterm -- cacafire' </dev/tty0 >/dev/tty0 2>&1
-```
+This replaced an earlier `cacafire`+`fbterm`+`ncurses` path. That route rendered
+ASCII fire into a terminal that `fbterm` repainted onto `/dev/fb0` — indirect
+and slow: it burned **~0.5 core for ~10 fps** and required wrangling a foreground
+kernel VT for `fbterm` (it rejects the pty a container gets). Writing the fb
+directly is the fast path: **~30 fps at a fraction of the CPU.**
 
-`fbterm` REQUIRES a real kernel VT (`/dev/tty*`) as its controlling terminal —
-it rejects ptys with `stdin isn't a interactive tty!`, which is all a container
-normally gets. The `setsid -c ... </dev/tty0` wrapper makes a new session whose
-controlling tty is the host VT (`/dev/tty0`, visible via the host `/dev` mount).
-Verified: with this, `fbterm`+`cacafire` stay alive and animate `/dev/fb0`.
-
-- Base image: `debian:bookworm-slim` + `caca-utils` (provides `cacafire`) +
-  `libaa-bin` (mono `aafire` fallback) + `fbterm` + `fbset`.
-- Entry point (`image/entrypoint.sh`) checks for `/dev/fb0` (or
-  `/dev/dri/card0`). If present it launches fbterm/cacafire; if **absent** it logs
-  framebuffer diagnostics and idles (re-checking every `RETRY_SECONDS`) so the
-  pod stays `Running` and you can read the logs instead of crash-looping.
+- Base image: multi-stage `debian:bookworm-slim` — build stage compiles
+  `fbfire.c` with gcc; runtime stage ships just the binary + `fbset` (fb
+  diagnostics) + the entrypoint. Supports 16bpp RGB565 (fir simplefb) and 32bpp
+  XRGB8888 (the common KMS case).
+- Entry point (`image/entrypoint.sh`) waits for `/dev/fb0`; if present it runs
+  `fbfire` (loops forever); if **absent** it logs diagnostics and idles
+  (re-checking every `RETRY_SECONDS`) so the pod stays `Running` instead of
+  crash-looping.
+- Tunables (env): `FIRE_FPS` (default 30), `FIRE_SCALE` (low-res grid =
+  panel width / scale, default 4), `FB_DEVICE` (default `/dev/fb0`).
 - Scheduling: `nodeSelector: kubernetes.io/hostname: fir`,
   `securityContext.privileged: true`, host `/dev` mounted so the framebuffer is
   visible.
@@ -52,8 +53,8 @@ device`, `/proc/fb` is empty, no `/dev/fb0`, `/sys/class/drm` has only
 
 - The framebuffer is **simplefb**, not DRM/KMS: there is **no** `/dev/dri/card0`.
   Tools that require KMS (kmscube, modern DRM clients) will not work; anything
-  that writes `/dev/fb0` (fbterm→cacafire/aafire, fbi, raw writes) does.
-- 16bpp r5g6b5: colour is fine for cacafire; just no alpha/truecolor.
+  that writes `/dev/fb0` (fbfire's raw writes, fbi, etc.) does.
+- 16bpp r5g6b5: `fbfire` palettes to RGB565; just no alpha/truecolor.
 - If the simplefb ever stops appearing on fir (e.g. monitor unplugged at boot,
   or a kernel/boot change), the proper fix is enabling the `siderolabs/vc4`
   system extension + `dtoverlay=vc4-kms-v3d` in the **fir** boot image (built at
@@ -69,8 +70,8 @@ the private ghcr package:
 cd k8s/apps/screensaver/image
 echo "$(gh auth token)" | docker login ghcr.io -u NorthIsUp --password-stdin
 docker buildx build --platform linux/arm64 \
-  -t ghcr.io/northisup/screensaver:0.3.0 --push .
-docker buildx imagetools inspect ghcr.io/northisup/screensaver:0.3.0   # get @sha256
+  -t ghcr.io/northisup/screensaver:0.4.0 --push .
+docker buildx imagetools inspect ghcr.io/northisup/screensaver:0.4.0   # get @sha256
 ```
 
 Then pin `image:` in `deployment.yaml` to the new tag + digest. Renovate is
@@ -78,16 +79,16 @@ wired (the `# renovate:` comment) to bump it like tinyframe. The image is
 **private**; the `ghcr` pull secret is delivered to the `screensaver` namespace
 via `k8s/secrets/ghcr-screensaver.sops.yaml`.
 
-## Future enhancement: rotate screensavers
+## Tuning the framerate
 
-`aafire` is just the first demo. A nice follow-up is rotating through other
-ASCII/terminal eye-candy, e.g.:
+- `FIRE_FPS` caps the frame rate (default 30). Raise it if you want a faster
+  flame and have CPU headroom; lower it to save power.
+- `FIRE_SCALE` sets the low-res fire grid (panel width / scale). Default 4 gives
+  a 480-wide grid block-scaled to 1920 — a good speed/look balance. Smaller =
+  finer + more CPU; larger = chunkier + cheaper.
 
-- `bb` (the classic aalib demo) — `apt install bb`
-- `cmatrix` — Matrix rain
-- `aaflip` / `cacademo` / `cacafire` (libcaca, colour ASCII)
-- `asciiquarium`, `pipes.sh`, `tty-clock`
+## Future enhancement: more effects
 
-Pick one per restart (or loop on a timer) inside the entrypoint.
-
-[`fbterm`]: https://salsa.debian.org/debian/fbterm
+`fbfire` is a single direct-to-fb effect. Follow-ups (all as direct fb writers,
+to keep the fast path): plasma, starfield, Matrix rain, metaballs. Add a mode
+switch in `fbfire.c` / the entrypoint.

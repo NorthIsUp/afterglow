@@ -1,28 +1,27 @@
-# Thin HDMI ASCII screensaver for the Talos Pi5 node "spruce".
+# HDMI fire screensaver for the Talos Pi5 node "fir".
 #
-# Renders cacafire (libcaca colour fire demo) onto the Linux framebuffer via
-# fbterm. libcaca, like aalib, draws to a *terminal* (it has no framebuffer/KMS
-# output driver), so fbterm provides a terminal painted onto /dev/fb0 and we run
-# cacafire inside it with the ncurses driver.
-#   - caca-utils : provides /usr/bin/cacafire (+ cacademo) — colour ASCII
-#   - libaa-bin  : provides /usr/bin/aafire (kept as a mono fallback)
-#   - fbterm     : framebuffer terminal emulator that paints to /dev/fb0
-#   - fbset      : (fbset pkg) handy for fb diagnostics
+# Renders a Doom-fire animation by writing pixels DIRECTLY into the mmap'd
+# framebuffer (/dev/fb0). This replaces the old cacafire+fbterm+ncurses path,
+# which rendered ASCII fire into a terminal that fbterm repainted onto the
+# framebuffer — an indirect path that burned ~0.5 core for ~10 fps. Direct fb
+# writes are the fast path (hundreds of MB/s on fir) and need no VT/terminal.
 #
 # arm64-only cluster; build with --platform=linux/arm64.
-FROM debian:bookworm-slim
 
+# --- build stage: compile the tiny C renderer ---
+FROM debian:bookworm-slim AS build
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
-       caca-utils \
-       libaa-bin \
-       fbterm \
-       fbset \
-       ncurses-base \
+  && apt-get install -y --no-install-recommends gcc libc6-dev \
   && rm -rf /var/lib/apt/lists/*
+COPY fbfire.c /src/fbfire.c
+RUN gcc -O2 -Wall -Wextra -o /usr/local/bin/fbfire /src/fbfire.c
 
+# --- runtime stage: just the binary + entrypoint + fbset for diagnostics ---
+FROM debian:bookworm-slim
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends fbset \
+  && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/fbfire /usr/local/bin/fbfire
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
-
-ENV TERM=linux
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
