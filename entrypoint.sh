@@ -53,9 +53,15 @@ run_fire() {
   # (libcaca has no framebuffer/KMS driver — fbterm is what paints the fb).
   export TERM=linux
   export CACA_DRIVER=ncurses
+  # Run in the background and wait, rather than exec: as PID 1 the entrypoint
+  # must stay alive to hold the container open and keep the retry loop. Using
+  # `exec` here detaches the new session and the container exits immediately
+  # (verified crash-loop). setsid -c gives fbterm its own session + controlling
+  # tty on the VT.
   # shellcheck disable=SC2094 # ${VT} is a tty device, not a regular file: reading
   # (keystrokes) and writing (screen) the same VT is correct and intended.
-  exec setsid -c sh -c 'fbterm -- cacafire' <"${VT}" >"${VT}" 2>&1
+  setsid -c sh -c 'fbterm -- cacafire' <"${VT}" >"${VT}" 2>&1 &
+  wait $!
 }
 
 # Main loop: wait for the framebuffer, then hand off to fbterm/aafire.
