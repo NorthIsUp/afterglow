@@ -1,7 +1,7 @@
-# screensaver — HDMI ASCII screensaver on `spruce`
+# screensaver — HDMI ASCII screensaver on `fir`
 
 A deliberately thin workload that paints an ASCII screensaver onto the HDMI
-display attached to the Talos Pi5 worker **`spruce`**. Current
+display attached to the Talos Pi5 worker **`fir`**. Current
 demo: **`cacafire`** (the libcaca colour fire animation).
 
 ## How it works
@@ -22,50 +22,37 @@ CACA_DRIVER=ncurses fbterm -- cacafire
   `/dev/dri/card0`). If present it launches fbterm/cacafire; if **absent** it logs
   framebuffer diagnostics and idles (re-checking every `RETRY_SECONDS`) so the
   pod stays `Running` and you can read the logs instead of crash-looping.
-- Scheduling: `nodeSelector: kubernetes.io/hostname: spruce`,
+- Scheduling: `nodeSelector: kubernetes.io/hostname: fir`,
   `securityContext.privileged: true`, host `/dev` mounted so the framebuffer is
-  visible the moment it appears.
+  visible.
 
-## ⚠️ Current state: no framebuffer on spruce yet
+## Display state (verified 2026-06-20)
 
-As of this writing **spruce has no usable framebuffer**:
+The monitor is plugged into **fir**, and fir exposes a working, writable
+framebuffer — no vc4/KMS or image rebuild required:
 
-- `/dev/fb0` — does **not** exist.
-- `/dev/dri` / `/dev/dri/card0` — does **not** exist.
-- `/sys/class/drm` contains only `version` (no `card0`) → the **vc4 KMS driver
-  is not loaded**.
-- `dmesg` shows the legacy fb driver failing:
-  `bcm2708_fb soc@107c000000:fb: Unable to determine number of FBs. Disabling
-driver. ... probe ... failed with error -2`.
-- No `vc4` / `v3d` / `drm` / `simplefb` modules are loaded.
+- `fir`: U-Boot registers a **simplefb** at boot
+  (`simple-framebuffer 3f800000.framebuffer: fb0: simplefb registered!`),
+  giving `/dev/fb0` at **1920x1080, r5g6b5, 16bpp, stride 3840**. A throwaway
+  privileged pod on fir successfully wrote pixels to `/dev/fb0` (screen
+  flashed), so a pod can drive this display today.
+- `spruce`: **no** framebuffer — kernel falls back to `Console: colour dummy
+device`, `/proc/fb` is empty, no `/dev/fb0`, `/sys/class/drm` has only
+  `version`. (spruce + fir both boot via U-Boot UEFI with the vc4 HDMI
+  device-tree nodes `status = disabled`; fir happens to get a U-Boot simplefb
+  handover, spruce does not.) This is why the screensaver is pinned to **fir**.
 
-So the pod will run but only log the "framebuffer not present" diagnostic until
-the framebuffer is enabled.
+### Notes / limitations
 
-### Follow-up to light up the screen (Talos / Pi5 kernel + firmware)
-
-The Raspberry Pi 5 needs the VideoCore KMS display stack enabled so the kernel
-creates `/dev/dri/card0` (+ a `/dev/fb0` via simpledrm/fbcon). On Raspberry Pi
-OS this is `dtoverlay=vc4-kms-v3d` in `config.txt`; on **Talos** it is governed
-by the boot firmware / device-tree shipped in the talos-rpi5 image. Options to
-investigate (spruce-only, does not affect cedar/fir):
-
-1. **Firmware `config.txt` / overlay**: ensure the rpi5 boot media enables
-   `vc4-kms-v3d` (and `max_framebuffers`, `hdmi_force_hotplug` if the screen is
-   not always powered). The talos-rpi5 fork controls this in its image overlay.
-2. **Talos machine config kernel args** for `spruce`: add the vc4/v3d modules /
-   `video=` if the driver is built but not auto-probing. (Current cmdline has
-   `console=tty0 ... talos.dashboard.disabled=1` — the dashboard is already
-   disabled, so Talos is _not_ fighting for the framebuffer; the device simply
-   isn't created.)
-3. Confirm the talos-rpi5 kernel actually has `CONFIG_DRM_VC4` / `CONFIG_DRM_V3D`
-   built; if not, a custom image/extension is required.
-
-Once `/dev/dri/card0` (or `/dev/fb0`) appears, delete the pod and it will start
-drawing automatically — no manifest change needed.
-
-> Note: enabling vc4 KMS only changes **spruce's** boot config, which is fine
-> per the project's "spruce-only Talos config" guidance.
+- The framebuffer is **simplefb**, not DRM/KMS: there is **no** `/dev/dri/card0`.
+  Tools that require KMS (kmscube, modern DRM clients) will not work; anything
+  that writes `/dev/fb0` (fbterm→cacafire/aafire, fbi, raw writes) does.
+- 16bpp r5g6b5: colour is fine for cacafire; just no alpha/truecolor.
+- If the simplefb ever stops appearing on fir (e.g. monitor unplugged at boot,
+  or a kernel/boot change), the proper fix is enabling the `siderolabs/vc4`
+  system extension + `dtoverlay=vc4-kms-v3d` in the **fir** boot image (built at
+  image-generation time — see siderolabs sbc-raspberrypi docs). Do this on the
+  worker `fir`, never on `spruce` (sole etcd/control-plane).
 
 ## Building / publishing the image
 
