@@ -17,6 +17,9 @@ set -u
 
 FB="${FB_DEVICE:-/dev/fb0}"
 LOOP_DELAY="${RETRY_SECONDS:-30}"
+# Real kernel VT for fbterm's controlling tty (it rejects ptys). The host's
+# /dev/tty0 (active VT) is visible via the host /dev mount. Override with VT_DEVICE.
+VT="${VT_DEVICE:-/dev/tty0}"
 
 log() { echo "[screensaver] $*"; }
 
@@ -38,16 +41,21 @@ diag() {
 }
 
 run_fire() {
-  # fbterm needs a tty; it opens the active VT. Run cacafire inside it.
-  # cacafire loops forever on its own (colour fire animation).
-  log "framebuffer ${FB} present; launching fbterm -> cacafire (CACA_DRIVER=ncurses)"
-  # fbterm refuses to run as a login shell without a controlling tty in some
-  # setups; exec it directly with the command. TERM must be set for the
-  # terminal libs; CACA_DRIVER pins libcaca to the ncurses terminal driver
-  # (no X / framebuffer driver exists in libcaca — fbterm paints the fb).
+  # cacafire loops forever on its own (colour fire animation), drawing into a
+  # terminal that fbterm paints onto the framebuffer.
+  log "framebuffer ${FB} present; launching fbterm -> cacafire (CACA_DRIVER=ncurses) on ${VT}"
+  # fbterm REQUIRES a real kernel VT (/dev/tty*) on stdin — it explicitly
+  # rejects ptys ("stdin isn't a interactive tty!"), which is all a container
+  # normally gets. So we make a new session (setsid -c => controlling tty) with
+  # the host VT ${VT} (default /dev/tty0, mounted via host /dev) as stdin/stdout.
+  # Verified: with this, fbterm+cacafire stay alive and animate /dev/fb0.
+  # TERM for the terminal libs; CACA_DRIVER pins libcaca to its ncurses driver
+  # (libcaca has no framebuffer/KMS driver — fbterm is what paints the fb).
   export TERM=linux
   export CACA_DRIVER=ncurses
-  exec fbterm -- cacafire
+  # shellcheck disable=SC2094 # ${VT} is a tty device, not a regular file: reading
+  # (keystrokes) and writing (screen) the same VT is correct and intended.
+  exec setsid -c sh -c 'fbterm -- cacafire' <"${VT}" >"${VT}" 2>&1
 }
 
 # Main loop: wait for the framebuffer, then hand off to fbterm/aafire.

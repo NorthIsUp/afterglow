@@ -13,8 +13,14 @@ which paints onto the Linux framebuffer `/dev/fb0`, and launches `cacafire`
 inside it with the ncurses libcaca driver:
 
 ```
-CACA_DRIVER=ncurses fbterm -- cacafire
+CACA_DRIVER=ncurses setsid -c sh -c 'fbterm -- cacafire' </dev/tty0 >/dev/tty0 2>&1
 ```
+
+`fbterm` REQUIRES a real kernel VT (`/dev/tty*`) as its controlling terminal —
+it rejects ptys with `stdin isn't a interactive tty!`, which is all a container
+normally gets. The `setsid -c ... </dev/tty0` wrapper makes a new session whose
+controlling tty is the host VT (`/dev/tty0`, visible via the host `/dev` mount).
+Verified: with this, `fbterm`+`cacafire` stay alive and animate `/dev/fb0`.
 
 - Base image: `debian:bookworm-slim` + `caca-utils` (provides `cacafire`) +
   `libaa-bin` (mono `aafire` fallback) + `fbterm` + `fbset`.
@@ -63,8 +69,8 @@ the private ghcr package:
 cd k8s/apps/screensaver/image
 echo "$(gh auth token)" | docker login ghcr.io -u NorthIsUp --password-stdin
 docker buildx build --platform linux/arm64 \
-  -t ghcr.io/northisup/screensaver:0.2.0 --push .
-docker buildx imagetools inspect ghcr.io/northisup/screensaver:0.2.0   # get @sha256
+  -t ghcr.io/northisup/screensaver:0.3.0 --push .
+docker buildx imagetools inspect ghcr.io/northisup/screensaver:0.3.0   # get @sha256
 ```
 
 Then pin `image:` in `deployment.yaml` to the new tag + digest. Renovate is
