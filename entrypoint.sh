@@ -17,9 +17,20 @@ set -u
 
 FB="${FB_DEVICE:-/dev/fb0}"
 LOOP_DELAY="${RETRY_SECONDS:-30}"
-# Real kernel VT for fbterm's controlling tty (it rejects ptys). The host's
-# /dev/tty0 (active VT) is visible via the host /dev mount. Override with VT_DEVICE.
-VT="${VT_DEVICE:-/dev/tty0}"
+
+# fbterm needs a real kernel VT (it rejects ptys), AND it only paints the
+# framebuffer when that VT is the FOREGROUND console. /dev/tty0 is an alias for
+# "current VT" but fbterm does not render reliably through it; it must be given
+# the concrete foreground VT (e.g. /dev/tty1). Resolve it from
+# /sys/class/tty/tty0/active (e.g. "tty1"), falling back to tty1. Override with
+# VT_DEVICE. Verified on fir: targeting the active VT gives sustained animation
+# (~10 frame changes / 12s); targeting /dev/tty0 left the framebuffer static.
+resolve_vt() {
+  if [ -n "${VT_DEVICE:-}" ]; then echo "${VT_DEVICE}"; return; fi
+  active="$(cat /sys/class/tty/tty0/active 2>/dev/null)"
+  if [ -n "${active}" ] && [ -e "/dev/${active}" ]; then echo "/dev/${active}"; else echo /dev/tty1; fi
+}
+VT="$(resolve_vt)"
 
 log() { echo "[screensaver] $*"; }
 
@@ -41,14 +52,16 @@ diag() {
 }
 
 run_fire() {
+  # Re-resolve the active VT each time (it could change between retries).
+  VT="$(resolve_vt)"
   # cacafire loops forever on its own (colour fire animation), drawing into a
   # terminal that fbterm paints onto the framebuffer.
   log "framebuffer ${FB} present; launching fbterm -> cacafire (CACA_DRIVER=ncurses) on ${VT}"
   # fbterm REQUIRES a real kernel VT (/dev/tty*) on stdin — it explicitly
   # rejects ptys ("stdin isn't a interactive tty!"), which is all a container
   # normally gets. So we make a new session (setsid -c => controlling tty) with
-  # the host VT ${VT} (default /dev/tty0, mounted via host /dev) as stdin/stdout.
-  # Verified: with this, fbterm+cacafire stay alive and animate /dev/fb0.
+  # the foreground VT ${VT} (mounted via host /dev) as stdin/stdout.
+  # Verified on fir: with this, fbterm+cacafire stay alive and animate /dev/fb0.
   # TERM for the terminal libs; CACA_DRIVER pins libcaca to its ncurses driver
   # (libcaca has no framebuffer/KMS driver — fbterm is what paints the fb).
   export TERM=linux
