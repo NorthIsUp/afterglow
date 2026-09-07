@@ -1,0 +1,22 @@
+[package]
+name = "fbfire"
+version = "0.6.0"
+edition = "2021"
+description = "Doom-fire screensaver drawn straight into a DRM/KMS dumb buffer"
+license = "MIT"
+
+[dependencies]
+# Talks to /dev/dri/card0 with raw ioctls — no libdrm, so the binary links
+# nothing outside libc and a musl build is fully static (hence FROM scratch).
+drm = "0.14"
+drm-fourcc = "2.2"
+# Already transitive via drm; declared so the two signal handlers don't need
+# hand-written extern blocks.
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

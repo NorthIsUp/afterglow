@@ -1,36 +1,35 @@
-# HDMI fire screensaver for the Talos Pi5 node "fir".
+# HDMI fire screensaver for whichever Talos Pi5 holds the monitor.
 #
-# Renders a Doom-fire animation by writing pixels DIRECTLY into the mmap'd
-# framebuffer (/dev/fb0). This replaces the old cacafire+fbterm+ncurses path,
-# which rendered ASCII fire into a terminal that fbterm repainted onto the
-# framebuffer — an indirect path that burned ~0.5 core for ~10 fps. Direct fb
-# writes are the fast path (hundreds of MB/s on fir) and need no VT/terminal.
+# Draws a Doom-fire animation straight into a DRM/KMS dumb buffer on
+# /dev/dri/card0. It does NOT use /dev/fb0: Talos v1.14.0 builds its kernel with
+# `# CONFIG_FB is not set`, so fbdev does not exist on any node and no device
+# tree overlay can bring it back. See src/main.rs for the full reasoning.
 #
 # arm64-only cluster; build with --platform=linux/arm64.
-
-# --- build stage: compile the tiny C renderer ---
-FROM debian:bookworm-slim AS build
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends gcc libc6-dev libdrm-dev pkg-config \
-  && rm -rf /var/lib/apt/lists/*
-COPY fbfire.c /src/fbfire.c
-# libdrm is needed because Talos v1.14.0 ships `# CONFIG_FB is not set`, so
-# /dev/fbN does not exist on any node and DRM/KMS is the only output path.
 #
-# CFLAGS_EXTRA lets CI pass -Werror without making local iteration painful; see
-# .github/workflows/screensaver-image.yml.
-ARG CFLAGS_EXTRA=""
-RUN gcc -O2 -Wall -Wextra ${CFLAGS_EXTRA} -o /usr/local/bin/fbfire /src/fbfire.c \
-      $(pkg-config --cflags --libs libdrm)
+# The runtime stage is FROM scratch. This pod runs privileged with the host's
+# /dev mounted, and the previous C version carried ~80 MB of Debian userland
+# (plus libdrm and fbset) to host a 72 KB program. The `drm` crate issues raw
+# ioctls, so a musl build links nothing but libc and the image is the binary
+# alone — roughly 2 MB and no package surface at all.
+#
+# Trade-off worth knowing: there is no shell, so `kubectl exec … ls /dev/dri` is
+# gone. That is how the missing CONFIG_FB was found in the first place. The
+# binary prints its own device diagnostics on failure, and `kubectl debug` with
+# an ephemeral container covers the rest.
 
-# --- runtime stage: binary + entrypoint + diagnostics ---
-# libdrm2 for the renderer; fbset and libdrm-tests(modetest) to make a broken
-# display debuggable from inside the pod rather than by guesswork.
-FROM debian:bookworm-slim
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends fbset libdrm2 \
-  && rm -rf /var/lib/apt/lists/*
-COPY --from=build /usr/local/bin/fbfire /usr/local/bin/fbfire
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# --- build stage: static musl binary ---
+FROM rust:1-alpine AS build
+# musl-dev for the C runtime musl-gcc needs; no libdrm, the crate does ioctls.
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+# --locked so the committed Cargo.lock is authoritative; a drifting dependency
+# should fail the build rather than silently ship something else.
+RUN cargo build --release --locked
+
+# --- runtime stage: just the binary ---
+FROM scratch
+COPY --from=build /src/target/release/fbfire /fbfire
+ENTRYPOINT ["/fbfire"]

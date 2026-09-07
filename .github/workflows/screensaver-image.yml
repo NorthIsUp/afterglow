@@ -24,8 +24,8 @@ on:
 jobs:
   build:
     # arm64 native, not QEMU: the consumer is a Raspberry Pi 5 cluster and there
-    # is no amd64 consumer. Native also keeps the gcc step honest — a compile
-    # warning here is a warning on the target.
+    # is no amd64 consumer. Native also keeps the compile honest — a warning here
+    # is a warning on the target.
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
@@ -51,15 +51,20 @@ jobs:
             type=sha,format=long
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # -Werror is deliberate. fbfire is 300 lines of pixel-pushing C where a
-      # warning is usually a real bug, and the whole point of this workflow is
-      # that nothing about this image should reach a node unexamined again.
-      - name: compile check (warnings are errors)
+      # Warnings are errors, and clippy runs too. fbfire is a few hundred lines
+      # of pixel-pushing that writes into a mapped display buffer on a privileged
+      # pod; the point of this workflow is that nothing here reaches a node
+      # unexamined again. Run before the image build so a lint failure is
+      # reported as a lint failure rather than a docker build failure.
+      - name: fmt, clippy, warnings-as-errors
+        working-directory: k8s/apps/screensaver/image
         run: |
-          docker build --platform=linux/arm64 \
-            --build-arg CFLAGS_EXTRA=-Werror \
-            -t screensaver-warncheck \
-            k8s/apps/screensaver/image/
+          docker run --rm -v "$PWD":/src -w /src rust:1-alpine sh -eu -c '
+            apk add --no-cache musl-dev >/dev/null
+            rustup component add rustfmt clippy >/dev/null
+            cargo fmt --check
+            cargo clippy --release --locked --all-targets -- -D warnings
+          '
 
       - uses: docker/build-push-action@v6
         with:
