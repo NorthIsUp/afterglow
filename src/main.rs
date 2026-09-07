@@ -41,7 +41,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use drm::buffer::Buffer;
-use drm::control::{connector, crtc, Device as ControlDevice};
+use drm::control::{connector, crtc, ClipRect, Device as ControlDevice};
 use drm::Device as BasicDevice;
 use drm_fourcc::DrmFourcc;
 
@@ -353,6 +353,18 @@ fn run(cfg: &Config) -> Result<(), String> {
     let mut fire = Fire::new(fw, fh);
 
     let frame = Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps));
+    // simpledrm — the driver U-Boot hands over on a Pi5 — scans out of a SHADOW
+    // buffer. Writing into the mapping is not enough: the driver only copies to
+    // the hardware when told which regions changed. Without this the initial
+    // set_crtc displays frame 0 (a freshly zeroed buffer, i.e. black) and every
+    // frame after it lands in memory nothing ever reads. That is precisely the
+    // "screen went blank and never animated" symptom.
+    // ClipRect is (x1, y1, x2, y2) — width before height. Getting that backwards
+    // dirties a w-tall, h-wide region, which on a 1920x1080 panel is both wrong
+    // and partly out of bounds.
+    let full = [ClipRect::new(0, 0, panel.w as u16, panel.h as u16)];
+    let mut dirty_unsupported = false;
+
     while !SIGNALLED.load(Ordering::Relaxed) {
         let t0 = Instant::now();
         fire.step();
@@ -365,6 +377,17 @@ fn run(cfg: &Config) -> Result<(), String> {
                 panel.draw_ascii(buf, &fire, &pal, cfg.cell);
             } else {
                 panel.draw_blocks(buf, &fire, &pal);
+            }
+        }
+        // Drivers that scan out directly have no need for this and answer
+        // ENOSYS/EINVAL; note it once and stop asking rather than logging per
+        // frame at 30fps.
+        if !dirty_unsupported {
+            if let Err(e) = card.dirty_framebuffer(fb, &full) {
+                eprintln!(
+                    "[screensaver] dirty_framebuffer unsupported ({e}); assuming direct scanout"
+                );
+                dirty_unsupported = true;
             }
         }
         if let Some(rem) = frame.checked_sub(t0.elapsed()) {
