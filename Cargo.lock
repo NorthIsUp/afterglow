@@ -82,6 +82,7 @@ dependencies = [
 name = "fbfire"
 version = "0.6.0"
 dependencies = [
+ "bytemuck",
  "drm",
  "drm-fourcc",
  "libc",

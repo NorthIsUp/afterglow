@@ -202,55 +202,107 @@ impl Fire {
     fn at(&self, x: usize, y: usize) -> u8 {
         self.cells[y.min(self.h - 1) * self.w + x.min(self.w - 1)]
     }
+
+    /// Same lookup against a snapshot of the grid from the previous frame.
+    fn prev_at(&self, prev: &[u8], x: usize, y: usize) -> u8 {
+        prev[y.min(self.h - 1) * self.w + x.min(self.w - 1)]
+    }
+
+    /// True when an entire fire row is identical to the previous frame's.
+    fn row_unchanged(&self, prev: &[u8], y: usize) -> bool {
+        let y = y.min(self.h - 1);
+        let (a, b) = (y * self.w, y * self.w + self.w);
+        self.cells[a..b] == prev[a..b]
+    }
+
+    fn snapshot_into(&self, prev: &mut [u8]) {
+        prev.copy_from_slice(&self.cells);
+    }
 }
 
 /// Everything needed to draw one frame into a mapped XRGB8888 buffer.
+///
+/// The buffer is addressed as `u32` rather than bytes. Writing a pixel as a
+/// 4-byte slice copy costs a bounds check plus a memcpy call per pixel, and at
+/// 1920x1080 that is two million of them per frame; a `u32` store is one
+/// bounds-checked write. `stride32` is the row stride in u32 units — a 32bpp
+/// pitch is always a multiple of 4, so the division is exact.
 struct Panel {
-    w: u32,
-    h: u32,
-    pitch: u32,
+    w: usize,
+    h: usize,
+    stride32: usize,
+}
+
+/// The band of scanlines a frame actually touched, as `y0..y1`. Returned so the
+/// caller can damage only that range instead of the whole panel: fire is
+/// bottom-heavy and the cool upper rows are usually identical frame to frame,
+/// and every dirtied row costs simpledrm a shadow-to-hardware copy.
+type Band = Option<(usize, usize)>;
+
+fn widen(band: Band, y0: usize, y1: usize) -> Band {
+    match band {
+        None => Some((y0, y1)),
+        Some((a, b)) => Some((a.min(y0), b.max(y1))),
+    }
 }
 
 impl Panel {
-    /// Blocks mode: scale the fire grid straight to the panel.
-    fn draw_blocks(&self, buf: &mut [u8], fire: &Fire, pal: &[u32; 37]) {
-        for y in 0..self.h as usize {
-            let fy = y * fire.h / self.h as usize;
-            let row = &mut buf[y * self.pitch as usize..][..self.w as usize * 4];
-            for x in 0..self.w as usize {
-                let fx = x * fire.w / self.w as usize;
-                let px = pal[fire.at(fx, fy) as usize];
-                row[x * 4..x * 4 + 4].copy_from_slice(&px.to_ne_bytes());
+    /// Blocks mode: scale the fire grid straight to the panel, skipping any
+    /// screen row whose source fire row is unchanged.
+    fn draw_blocks(&self, buf: &mut [u32], fire: &Fire, prev: &[u8], pal: &[u32; 37]) -> Band {
+        let mut band = None;
+        for y in 0..self.h {
+            let fy = y * fire.h / self.h;
+            if fire.row_unchanged(prev, fy) {
+                continue;
             }
+            let row = &mut buf[y * self.stride32..][..self.w];
+            for (x, out) in row.iter_mut().enumerate() {
+                let fx = x * fire.w / self.w;
+                *out = pal[fire.at(fx, fy) as usize];
+            }
+            band = widen(band, y, y + 1);
         }
+        band
     }
 
-    /// Ascii mode: one fire sample per character cell, blitted as a glyph.
-    fn draw_ascii(&self, buf: &mut [u8], fire: &Fire, pal: &[u32; 37], cell: u32) {
-        let cols = (self.w / cell) as usize;
-        let rows = (self.h / cell) as usize;
-        let cell = cell as usize;
+    /// Ascii mode: one fire sample per character cell, blitted as a glyph. A
+    /// cell's appearance is a pure function of its heat, so an unchanged heat
+    /// means an unchanged cell and the blit can be skipped entirely.
+    fn draw_ascii(
+        &self,
+        buf: &mut [u32],
+        fire: &Fire,
+        prev: &[u8],
+        pal: &[u32; 37],
+        cell: usize,
+    ) -> Band {
+        let cols = self.w / cell;
+        let rows = self.h / cell;
+        let mut band = None;
         for cy in 0..rows {
             for cx in 0..cols {
                 let heat = fire.at(cx, cy);
+                if heat == fire.prev_at(prev, cx, cy) {
+                    continue;
+                }
                 let ch = RAMP[(heat as usize * (RAMP.len() - 1)) / 36];
-                let colour = pal[heat as usize].to_ne_bytes();
+                let colour = pal[heat as usize];
                 let bits = glyph(ch);
                 let (ox, oy) = (cx * cell, cy * cell);
                 for py in 0..cell {
-                    let gy = py * 8 / cell;
-                    let line = bits[gy];
-                    let start = (oy + py) * self.pitch as usize + ox * 4;
-                    let row = &mut buf[start..start + cell * 4];
-                    for px in 0..cell {
-                        let gx = px * 8 / cell;
-                        let lit = ch != b' ' && (line & (0x80 >> gx)) != 0;
-                        let v = if lit { colour } else { [0, 0, 0, 0] };
-                        row[px * 4..px * 4 + 4].copy_from_slice(&v);
+                    let line = bits[py * 8 / cell];
+                    let start = (oy + py) * self.stride32 + ox;
+                    let row = &mut buf[start..start + cell];
+                    for (px, out) in row.iter_mut().enumerate() {
+                        let lit = ch != b' ' && (line & (0x80 >> (px * 8 / cell))) != 0;
+                        *out = if lit { colour } else { 0 };
                     }
                 }
+                band = widen(band, oy, oy + cell);
             }
         }
+        band
     }
 }
 
@@ -313,10 +365,11 @@ fn run(cfg: &Config) -> Result<(), String> {
         .map_err(|e| format!("set_crtc: {e}"))?;
 
     let pitch = db.pitch();
+    // A 32bpp pitch is always a multiple of 4, so this division is exact.
     let panel = Panel {
-        w: w as u32,
-        h: h as u32,
-        pitch,
+        w: w as usize,
+        h: h as usize,
+        stride32: pitch as usize / 4,
     };
     eprintln!(
         "[screensaver] drm {} {}x{}@{}Hz crtc={:?} pitch={} style={} fps={}",
@@ -359,31 +412,38 @@ fn run(cfg: &Config) -> Result<(), String> {
     // set_crtc displays frame 0 (a freshly zeroed buffer, i.e. black) and every
     // frame after it lands in memory nothing ever reads. That is precisely the
     // "screen went blank and never animated" symptom.
-    // ClipRect is (x1, y1, x2, y2) — width before height. Getting that backwards
-    // dirties a w-tall, h-wide region, which on a 1920x1080 panel is both wrong
-    // and partly out of bounds.
-    let full = [ClipRect::new(0, 0, panel.w as u16, panel.h as u16)];
+    // Only the scanlines that changed get dirtied, so the per-frame copy is
+    // proportional to how much of the fire actually moved rather than to the
+    // panel. ClipRect is (x1, y1, x2, y2) — width before height.
+    //
+    // 0xFF cannot occur as a heat value (the palette tops out at 36), so the
+    // first frame sees every cell as changed and paints the whole panel.
+    let mut prev = vec![0xFFu8; fire.w * fire.h];
     let mut dirty_unsupported = false;
 
     while !SIGNALLED.load(Ordering::Relaxed) {
         let t0 = Instant::now();
         fire.step();
-        {
+        let band = {
             let mut map = card
                 .map_dumb_buffer(&mut db)
                 .map_err(|e| format!("map_dumb_buffer: {e}"))?;
-            let buf = map.as_mut();
+            // One safe cast per frame, replacing a 4-byte slice copy per pixel.
+            let buf: &mut [u32] = bytemuck::cast_slice_mut(map.as_mut());
             if cfg.ascii {
-                panel.draw_ascii(buf, &fire, &pal, cfg.cell);
+                panel.draw_ascii(buf, &fire, &prev, &pal, cfg.cell as usize)
             } else {
-                panel.draw_blocks(buf, &fire, &pal);
+                panel.draw_blocks(buf, &fire, &prev, &pal)
             }
-        }
+        };
+        fire.snapshot_into(&mut prev);
+
         // Drivers that scan out directly have no need for this and answer
         // ENOSYS/EINVAL; note it once and stop asking rather than logging per
-        // frame at 30fps.
-        if !dirty_unsupported {
-            if let Err(e) = card.dirty_framebuffer(fb, &full) {
+        // frame at 30fps. A frame where nothing moved dirties nothing.
+        if let (false, Some((y0, y1))) = (dirty_unsupported, band) {
+            let rect = [ClipRect::new(0, y0 as u16, panel.w as u16, y1 as u16)];
+            if let Err(e) = card.dirty_framebuffer(fb, &rect) {
                 eprintln!(
                     "[screensaver] dirty_framebuffer unsupported ({e}); assuming direct scanout"
                 );

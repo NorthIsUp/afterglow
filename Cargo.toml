@@ -13,6 +13,9 @@ drm-fourcc = "2.2"
 # Already transitive via drm; declared so the two signal handlers don't need
 # hand-written extern blocks.
 libc = "0.2"
+# Safe u8 -> u32 view of the mapped buffer. A 4-byte-per-pixel slice copy per
+# pixel was the hot path; one u32 store is a single bounds-checked write.
+bytemuck = "1"
 
 [profile.release]
 opt-level = 3
