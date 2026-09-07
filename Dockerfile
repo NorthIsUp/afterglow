@@ -11,15 +11,24 @@
 # --- build stage: compile the tiny C renderer ---
 FROM debian:bookworm-slim AS build
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends gcc libc6-dev \
+  && apt-get install -y --no-install-recommends gcc libc6-dev libdrm-dev pkg-config \
   && rm -rf /var/lib/apt/lists/*
 COPY fbfire.c /src/fbfire.c
-RUN gcc -O2 -Wall -Wextra -o /usr/local/bin/fbfire /src/fbfire.c
+# libdrm is needed because Talos v1.14.0 ships `# CONFIG_FB is not set`, so
+# /dev/fbN does not exist on any node and DRM/KMS is the only output path.
+#
+# CFLAGS_EXTRA lets CI pass -Werror without making local iteration painful; see
+# .github/workflows/screensaver-image.yml.
+ARG CFLAGS_EXTRA=""
+RUN gcc -O2 -Wall -Wextra ${CFLAGS_EXTRA} -o /usr/local/bin/fbfire /src/fbfire.c \
+      $(pkg-config --cflags --libs libdrm)
 
-# --- runtime stage: just the binary + entrypoint + fbset for diagnostics ---
+# --- runtime stage: binary + entrypoint + diagnostics ---
+# libdrm2 for the renderer; fbset and libdrm-tests(modetest) to make a broken
+# display debuggable from inside the pod rather than by guesswork.
 FROM debian:bookworm-slim
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends fbset \
+  && apt-get install -y --no-install-recommends fbset libdrm2 \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/bin/fbfire /usr/local/bin/fbfire
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

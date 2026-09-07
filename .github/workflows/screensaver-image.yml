@@ -1,0 +1,72 @@
+name: screensaver-image
+
+# The screensaver image was built and pushed BY HAND until 2026-09-06, which is
+# how it ended up with a renderer nobody noticed had stopped working: the Talos
+# v1.14.0 upgrade removed CONFIG_FB from the kernel, /dev/fb0 vanished fleet-wide,
+# and the pod sat idle logging "framebuffer not present" while the monitor showed
+# a bare Linux console. A hand-built image has no CI to notice any of that.
+#
+# Builds on any change to the image sources. Pushes only from main — a PR gets a
+# build (so a broken renderer fails review) without publishing anything.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "k8s/apps/screensaver/image/**"
+      - ".github/workflows/screensaver-image.yml"
+  pull_request:
+    paths:
+      - "k8s/apps/screensaver/image/**"
+      - ".github/workflows/screensaver-image.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    # arm64 native, not QEMU: the consumer is a Raspberry Pi 5 cluster and there
+    # is no amd64 consumer. Native also keeps the gcc step honest — a compile
+    # warning here is a warning on the target.
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: github.event_name == 'push'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/northisup/screensaver
+          tags: |
+            type=ref,event=branch
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # -Werror is deliberate. fbfire is 300 lines of pixel-pushing C where a
+      # warning is usually a real bug, and the whole point of this workflow is
+      # that nothing about this image should reach a node unexamined again.
+      - name: compile check (warnings are errors)
+        run: |
+          docker build --platform=linux/arm64 \
+            --build-arg CFLAGS_EXTRA=-Werror \
+            -t screensaver-warncheck \
+            k8s/apps/screensaver/image/
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: k8s/apps/screensaver/image
+          platforms: linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
