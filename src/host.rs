@@ -1,0 +1,161 @@
+//! The DRM host: open the card, modeset, map the dumb buffer, hand it to a
+//! saver once per frame, report the damage, and give the console back.
+
+use std::fs::{File, OpenOptions};
+use std::os::fd::{AsFd, BorrowedFd};
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
+
+use drm::buffer::Buffer;
+use drm::control::{connector, crtc, ClipRect, Device as ControlDevice};
+use drm::Device as BasicDevice;
+use drm_fourcc::DrmFourcc;
+
+use crate::saver;
+use crate::surface::{Panel, MAX_RUNS};
+use crate::{Config, SIGNALLED};
+
+/// A DRM card. The `drm` crate's traits are blanket-implemented for anything
+/// that can hand over a borrowed fd.
+struct Card(File);
+
+impl AsFd for Card {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.0.as_fd()
+    }
+}
+impl BasicDevice for Card {}
+impl ControlDevice for Card {}
+
+/// Open the card, modeset the connector's preferred mode, and run until stopped.
+/// Returns Ok(()) when asked to stop, Err on any setup failure so the caller can
+/// idle and retry rather than crash-looping.
+pub fn run(cfg: &Config) -> Result<(), String> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&cfg.device)
+        .map_err(|e| format!("open {}: {e}", cfg.device))?;
+    let card = Card(file);
+
+    // Best effort: fbcon owns the console, and modesetting needs master. A
+    // container handed the device is normally granted it.
+    let _ = card.acquire_master_lock();
+
+    let res = card
+        .resource_handles()
+        .map_err(|e| format!("resource_handles: {e}"))?;
+
+    let conn = res
+        .connectors()
+        .iter()
+        .filter_map(|h| card.get_connector(*h, false).ok())
+        .find(|c| c.state() == connector::State::Connected && !c.modes().is_empty())
+        .ok_or_else(|| "no connected connector with modes".to_string())?;
+
+    // modes()[0] is the driver's preferred/native mode.
+    let mode = conn.modes()[0];
+    let (w, h) = mode.size();
+
+    // Prefer the CRTC already driving this connector, else the first its
+    // encoders can reach.
+    let crtc_handle: crtc::Handle = conn
+        .current_encoder()
+        .and_then(|e| card.get_encoder(e).ok())
+        .and_then(|e| e.crtc())
+        .or_else(|| {
+            // possible_crtcs() is an opaque CrtcListFilter, not a bitmask we can
+            // index ourselves; filter_crtcs resolves it against the resource list.
+            conn.encoders()
+                .iter()
+                .filter_map(|h| card.get_encoder(*h).ok())
+                .flat_map(|e| res.filter_crtcs(e.possible_crtcs()))
+                .next()
+        })
+        .ok_or_else(|| "no usable CRTC".to_string())?;
+
+    let mut db = card
+        .create_dumb_buffer((w as u32, h as u32), DrmFourcc::Xrgb8888, 32)
+        .map_err(|e| format!("create_dumb_buffer: {e}"))?;
+    let fb = card
+        .add_framebuffer(&db, 24, 32)
+        .map_err(|e| format!("add_framebuffer: {e}"))?;
+
+    let saved = card.get_crtc(crtc_handle).ok();
+    card.set_crtc(crtc_handle, Some(fb), (0, 0), &[conn.handle()], Some(mode))
+        .map_err(|e| format!("set_crtc: {e}"))?;
+
+    let pitch = db.pitch();
+    // A 32bpp pitch is always a multiple of 4, so this division is exact.
+    let panel = Panel::new(w as usize, h as usize, pitch as usize / 4);
+    let mut saver = saver::make(&cfg.saver, &panel, cfg.fps);
+    eprintln!(
+        "[screensaver] drm {} {}x{}@{}Hz crtc={:?} pitch={} saver={} fps={}",
+        cfg.device,
+        w,
+        h,
+        mode.vrefresh(),
+        crtc_handle,
+        pitch,
+        saver.name(),
+        cfg.fps
+    );
+
+    let frame_dur = Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps));
+    // simpledrm — the driver U-Boot hands over on a Pi5 — scans out of a SHADOW
+    // buffer. Writing into the mapping is not enough: the driver only copies to
+    // the hardware when told which regions changed. Without this the initial
+    // set_crtc displays frame 0 (a freshly zeroed buffer, i.e. black) and every
+    // frame after it lands in memory nothing ever reads. That is precisely the
+    // "screen went blank and never animated" symptom. See src/surface.rs for the
+    // contract that keeps a saver from under-reporting.
+    let mut rects = [ClipRect::new(0, 0, 0, 0); MAX_RUNS];
+    let mut dirty_unsupported = false;
+
+    while !SIGNALLED.load(Ordering::Relaxed) {
+        let t0 = Instant::now();
+        let damage = {
+            let mut map = card
+                .map_dumb_buffer(&mut db)
+                .map_err(|e| format!("map_dumb_buffer: {e}"))?;
+            // One safe cast per frame, replacing a 4-byte slice copy per pixel.
+            let buf: &mut [u32] = bytemuck::cast_slice_mut(map.as_mut());
+            saver::frame(saver.as_mut(), buf, &panel)
+        };
+
+        // Drivers that scan out directly have no need for this and answer
+        // ENOSYS/EINVAL; note it once and stop asking rather than logging per
+        // frame at 30fps. A frame where nothing moved dirties nothing.
+        if !dirty_unsupported && !damage.is_empty() {
+            let n = damage.rects(panel.w as u16, &mut rects);
+            if let Err(e) = card.dirty_framebuffer(fb, &rects[..n]) {
+                eprintln!(
+                    "[screensaver] dirty_framebuffer unsupported ({e}); assuming direct scanout"
+                );
+                dirty_unsupported = true;
+            }
+        }
+        if let Some(rem) = frame_dur.checked_sub(t0.elapsed()) {
+            std::thread::sleep(rem);
+        }
+    }
+
+    // Blank, then hand the CRTC back so fbcon returns instead of a frozen frame.
+    // The fill is never dirtied and so never reaches a shadow-buffer driver; the
+    // set_crtc restore below is the load-bearing half.
+    if let Ok(mut map) = card.map_dumb_buffer(&mut db) {
+        map.as_mut().fill(0);
+    }
+    if let Some(s) = saved {
+        let _ = card.set_crtc(
+            crtc_handle,
+            s.framebuffer(),
+            s.position(),
+            &[conn.handle()],
+            s.mode(),
+        );
+    }
+    let _ = card.destroy_framebuffer(fb);
+    let _ = card.destroy_dumb_buffer(db);
+    Ok(())
+}

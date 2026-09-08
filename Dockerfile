@@ -1,9 +1,9 @@
-# HDMI fire screensaver for whichever Talos Pi5 holds the monitor.
+# HDMI screensaver for whichever Talos Pi5 holds the monitor.
 #
-# Draws a Doom-fire animation straight into a DRM/KMS dumb buffer on
-# /dev/dri/card0. It does NOT use /dev/fb0: Talos v1.14.0 builds its kernel with
-# `# CONFIG_FB is not set`, so fbdev does not exist on any node and no device
-# tree overlay can bring it back. See src/main.rs for the full reasoning.
+# Draws an animation (Doom fire, Matrix rain) straight into a DRM/KMS dumb
+# buffer on /dev/dri/card0. It does NOT use /dev/fb0: Talos v1.14.0 builds its
+# kernel with `# CONFIG_FB is not set`, so fbdev does not exist on any node and
+# no device tree overlay can bring it back. See src/main.rs for the reasoning.
 #
 # arm64-only cluster; build with --platform=linux/arm64.
 #
@@ -31,5 +31,5 @@ RUN cargo build --release --locked
 
 # --- runtime stage: just the binary ---
 FROM scratch
-COPY --from=build /src/target/release/fbfire /fbfire
-ENTRYPOINT ["/fbfire"]
+COPY --from=build /src/target/release/screensaver /screensaver
+ENTRYPOINT ["/screensaver"]

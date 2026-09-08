@@ -2,8 +2,15 @@
 name = "fbfire"
 version = "0.6.0"
 edition = "2021"
-description = "Doom-fire screensaver drawn straight into a DRM/KMS dumb buffer"
+description = "HDMI screensavers drawn straight into a DRM/KMS dumb buffer"
 license = "MIT"
+
+# The BINARY is renamed, not the package: Cargo.lock records the package name
+# and both the Dockerfile and CI build with --locked, so renaming the package
+# would force a lock regen for no behaviour change.
+[[bin]]
+name = "screensaver"
+path = "src/main.rs"
 
 [dependencies]
 # Talks to /dev/dri/card0 with raw ioctls — no libdrm, so the binary links

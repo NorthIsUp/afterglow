@@ -51,12 +51,36 @@ jobs:
             type=sha,format=long
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # Warnings are errors, and clippy runs too. fbfire is a few hundred lines
-      # of pixel-pushing that writes into a mapped display buffer on a privileged
+      # src/font.rs is generated and committed so the image build stays a pure
+      # `cargo build --locked` with no Python in the build stage. Regenerating
+      # here is what stops the table drifting from the .hex it claims to be from.
+      - name: font table matches its source
+        working-directory: k8s/apps/screensaver/image
+        run: |
+          python3 tools/genfont.py tools/unifont-subset.hex -o src/font.rs
+          git --no-pager diff --exit-code -- src/font.rs
+
+      # Warnings are errors, and clippy runs too. This is a few hundred lines of
+      # pixel-pushing that writes into a mapped display buffer on a privileged
       # pod; the point of this workflow is that nothing here reaches a node
       # unexamined again. Run before the image build so a lint failure is
       # reported as a lint failure rather than a docker build failure.
-      - name: fmt, clippy, warnings-as-errors
+      #
+      # The dump run is the only renderer check possible here: there is no
+      # monitor, and the two failures that matter — a black first frame, and a
+      # saver writing pixels it never reports as damaged — are invisible in
+      # review and show up only on the panel.
+      #
+      # SAVER_DUMP exits non-zero on the second. The byte count below does NOT
+      # catch the first, despite reading like it should: it samples frame 19, by
+      # which point a saver that skipped its first-frame full paint has long
+      # since converged. Measured with `first` forced false — ascii 747065,
+      # blocks 6220817, matrix 435293 non-NUL bytes, all far over the threshold.
+      # What actually catches it is the unit test
+      # `grid::tests::frame_zero_paints_every_cell_then_only_changes`, run by the
+      # `cargo test` below. The byte count's real job is narrower: a saver that
+      # renders nothing at all.
+      - name: fmt, clippy, tests, render check
         working-directory: k8s/apps/screensaver/image
         run: |
           docker run --rm -v "$PWD":/src -w /src rust:1-alpine sh -eu -c '
@@ -64,6 +88,14 @@ jobs:
             rustup component add rustfmt clippy >/dev/null
             cargo fmt --check
             cargo clippy --release --locked --all-targets -- -D warnings
+            cargo test --release --locked
+            cargo build --release --locked
+            for s in ascii blocks matrix; do
+              SAVER=$s SAVER_DUMP=/tmp/dump-$s SAVER_DUMP_FRAMES=20 \
+                SAVER_DUMP_EVERY=19 ./target/release/screensaver
+              lit=$(tr -d "\000" < /tmp/dump-$s/frame-00019.ppm | wc -c)
+              [ "$lit" -gt 1000 ] || { echo "$s rendered a blank frame"; exit 1; }
+            done
           '
 
       - uses: docker/build-push-action@v6
