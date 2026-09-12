@@ -1,3 +1,11 @@
+---
+title: screensaver
+kind: app
+namespace: screensaver
+icon: monitor
+source: k8s/apps/screensaver/
+---
+
 # screensaver — HDMI screensavers on whichever Pi5 holds the monitor
 
 A deliberately thin workload that paints an animation onto the HDMI display of
