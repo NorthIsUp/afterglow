@@ -33,6 +33,10 @@ impl Cell {
         (self.0 >> 16) as usize
     }
 
+    /// An unlit, transparent cell: what a cleared cell holds, and what a
+    /// sprite's blanks bake down to.
+    pub const CLEAR: Self = Self::new(font::BLANK, 0);
+
     /// The packed word, for the mirror's wire format — which is this exact
     /// u32, so nothing re-encodes what `Cell` already packs.
     #[inline]
@@ -72,8 +76,8 @@ impl Grid {
             rows,
             cell_w,
             cell_h,
-            cur: vec![Cell::new(font::BLANK, 0); cols * rows],
-            prev: vec![Cell::new(font::BLANK, 0); cols * rows],
+            cur: vec![Cell::CLEAR; cols * rows],
+            prev: vec![Cell::CLEAR; cols * rows],
             rowmap: (0..cell_h)
                 .map(|py| (py * font::GLYPH_H / cell_h) as u8)
                 .collect(),

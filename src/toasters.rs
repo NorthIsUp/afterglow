@@ -16,6 +16,10 @@
 //! * **The wings are four frames, not two.** Up, mid, level, down, walked as a
 //!   ping-pong so the downstroke and the upstroke are both drawn. A two-frame
 //!   flap reads as a flicker.
+//! * **The toaster is not a silver toaster.** Quantising the sprite sheet puts
+//!   an olive chassis at a fifth of its pixels, behind a chrome front panel and
+//!   white wings — four regions, not one flat metal. See `PAL_RGB`, and the ink
+//!   grids that give each stroke of the art its own region.
 //!
 //! Toast is a quarter of the flock (the original ran about 3:1 toasters to
 //! toast). Four doneness sprites, each its own art rather than one sprite
@@ -40,22 +44,118 @@ use crate::grid::{bake, Cell, Grid};
 use crate::saver::Saver;
 use crate::surface::{Panel, Surface};
 
-/// Black, chrome, toast, browned toast. The original's background is solid
-/// black and nothing here paints over it, which is also why an idle region
-/// costs zero blits.
-const PAL_RGB: [[u8; 3]; 6] = [
-    [0x00, 0x00, 0x00],
-    [0xD8, 0xDE, 0xE6],
-    [0xF2, 0xD9, 0x96],
-    [0xE0, 0xA8, 0x50],
-    [0xB0, 0x72, 0x28],
-    [0x6B, 0x3E, 0x14],
+/// Sampled from the original's sprite sheet and quantised to colour families,
+/// which is how the one real surprise showed up: the toaster body is NOT
+/// chrome. It is an olive chassis with a chrome front panel and white wings,
+/// and painting the whole thing one silver is the colour equivalent of
+/// scrolling straight left.
+///
+/// The two olives are the depth cue. #707030 is the lit top face, #303010 the
+/// sides turned away from the light, and neither is ever painted against the
+/// background: the chassis FILL is where the art has blanks and blanks are
+/// transparent, so what a stroke has to be distinguishable from is the stroke
+/// beside it. Against the lit olive and the chrome panel, #303010 reads as a
+/// turned-away face. Flatten them into one olive and the three-quarter view
+/// goes with it, the same way a single wing colour would.
+///
+/// The sheet's 8.6% of near-black #101010 is the one family with no entry, and
+/// that is structural rather than perceptual: it is the outline that separated
+/// the sprite from the sheet's background, and here a cell lights only its
+/// glyph pixels, so the gaps between glyphs already draw it.
+///
+/// Index 0 is the background. Nothing paints over it, which is why an idle
+/// region costs zero blits.
+#[rustfmt::skip]
+const PAL_RGB: [[u8; 3]; 16] = [
+    [0x00, 0x00, 0x00], //  0        background
+    [0x90, 0x90, 0x90], //  1 'C' chrome front panel, the sheet's largest family
+    [0xF0, 0xF0, 0xF0], //  2 'W' white — the near wing
+    [0xD0, 0xD0, 0xD0], //  3 'c' light chrome — far wing, lever, panel highlight
+    [0x30, 0x30, 0x10], //  4 'O' dark olive — the chassis sides, turned away
+    [0x70, 0x70, 0x30], //  5 'o' lit olive — the top face
+    [0x70, 0x70, 0x70], //  6 's' shadow chrome — the panel's lower lip
+    [0xB0, 0xB0, 0xB0], //  7 'm' chrome midtone — the slot rims
+    [0xF0, 0xD0, 0x70], //  8 'G' golden crumb, the slice's largest family
+    [0xD0, 0x90, 0x30], //  9 'g' mid gold
+    [0x90, 0x70, 0x10], // 10 'b' brown crust
+    [0x70, 0x30, 0x10], // 11 'd' dark crust edge
+    [0xB0, 0x70, 0x10], // 12 'B' mid brown
+    [0xF0, 0xF0, 0x90], // 13 'P' pale highlight
+    [0xD0, 0xB0, 0x30], // 14 'y' amber
+    [0xF0, 0xD0, 0x50], // 15 'Y' deep gold
 ];
-const PAL: [u32; 6] = bake(&PAL_RGB);
+const PAL: [u32; 16] = bake(&PAL_RGB);
 
-const CHROME: u16 = 1;
-/// Palette index of the palest slice; the four doneness levels are contiguous.
-const TOAST0: u16 = 2;
+/// Ink key -> palette index. Every sprite carries a grid of these parallel to
+/// its art, because the art reuses characters across regions: the `/` in column
+/// 0 is a white wing and the `/` in column 9 is the olive body's receding edge,
+/// and a character-to-colour map could not tell them apart.
+///
+/// There is no fallback arm. This runs inside `bake_sprites`, in a const, so a
+/// key nobody defined is a build failure and not a stroke silently painted the
+/// background colour.
+const fn ink(k: u8) -> u16 {
+    match k {
+        b'C' => 1,
+        b'W' => 2,
+        b'c' => 3,
+        b'O' => 4,
+        b'o' => 5,
+        b's' => 6,
+        b'm' => 7,
+        b'G' => 8,
+        b'g' => 9,
+        b'b' => 10,
+        b'd' => 11,
+        b'B' => 12,
+        b'P' => 13,
+        b'y' => 14,
+        b'Y' => 15,
+        _ => panic!("sprite ink uses a key the palette does not define"),
+    }
+}
+
+/// Resolve a sprite set's art and ink into cells, at COMPILE time — the same
+/// bargain `grid::bake` makes for a palette, for the same reason. The frame
+/// loop reads a `&'static [Cell]` out of the binary, so there is no allocation,
+/// no `Vec` of `Vec`s to chase, and no construction-time work at all.
+///
+/// Row width comes from `CELLS / H`, and every row of both grids has to match
+/// it: a ragged row, an ink grid that is not blank exactly where its art is, and
+/// an undefined ink key are all `error[E0080]` rather than a sprite that renders
+/// wrong. The one drift this cannot see is an ink row shifted within its own
+/// width — same length, no blanks moved — which is what the colour assertions
+/// in the tests are for.
+const fn bake_sprites<const H: usize, const N: usize, const CELLS: usize>(
+    art: &[[&str; H]; N],
+    ink_rows: &[[&str; H]; N],
+) -> [[Cell; CELLS]; N] {
+    let w = CELLS / H;
+    assert!(w * H == CELLS, "sprite cell count is not width x height");
+    let mut out = [[Cell::CLEAR; CELLS]; N];
+    let mut s = 0;
+    while s < N {
+        let mut r = 0;
+        while r < H {
+            let (a, k) = (art[s][r].as_bytes(), ink_rows[s][r].as_bytes());
+            assert!(a.len() == w, "art row is not the sprite's width");
+            assert!(k.len() == w, "ink row is not the sprite's width");
+            let mut c = 0;
+            while c < w {
+                if a[c] == b' ' {
+                    assert!(k[c] == b' ', "ink where the art is blank");
+                } else {
+                    assert!(k[c] != b' ', "art stroke with no ink");
+                    out[s][r * w + c] = Cell::new(font::ASCII[(a[c] - 0x20) as usize], ink(k[c]));
+                }
+                c += 1;
+            }
+            r += 1;
+        }
+        s += 1;
+    }
+    out
+}
 
 const TOASTER_W: usize = 14;
 const TOASTER_H: usize = 4;
@@ -96,6 +196,41 @@ const TOASTER: [[&str; TOASTER_H]; 4] = [
     ],
 ];
 
+/// The colour of every stroke above, cell for cell. Four regions, and they are
+/// what the palette buys: the wings are white (the near one) and light chrome
+/// (the far one, one stop down so the flap reads as depth), columns 3..=9 of
+/// each row are the body — olive edges around a chrome front panel that runs
+/// light-to-shadow left to right, between side edges in the turned-away olive —
+/// and the top face is the lit olive with chrome slot rims. A space here must line up with a space in the art; the glyph test
+/// checks it.
+#[rustfmt::skip]
+const TOASTER_INK: [[&str; TOASTER_H]; 4] = [
+    [
+        "W    oooo    c",
+        "WW  ommmmOO cc",
+        " WWOcCCCsOccc ",
+        "   OsscssO    ",
+    ],
+    [
+        "     oooo     ",
+        "W   ommmmOO  c",
+        "WWWOcCCCsOcccc",
+        "   OsscssO    ",
+    ],
+    [
+        "     oooo     ",
+        "    ommmmOO   ",
+        "WWWOcCCCsOcccc",
+        "   OsscssO    ",
+    ],
+    [
+        "     oooo     ",
+        "    ommmmOO   ",
+        " WWOcCCCsOccc ",
+        "WW OsscssO  cc",
+    ],
+];
+
 /// Ping-pong over the four wing positions. Walking 0,1,2,3 and snapping back
 /// draws only the downstroke; this draws both halves of the beat, which is
 /// what the original's cycled frames looked like in motion.
@@ -130,6 +265,38 @@ const TOAST_SPRITE: [[&str; TOAST_H]; 4] = [
         r"|##|",
     ],
 ];
+
+/// The doneness ramp, drawn in colour as well as in strokes: each level starts
+/// one stop further down the gold -> brown ladder than the last and darkens
+/// again from the crumb top to the crust edge, so all eight of the slice's
+/// sampled colours are on screen at once across the flock.
+#[rustfmt::skip]
+const TOAST_INK: [[&str; TOAST_H]; 4] = [
+    [
+        " PP ",
+        "G  G",
+        "yYYy",
+    ],
+    [
+        " GG ",
+        "GggG",
+        "gBBg",
+    ],
+    [
+        " gg ",
+        "gBBg",
+        "BbbB",
+    ],
+    [
+        " bb ",
+        "bddb",
+        "dddd",
+    ],
+];
+
+/// The art, resolved. `render` stamps out of these and nothing else.
+const TOASTER_CELLS: [[Cell; TOASTER_W * TOASTER_H]; 4] = bake_sprites(&TOASTER, &TOASTER_INK);
+const TOAST_CELLS: [[Cell; TOAST_W * TOAST_H]; 4] = bake_sprites(&TOAST_SPRITE, &TOAST_INK);
 
 /// The diagonal: 5 across for every 2 down, about 22 degrees below horizontal.
 ///
@@ -179,13 +346,26 @@ impl Obj {
         }
     }
 
-    fn sprite(&self, tick: u32, flap_div: u32) -> (&'static [&'static str], u16) {
+    /// Which sprite this object shows right now: a wing frame for a toaster, a
+    /// doneness level for a slice. This is the index the RENDERER uses, so a
+    /// test that wants the art indexes `TOASTER` with it rather than being
+    /// handed a second value nothing draws from.
+    fn sprite(&self, tick: u32, flap_div: u32) -> usize {
         match self.kind {
             0 => {
                 let step = (tick / flap_div) as usize + self.phase as usize;
-                (&TOASTER[FLAP[step % FLAP.len()] as usize], CHROME)
+                FLAP[step % FLAP.len()] as usize
             }
-            k => (&TOAST_SPRITE[k as usize - 1], TOAST0 + k as u16 - 1),
+            k => k as usize - 1,
+        }
+    }
+
+    fn cells(&self, tick: u32, flap_div: u32) -> &'static [Cell] {
+        let i = self.sprite(tick, flap_div);
+        if self.kind == 0 {
+            &TOASTER_CELLS[i]
+        } else {
+            &TOAST_CELLS[i]
         }
     }
 }
@@ -223,7 +403,7 @@ fn next_rand(rng: &mut u32) -> u32 {
 }
 
 /// Clear or paint one sprite-sized rectangle of `scene`, clipped to the grid.
-/// `sprite` of `None` clears the whole rectangle; painting SKIPS the spaces
+/// `sprite` of `None` clears the whole rectangle; painting SKIPS the blanks
 /// rather than clearing them, so sprites are transparent where they overlap.
 /// Writing blanks instead punches the other sprite's strokes out — visible in a
 /// dump as toasters eating each other.
@@ -233,7 +413,7 @@ fn stamp(
     rows: i32,
     at: (i32, i32),
     size: (usize, usize),
-    sprite: Option<(&[&str], u16)>,
+    sprite: Option<&[Cell]>,
 ) {
     let (cx, cy) = at;
     for r in 0..size.1 as i32 {
@@ -241,21 +421,24 @@ fn stamp(
         if y < 0 || y >= rows {
             continue;
         }
-        let row = sprite.map(|(s, _)| s[r as usize].as_bytes());
         for c in 0..size.0 as i32 {
             let x = cx + c;
             if x < 0 || x >= cols {
                 continue;
             }
-            let cell = match (row, sprite) {
-                (Some(bytes), Some((_, colour))) => {
-                    let ch = bytes[c as usize];
-                    if ch == b' ' {
+            let cell = match sprite {
+                Some(cells) => {
+                    let cell = cells[r as usize * size.0 + c as usize];
+                    // On the GLYPH, not on the whole packed word: the
+                    // invariant is "this cell draws nothing", and a cell with
+                    // no strokes but some colour index draws nothing while
+                    // still comparing unequal to `Cell::CLEAR`.
+                    if cell.glyph() == font::BLANK as usize {
                         continue;
                     }
-                    Cell::new(font::ASCII[(ch - 0x20) as usize], colour)
+                    cell
                 }
-                _ => Cell::new(font::BLANK, 0),
+                None => Cell::CLEAR,
             };
             scene[(y * cols + x) as usize] = cell;
         }
@@ -307,7 +490,7 @@ impl Toasters {
             cell_w,
             cell_h,
             objs: Vec::with_capacity(count),
-            scene: vec![Cell::new(font::BLANK, 0); (cols * rows) as usize],
+            scene: vec![Cell::CLEAR; (cols * rows) as usize],
             step_x: -unit * RUN,
             step_y: unit * RISE,
             flap_div: (fps / flap_fps).max(1),
@@ -404,7 +587,7 @@ impl Saver for Toasters {
                 self.rows,
                 at,
                 o.size(),
-                Some(o.sprite(tick, flap_div)),
+                Some(o.cells(tick, flap_div)),
             );
             o.drawn = at;
         }
@@ -473,6 +656,47 @@ mod tests {
         }
     }
 
+    /// The subject of the whole palette: four regions, each its own colour, and
+    /// two olives that have to stay two. Frame 2 is level flight, the frame the
+    /// flock spends most of its time in; row 2 is the body row. Asserting named
+    /// cells is also the only thing that sees an ink row shifted within its own
+    /// width — same length, blanks in the same places, every stroke a valid key,
+    /// and the whole body wrongly coloured.
+    #[test]
+    fn each_region_of_the_toaster_is_its_own_colour() {
+        let f = &TOASTER_CELLS[2];
+        let at = |r: usize, c: usize| f[r * TOASTER_W + c].colour() as u16;
+
+        assert_eq!(at(2, 0), ink(b'W'), "the near wing is white");
+        assert_eq!(at(2, 13), ink(b'c'), "the far wing is one stop down");
+        assert_eq!(at(2, 5), ink(b'C'), "the front panel is chrome");
+        assert_eq!(at(2, 4), ink(b'c'), "lit at its left edge");
+        assert_eq!(at(2, 8), ink(b's'), "and in shadow at its right");
+        assert_eq!(at(2, 3), ink(b'O'), "the body's side edges are turned away");
+        assert_eq!(at(2, 9), ink(b'O'));
+        assert_eq!(at(0, 5), ink(b'o'), "the top face is the lit olive");
+        assert_eq!(at(1, 5), ink(b'm'), "the slot rims are chrome");
+
+        // The depth cue. One olive and the three-quarter view is a flat box,
+        // exactly as one wing colour would make the flap a flat flicker.
+        assert_ne!(
+            ink(b'O'),
+            ink(b'o'),
+            "two olives, or there is no near and far"
+        );
+        assert_ne!(ink(b'W'), ink(b'c'), "two whites, same reason");
+
+        // Doneness has to darken. Every slice's crumb top, against the next.
+        let top = |d: usize| PAL[TOAST_CELLS[d][1].colour()];
+        for d in 1..4 {
+            assert!(
+                top(d) < top(d - 1),
+                "slice {d} is not darker than {}",
+                d - 1
+            );
+        }
+    }
+
     /// The two details the module doc calls the tells. Motion must be strictly
     /// down AND left at the fixed RISE/RUN slope, and every object must move by
     /// the same vector on the same frame — no per-object speed.
@@ -513,7 +737,7 @@ mod tests {
             drawn: (i32::MIN, i32::MIN),
         };
         let seen: Vec<&str> = (0..FLAP.len() as u32)
-            .map(|t| o.sprite(t, 1).0[2])
+            .map(|t| TOASTER[o.sprite(t, 1)][2])
             .collect();
         let distinct: std::collections::BTreeSet<&&str> = seen.iter().collect();
         assert_eq!(distinct.len(), 4, "four wing positions, got {seen:?}");

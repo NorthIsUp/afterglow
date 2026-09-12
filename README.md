@@ -72,6 +72,20 @@ doc. The three that matter:
 - **Everything moves in lockstep**, one shared step vector in RUN/RISE units so
   the slope is exact and a per-object speed is not expressible. Objects differ
   only in where they entered and where they are in the wing beat.
+- **The body is olive, not silver.** Quantising the 256x64 sheet by pixel count
+  puts an olive chassis at a fifth of the toaster, behind a chrome front panel
+  (`#909090`, the largest family) and white wings (`#F0F0F0`); the slot rims are
+  a lighter chrome and the lever lighter still. Every stroke of the art carries
+  an ink key naming its region, so a `/` is a white wing in one column and the
+  body's receding edge in the next, and the four doneness slices ramp through
+  all eight of the toast sprite's sampled golds and browns. The two olives are
+  the depth cue — `#707030` lit top face, `#303010` sides turned away — and they
+  pair with the near/far wing whites to keep the three-quarter view from
+  flattening. Art and ink resolve to cells in a `const fn`, so a ragged row, an
+  ink grid misaligned with its art, or an undefined ink key is `error[E0080]` at
+  build time rather than a sprite that renders wrong. The sheet's near-black
+  `#101010` is the one family with no entry: it outlined the sprite against the
+  sheet's background, and here the gaps between glyphs already draw that.
 - **Four wing positions, ping-ponged.** Up, mid, level, down and back, a full
   beat in 0.4 s. The original's sheet is four 64x64 frames — a half-stroke —
   and playing it 0,1,2,3 and snapping back draws only the downstroke.
