@@ -111,14 +111,14 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      # The digest deployment.yaml pins. Reading it back needs
-      # read:packages, which neither CI nor a local gh has — so print it
-      # here or it exists in no reachable place.
+      # The digest deployment.yaml pins. Reading it back needs read:packages,
+      # which neither CI nor a local gh has — so print it here, or it exists in
+      # no reachable place.
       - name: digest
         if: steps.build.outputs.digest != ''
         run: |
           echo "ghcr.io/northisup/screensaver@${{ steps.build.outputs.digest }}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
