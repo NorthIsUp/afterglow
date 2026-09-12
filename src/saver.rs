@@ -5,6 +5,7 @@ use crate::grid::Grid;
 use crate::matrix::Matrix;
 use crate::mirror::Mirror;
 use crate::surface::{Damage, Panel, Surface};
+use crate::toasters::Toasters;
 
 /// A screensaver. One frame, one call. Dispatch happens here and NOWHERE below
 /// it: no `&dyn Palette`, no `fn cell(&self, x, y) -> Cell`, no `&mut dyn FnMut`
@@ -49,6 +50,7 @@ const SAVERS: &[(&str, Build)] = &[
     ("ascii", |p, _| Box::new(Fire::ascii(p))),
     ("blocks", |p, _| Box::new(Fire::blocks(p))),
     ("matrix", |p, fps| Box::new(Matrix::new(p, fps))),
+    ("toasters", |p, fps| Box::new(Toasters::new(p, fps))),
 ];
 
 /// The name at an index the render loop is holding. Panics on an index no

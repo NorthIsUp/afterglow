@@ -31,7 +31,7 @@
 //! * `surface` — the mapped frame and the damage contract. Read that first.
 //! * `mirror` — the web mirror: the same cells the panel shows, over HTTP.
 //! * `grid` / `font` — the character grid and the one glyph blitter.
-//! * `fire` / `matrix` — the savers. `saver` is the trait and the name -> saver
+//! * `fire` / `matrix` / `toasters` — the savers. `saver` is the trait and the name -> saver
 //!   dispatch; adding one is a module plus a row in `saver::SAVERS`.
 //! * `host` — DRM: modeset, mapping, dirty, teardown.
 //! * `dump` — the same frame code rendered to PPM on a machine with no display,
@@ -40,7 +40,7 @@
 //! # Environment
 //!
 //! * `DRM_DEVICE`     — card to open (default `/dev/dri/card0`)
-//! * `SAVER`          — `ascii` (default), `blocks`, or `matrix`. The
+//! * `SAVER`          — `ascii` (default), `blocks`, `matrix` or `toasters`. The
 //!   startup choice only: `POST /select?saver=<name>` on the web mirror
 //!   switches it live, and a restart goes back to this.
 //! * `SAVER_FPS`      — target frames/sec, 1..=120 (default 30)
@@ -48,6 +48,11 @@
 //! * `FIRE_SCALE`     — blocks fire: cell in px, 1..=16 (default 4)
 //! * `MATRIX_CELL_W`  — matrix: cell width in px, 8..=64 (default 16)
 //! * `MATRIX_CELL_H`  — matrix: cell height in px, 8..=128 (default 32)
+//! * `TOASTER_CELL_W` / `TOASTER_CELL_H` — toasters: cell in px (16, 32)
+//! * `TOASTER_DENSITY` — toasters per 1000 cells, 1..=60 (default 4)
+//! * `TOASTER_TOAST_PCT` — percent of the flock that is toast (default 25)
+//! * `TOASTER_SPEED`  — horizontal px per SECOND, 8..=2000 (default 170)
+//! * `TOASTER_FLAP_FPS` — wing frames per second, 1..=120 (default 15)
 //! * `RETRY_SECONDS`  — wait between attempts when no display is present (default 30)
 //! * `SAVER_HTTP`     — address the web mirror listens on (default
 //!   `127.0.0.1:8080`, which is the `tailscale-auth` sidecar's default upstream;
@@ -70,6 +75,7 @@ mod matrix;
 mod mirror;
 mod saver;
 mod surface;
+mod toasters;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

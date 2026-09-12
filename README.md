@@ -20,11 +20,12 @@ writes pixels straight into a DRM/KMS dumb buffer.
 Pick one with `SAVER` (older spelling: `FIRE_STYLE`). Anything unrecognised
 falls back to `ascii` — a headless pod must never crash-loop on a typo.
 
-| `SAVER`  | What                                                                                                                                | Knobs                                                                     |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `ascii`  | Doom fire as an ASCII ramp (`" .:-=+*#%@"`), one heat sample per character cell, coloured by the 37-step fire palette. The default. | `FIRE_CELL` (px, 8..64, default 16)                                       |
-| `blocks` | The same fire drawn as chunky pixels — a solid glyph per cell.                                                                      | `FIRE_SCALE` (px, 1..16, default 4)                                       |
-| `matrix` | Digital rain.                                                                                                                       | `MATRIX_CELL_W` (8..64, default 16), `MATRIX_CELL_H` (8..128, default 32) |
+| `SAVER`    | What                                                                                                                                | Knobs                                                                                                                                                                                                                        |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ascii`    | Doom fire as an ASCII ramp (`" .:-=+*#%@"`), one heat sample per character cell, coloured by the 37-step fire palette. The default. | `FIRE_CELL` (px, 8..64, default 16)                                                                                                                                                                                          |
+| `blocks`   | The same fire drawn as chunky pixels — a solid glyph per cell.                                                                      | `FIRE_SCALE` (px, 1..16, default 4)                                                                                                                                                                                          |
+| `matrix`   | Digital rain.                                                                                                                       | `MATRIX_CELL_W` (8..64, default 16), `MATRIX_CELL_H` (8..128, default 32)                                                                                                                                                    |
+| `toasters` | Flying toasters, after After Dark's.                                                                                                | `TOASTER_DENSITY` (per 1000 cells, 1..60, default 4), `TOASTER_SPEED` (px/sec, 8..2000, default 170), `TOASTER_TOAST_PCT` (0..100, default 25), `TOASTER_FLAP_FPS` (1..120, default 15), `TOASTER_CELL_W` / `TOASTER_CELL_H` |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
 `DRM_DEVICE` (default `/dev/dri/card0`), `RETRY_SECONDS`.
@@ -54,6 +55,33 @@ usual imitation, and all three are in `image/src/matrix.rs`:
   two random floats per column, so several drops share a column at different
   speeds and no column is ever idle. Discrete drops with black gaps are the
   giveaway most implementations ship.
+
+### About the toasters saver
+
+The art in `image/src/toasters.rs` is this repo's own ASCII, drawn from a
+description — no Berkeley Systems bitmap is copied or transcribed. What is
+copied is the behaviour, and the research behind each number is in the module
+doc. The three that matter:
+
+- **It travels down-and-left, not left.** 5 px across per 2 down, about 22°
+  below horizontal. The 45° every web recreation uses comes from Bryan Braun's
+  CSS version, not from the original; 2.5:1 is the only slope anyone has taken
+  from shipped code (the After Dark 4.0 binary, where the flock drifts
+  `(-60, +24)` per loop). The 1990 Mac module appears never to have been
+  disassembled, so that is the best evidence there is.
+- **Everything moves in lockstep**, one shared step vector in RUN/RISE units so
+  the slope is exact and a per-object speed is not expressible. Objects differ
+  only in where they entered and where they are in the wing beat.
+- **Four wing positions, ping-ponged.** Up, mid, level, down and back, a full
+  beat in 0.4 s. The original's sheet is four 64x64 frames — a half-stroke —
+  and playing it 0,1,2,3 and snapping back draws only the downstroke.
+
+Toast is the other quarter of the flock (the original spawner holds roughly
+three toasters per slice) and comes in four doneness levels, each its own
+sprite rather than one slice tinted, as the original's `toast0`..`toast3` were.
+Entry is the original's "reverse L": lanes down the top edge and in from the
+right, snapped to cell boundaries. Background is solid black and nothing paints
+over it, which is why an idle region costs no blits at all.
 
 ## Gotchas
 
@@ -89,10 +117,10 @@ shows the previous frame forever, and that bug reproduces on hardware and
 nowhere else.
 
 **Layout** (`image/src/`): `surface.rs` (the mapped frame + damage), `grid.rs`
-and `font.rs` (character grid + the one glyph blitter), `fire.rs` / `matrix.rs`
-(the savers), `saver.rs` (the trait and the name → saver dispatch), `host.rs`
-(DRM), `dump.rs` (headless PPM rendering). Adding a saver is a module plus one
-arm in `saver::make`.
+and `font.rs` (character grid + the one glyph blitter), `fire.rs`, `matrix.rs`
+and `toasters.rs` (the savers), `saver.rs` (the trait and the name → saver
+dispatch), `host.rs` (DRM), `dump.rs` (headless PPM rendering). Adding a saver
+is a module plus one row in `saver::SAVERS`.
 
 ## The web mirror
 
@@ -178,7 +206,9 @@ Glyphs are 8x16, one byte per row, from a vendored 6 KB subset of GNU Unifont's
 OFL 1.1 arm of Unifont's dual licence is elected explicitly (`tools/LICENSE.unifont`);
 the derived table is not called Unifont. Fire's ten ramp glyphs are this repo's
 own 8x8 bitmaps, row-doubled, which is why fire renders pixel-identically to the
-pre-refactor build.
+pre-refactor build. `ASCII` indexes U+0020..=U+007E by `c - 0x20`, which is what
+lets a saver write its sprites as plain string literals; identical bitmaps are
+interned, so a character another set already pulled in costs no extra slot.
 
 ## Building / publishing the image
 

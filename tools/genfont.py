@@ -193,6 +193,15 @@ def main() -> None:
         note = f"matrix U+{used:04X} {ch!r}" + (" mirrored" if mirror else "")
         matrix.append(add(rows, note))
 
+    # Printable ASCII, so a saver can write its sprites as string literals
+    # instead of a hand-maintained glyph index per character. Interning means
+    # the slots the ramp and the matrix set already pulled in cost nothing, and
+    # the space collapses onto BLANK.
+    ascii_set = [
+        add(font.rows(cp, mirror=False)[0], f"ascii U+{cp:04X} {chr(cp)!r}")
+        for cp in range(0x20, 0x7F)
+    ]
+
     with contextlib.ExitStack() as stack:
         w: TextIO = (
             sys.stdout if out == "-" else stack.enter_context(open(out, "w", encoding="utf-8"))
@@ -233,6 +242,12 @@ def main() -> None:
         p("#[rustfmt::skip]")
         p(f"pub const RAMP: [u16; {len(ramp)}] = {ramp!r};")
         p()
+        p("/// Printable ASCII, U+0020..=U+007E, indexed by `c - 0x20`. Sprites are")
+        p("/// written as string literals; this is the lookup that turns one into")
+        p("/// glyph indices.")
+        p("#[rustfmt::skip]")
+        p(f"pub const ASCII: [u16; {len(ascii_set)}] = {ascii_set!r};")
+        p()
         p("/// The film's Reloaded/Revolutions glyph order. Uniform-random selection")
         p("/// over these 57 slots is what the rain draws; the duplicate 0 slot is")
         p("/// faithful, not a bug.")
@@ -241,7 +256,7 @@ def main() -> None:
 
     print(
         f"{len(glyphs)} glyphs, {len(glyphs) * 16} bytes of table "
-        f"({len(matrix)} matrix slots, {len(ramp)} ramp slots)",
+        f"({len(matrix)} matrix slots, {len(ramp)} ramp slots, {len(ascii_set)} ascii)",
         file=sys.stderr,
     )
 
