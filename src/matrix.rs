@@ -221,4 +221,12 @@ impl Saver for Matrix {
     fn name(&self) -> &'static str {
         "matrix"
     }
+
+    fn grid(&self) -> &Grid {
+        &self.grid
+    }
+
+    fn palette(&self) -> &[u32] {
+        &PAL
+    }
 }

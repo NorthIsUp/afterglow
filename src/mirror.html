@@ -1,0 +1,181 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>screensaver mirror</title>
+<style>
+  :root {
+    color-scheme: dark;
+  }
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+    background: #000;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    font:
+      12px ui-monospace,
+      SFMono-Regular,
+      Menlo,
+      monospace;
+    color: #4b8b4b;
+  }
+  canvas {
+    max-width: min(100vw, calc((100vh - 3rem) * var(--ar, 1.777)));
+    max-height: calc(100vh - 3rem);
+    width: auto;
+    height: auto;
+    /* The panel scales an 8x16 glyph to a 16x32 cell with hard edges; smoothing
+       here would make the mirror look unlike the thing it mirrors. */
+    image-rendering: pixelated;
+    border: 1px solid #132;
+    background: #000;
+  }
+  #status {
+    letter-spacing: 0.08em;
+    opacity: 0.75;
+  }
+  #status b {
+    color: #7cf65d;
+    font-weight: 500;
+  }
+</style>
+<canvas id="screen" width="16" height="16"></canvas>
+<div id="status">connecting…</div>
+<script>
+  const canvas = document.getElementById("screen");
+  const status = document.getElementById("status");
+  const ctx = canvas.getContext("2d", { alpha: false });
+
+  let meta = null,
+    atlas = [],
+    solid = [],
+    blank = [],
+    frames = 0,
+    cells = 0;
+
+  const hex = (v) => "#" + v.toString(16).padStart(6, "0");
+
+  // One atlas per palette colour: every glyph drawn in that colour, once. A cell
+  // is then a fillRect plus one drawImage, with no per-pixel work in JS.
+  function buildAtlases(m) {
+    const { glyph_w: gw, glyph_h: gh, glyphs, palette } = m;
+    atlas = palette.map((colour) => {
+      const c = new OffscreenCanvas(glyphs.length * gw, gh);
+      const g = c.getContext("2d");
+      const img = g.createImageData(c.width, gh);
+      const [r, gr, b] = [
+        (colour >> 16) & 255,
+        (colour >> 8) & 255,
+        colour & 255,
+      ];
+      glyphs.forEach((rows, i) => {
+        for (let y = 0; y < gh; y++) {
+          const line = rows[y];
+          for (let x = 0; x < gw; x++) {
+            if (!(line & (0x80 >> x))) continue;
+            const o = (y * c.width + i * gw + x) * 4;
+            img.data[o] = r;
+            img.data[o + 1] = gr;
+            img.data[o + 2] = b;
+            img.data[o + 3] = 255;
+          }
+        }
+      });
+      g.putImageData(img, 0, 0);
+      return c;
+    });
+    // Glyphs that are wholly on or wholly off need no blit at all — that is
+    // what `blocks` is made of, and it is 130k cells.
+    solid = glyphs.map((rows) => rows.every((v) => v === 0xff));
+    blank = glyphs.map((rows) => rows.every((v) => v === 0x00));
+  }
+
+  function applyMeta(m) {
+    meta = m;
+    canvas.width = m.cols * m.cell_w;
+    canvas.height = m.rows * m.cell_h;
+    canvas.style.setProperty("--ar", canvas.width / canvas.height);
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    buildAtlases(m);
+  }
+
+  function draw(view) {
+    const { cols, cell_w: cw, cell_h: ch, glyph_w: gw, glyph_h: gh } = meta;
+    const n = view.getUint32(0, true);
+    for (let k = 0; k < n; k++) {
+      const o = 4 + k * 8;
+      const i = view.getUint32(o, true);
+      const cell = view.getUint32(o + 4, true);
+      const glyph = cell & 0xffff,
+        colour = cell >>> 16;
+      const x = (i % cols) * cw,
+        y = ((i / cols) | 0) * ch;
+      if (solid[glyph]) {
+        ctx.fillStyle = hex(meta.palette[colour]);
+        ctx.fillRect(x, y, cw, ch);
+        continue;
+      }
+      ctx.fillStyle = "#000";
+      ctx.fillRect(x, y, cw, ch);
+      if (!blank[glyph])
+        ctx.drawImage(atlas[colour], glyph * gw, 0, gw, gh, x, y, cw, ch);
+    }
+    frames++;
+    cells += n;
+    return n;
+  }
+
+  async function run() {
+    const res = await fetch("/meta", { cache: "no-store" });
+    if (!res.ok) throw new Error("no display yet (" + res.status + ")");
+    applyMeta(await res.json());
+
+    const stream = await fetch("/stream", { cache: "no-store" });
+    if (!stream.ok) throw new Error("stream " + stream.status);
+    const reader = stream.body.getReader();
+    // Records straddle chunk boundaries, so hold a buffer and consume only
+    // whole ones.
+    let buf = new Uint8Array(0);
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) throw new Error("stream ended");
+      const next = new Uint8Array(buf.length + value.length);
+      next.set(buf);
+      next.set(value, buf.length);
+      buf = next;
+      for (;;) {
+        if (buf.length < 4) break;
+        const view = new DataView(buf.buffer, buf.byteOffset, buf.length);
+        const need = 4 + view.getUint32(0, true) * 8;
+        if (buf.length < need) break;
+        const n = draw(new DataView(buf.buffer, buf.byteOffset, need));
+        buf = buf.subarray(need);
+        status.innerHTML =
+          `<b>${meta.saver}</b> · ${meta.cols}x${meta.rows} cells · ` +
+          `${n} changed · ${Math.round(cells / Math.max(frames, 1))} avg`;
+      }
+    }
+  }
+
+  // The stream ends on modeset (a new palette and geometry), on a pod restart,
+  // and when the tab was backgrounded long enough to be culled. Reconnecting is
+  // the whole recovery story — /meta is re-read, so a changed saver just works.
+  (async function loop() {
+    for (;;) {
+      try {
+        await run();
+      } catch (e) {
+        status.textContent = e.message + " — retrying";
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  })();
+</script>

@@ -90,8 +90,13 @@ jobs:
             cargo clippy --release --locked --all-targets -- -D warnings
             cargo test --release --locked
             cargo build --release --locked
+            # SAVER_HTTP=off: the dump drives the web mirror too, and pacing it
+            # at SAVER_FPS is right for a browser and wrong for a render check.
+            # Coverage for the mirror itself is in the cargo test above, which
+            # is where its HTTP round-trip and never-block-the-display
+            # invariants live.
             for s in ascii blocks matrix; do
-              SAVER=$s SAVER_DUMP=/tmp/dump-$s SAVER_DUMP_FRAMES=20 \
+              SAVER=$s SAVER_HTTP=off SAVER_DUMP=/tmp/dump-$s SAVER_DUMP_FRAMES=20 \
                 SAVER_DUMP_EVERY=19 ./target/release/screensaver
               lit=$(tr -d "\000" < /tmp/dump-$s/frame-00019.ppm | wc -c)
               [ "$lit" -gt 1000 ] || { echo "$s rendered a blank frame"; exit 1; }

@@ -1,6 +1,7 @@
 //! The one thing a screensaver is, and the one per-frame call around it.
 
 use crate::fire::Fire;
+use crate::grid::Grid;
 use crate::matrix::Matrix;
 use crate::surface::{Damage, Panel, Surface};
 
@@ -16,6 +17,15 @@ pub trait Saver {
 
     /// For the startup log line.
     fn name(&self) -> &'static str;
+
+    /// The grid this saver draws through, for the web mirror. Every saver here
+    /// has one — a saver that painted pixels directly could not be mirrored as
+    /// cells, and would need its own answer rather than an `Option` here that
+    /// every caller has to defend against.
+    fn grid(&self) -> &Grid;
+
+    /// Palette the cells' colour indices address, as XRGB8888.
+    fn palette(&self) -> &[u32];
 }
 
 /// Construction is not a trait method: grid geometry is only known after

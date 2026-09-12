@@ -29,6 +29,7 @@
 //! # Layout
 //!
 //! * `surface` — the mapped frame and the damage contract. Read that first.
+//! * `mirror` — the web mirror: the same cells the panel shows, over HTTP.
 //! * `grid` / `font` — the character grid and the one glyph blitter.
 //! * `fire` / `matrix` — the savers. `saver` is the trait and the name -> saver
 //!   dispatch; adding one is a module plus an arm in `saver::make`.
@@ -46,6 +47,9 @@
 //! * `MATRIX_CELL_W`  — matrix: cell width in px, 8..=64 (default 16)
 //! * `MATRIX_CELL_H`  — matrix: cell height in px, 8..=128 (default 32)
 //! * `RETRY_SECONDS`  — wait between attempts when no display is present (default 30)
+//! * `SAVER_HTTP`     — address the web mirror listens on (default
+//!   `127.0.0.1:8080`, which is the `tailscale-auth` sidecar's default upstream;
+//!   `off` disables it). See `mirror.rs`.
 //! * `SAVER_DUMP`     — render to PPM files in this directory instead of to a
 //!   display, then exit. Also honours `SAVER_DUMP_FRAMES`, `SAVER_DUMP_EVERY`,
 //!   `SAVER_WIDTH`, `SAVER_HEIGHT`.
@@ -61,10 +65,12 @@ mod font;
 mod grid;
 mod host;
 mod matrix;
+mod mirror;
 mod saver;
 mod surface;
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// First key PRESENT wins; present-but-unparseable or out-of-range falls back to
@@ -99,6 +105,7 @@ pub struct Config {
     saver: String,
     retry: Duration,
     dump: Option<String>,
+    http: String,
 }
 
 impl Config {
@@ -112,6 +119,9 @@ impl Config {
             saver: env_str(&["SAVER", "FIRE_STYLE"], "ascii"),
             retry: Duration::from_secs(env_num(&["RETRY_SECONDS"], 30, 1, 3600) as u64),
             dump: std::env::var("SAVER_DUMP").ok(),
+            // Loopback by default: the only thing that should reach the mirror
+            // is the tailscale-auth gate sharing this pod's netns.
+            http: env_str(&["SAVER_HTTP"], "127.0.0.1:8080"),
         }
     }
 }
@@ -124,10 +134,20 @@ fn main() {
     // frame would stay frozen on the panel.
     install_signal_handlers();
 
+    // Started before anything else and outliving every retry of the display
+    // loop, so the mirror answers (with a 503 from /meta) on a node whose
+    // monitor is absent — which is exactly when someone is asking why. A dump
+    // drives it too, which is how it is testable with no card at all.
+    let mirror = mirror::Mirror::new();
+    if cfg.http != "off" {
+        let (m, addr) = (Arc::clone(&mirror), cfg.http.clone());
+        std::thread::spawn(move || mirror::serve(m, &addr));
+    }
+
     // Checked before anything touches DRM, so a dump runs on a laptop with no
     // card at all.
     if let Some(dir) = &cfg.dump {
-        if let Err(e) = dump::run_dump(dir, &cfg) {
+        if let Err(e) = dump::run_dump(dir, &cfg, &mirror) {
             eprintln!("[screensaver] {e}");
             std::process::exit(1);
         }
@@ -143,7 +163,7 @@ fn main() {
         if SIGNALLED.load(Ordering::Relaxed) {
             return;
         }
-        match host::run(&cfg) {
+        match host::run(&cfg, &mirror) {
             Ok(()) => return,
             Err(e) => {
                 eprintln!("[screensaver] {e}");

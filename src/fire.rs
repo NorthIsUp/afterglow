@@ -139,4 +139,12 @@ impl Saver for Fire {
     fn name(&self) -> &'static str {
         self.name
     }
+
+    fn grid(&self) -> &Grid {
+        &self.grid
+    }
+
+    fn palette(&self) -> &[u32] {
+        &PAL
+    }
 }

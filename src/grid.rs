@@ -32,6 +32,13 @@ impl Cell {
     pub const fn colour(self) -> usize {
         (self.0 >> 16) as usize
     }
+
+    /// The packed word, for the mirror's wire format — which is this exact
+    /// u32, so nothing re-encodes what `Cell` already packs.
+    #[inline]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
 }
 
 pub struct Grid {
@@ -85,6 +92,24 @@ impl Grid {
     #[inline]
     pub fn rows(&self) -> usize {
         self.rows
+    }
+
+    #[inline]
+    pub fn cell_w(&self) -> usize {
+        self.cell_w
+    }
+
+    #[inline]
+    pub fn cell_h(&self) -> usize {
+        self.cell_h
+    }
+
+    /// The cells of the frame just flushed. `flush` ends by swapping `cur` into
+    /// `prev`, so THIS is the drawn frame and `cur` is next frame's scratch —
+    /// read it after `flush`, never before.
+    #[inline]
+    pub fn cells(&self) -> &[Cell] {
+        &self.prev
     }
 
     /// Write this frame's cells. `f(cx, cy)` is called for EVERY cell, so an

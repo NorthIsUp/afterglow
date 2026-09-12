@@ -7,7 +7,9 @@
 //! `saver::frame` the DRM host calls, and fails the process.
 
 use std::io::Write;
+use std::time::{Duration, Instant};
 
+use crate::mirror::Mirror;
 use crate::saver;
 use crate::surface::{Damage, Panel};
 use crate::{env_num, Config};
@@ -50,7 +52,7 @@ fn verify(prev: &[u32], cur: &[u32], d: &Damage, p: &Panel, n: usize) -> Result<
     Ok(())
 }
 
-pub fn run_dump(dir: &str, cfg: &Config) -> Result<(), String> {
+pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> {
     let frames = env_num(&["SAVER_DUMP_FRAMES"], 30, 1, 100_000) as usize;
     let every = env_num(&["SAVER_DUMP_EVERY"], 10, 1, 100_000) as usize;
     let w = env_num(&["SAVER_WIDTH"], 1920, 64, 4096) as usize;
@@ -64,6 +66,24 @@ pub fn run_dump(dir: &str, cfg: &Config) -> Result<(), String> {
     let mut check = vec![0u32; buf.len()];
     let mut saver = saver::make(&cfg.saver, &panel, cfg.fps);
 
+    // The mirror is fed from here too, so it is exercisable on a laptop with no
+    // card — the same argument that put the damage self-check in this file.
+    // Paced at SAVER_FPS when it is live, so a dump of many frames is a live
+    // mirror rather than a burst; `SAVER_HTTP=off` keeps a dump instant.
+    let paced =
+        (cfg.http != "off").then(|| Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps)));
+    {
+        let g = saver.grid();
+        mirror.describe(
+            saver.name(),
+            g.cols(),
+            g.rows(),
+            g.cell_w(),
+            g.cell_h(),
+            saver.palette(),
+        );
+    }
+
     std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {dir}: {e}"))?;
     let log_path = format!("{dir}/damage.txt");
     let mut log =
@@ -76,8 +96,10 @@ pub fn run_dump(dir: &str, cfg: &Config) -> Result<(), String> {
     );
 
     for n in 0..frames {
+        let t0 = Instant::now();
         check.copy_from_slice(&buf);
         let damage = saver::frame(saver.as_mut(), &mut buf, &panel);
+        mirror.publish(saver.grid().cells());
         verify(&check, &buf, &damage, &panel, n)?;
         writeln!(
             log,
@@ -89,6 +111,9 @@ pub fn run_dump(dir: &str, cfg: &Config) -> Result<(), String> {
         .map_err(|e| format!("write {log_path}: {e}"))?;
         if n % every == 0 {
             write_ppm(dir, n, &buf, &panel)?;
+        }
+        if let Some(rem) = paced.and_then(|d| d.checked_sub(t0.elapsed())) {
+            std::thread::sleep(rem);
         }
     }
     Ok(())

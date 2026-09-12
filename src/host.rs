@@ -11,6 +11,7 @@ use drm::control::{connector, crtc, ClipRect, Device as ControlDevice};
 use drm::Device as BasicDevice;
 use drm_fourcc::DrmFourcc;
 
+use crate::mirror::Mirror;
 use crate::saver;
 use crate::surface::{Panel, MAX_RUNS};
 use crate::{Config, SIGNALLED};
@@ -30,7 +31,7 @@ impl ControlDevice for Card {}
 /// Open the card, modeset the connector's preferred mode, and run until stopped.
 /// Returns Ok(()) when asked to stop, Err on any setup failure so the caller can
 /// idle and retry rather than crash-looping.
-pub fn run(cfg: &Config) -> Result<(), String> {
+pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -101,6 +102,20 @@ pub fn run(cfg: &Config) -> Result<(), String> {
         cfg.fps
     );
 
+    // Geometry, palette and glyph table are fixed for this modeset, so the
+    // mirror is told once and every frame after it is only cells.
+    {
+        let g = saver.grid();
+        mirror.describe(
+            saver.name(),
+            g.cols(),
+            g.rows(),
+            g.cell_w(),
+            g.cell_h(),
+            saver.palette(),
+        );
+    }
+
     let frame_dur = Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps));
     // simpledrm — the driver U-Boot hands over on a Pi5 — scans out of a SHADOW
     // buffer. Writing into the mapping is not enough: the driver only copies to
@@ -122,6 +137,11 @@ pub fn run(cfg: &Config) -> Result<(), String> {
             let buf: &mut [u32] = bytemuck::cast_slice_mut(map.as_mut());
             saver::frame(saver.as_mut(), buf, &panel)
         };
+
+        // After the flush, so `cells()` is the frame that just went to the
+        // panel. Costs one atomic load with nobody watching; see mirror.rs for
+        // why this can never make the display wait.
+        mirror.publish(saver.grid().cells());
 
         // Drivers that scan out directly have no need for this and answer
         // ENOSYS/EINVAL; note it once and stop asking rather than logging per

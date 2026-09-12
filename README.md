@@ -2,8 +2,10 @@
 title: screensaver
 kind: app
 namespace: screensaver
+url: https://screensaver.<tailnet>.ts.net
 icon: monitor
 source: k8s/apps/screensaver/
+verify: cd k8s/apps/screensaver/image && SAVER_DUMP=/tmp/ss SAVER_DUMP_FRAMES=100000 SAVER_HTTP=127.0.0.1:8099 cargo run --release
 ---
 
 # screensaver — HDMI screensavers on whichever Pi5 holds the monitor
@@ -47,6 +49,14 @@ usual imitation, and all three are in `image/src/matrix.rs`:
   speeds and no column is ever idle. Discrete drops with black gaps are the
   giveaway most implementations ship.
 
+## Gotchas
+
+- **`Forbidden: a valid Tailscale identity is required` (403)** — the nginx auth sidecar 403s any request without a matching `Tailscale-User-Login` header. Fix: reach it over the tailnet at the URL above, not by port-forward.
+- **The mirror page says "no display yet (503)" and retries** — `/meta` is written at modeset, and the pod idles rather than crash-looping when the node holds no monitor. Fix: nothing to fix on the mirror; check `kubectl logs` for the DRM failure, which is the real problem.
+- **The mirror is frames behind, or arrives in bursts** — an nginx in front buffers a proxied response by default. Fix: keep the `X-Accel-Buffering: no` header `/stream` sets; don't strip it, and don't "fix" it by adding a streaming exception to the shared `tailscale-auth` component.
+- **The mirror shows the wrong colours after `SAVER` changes** — palette and geometry belong to a modeset, and a viewer holding the old ones would mis-colour every cell. Deliberate: the stream closes on modeset. Fix: none, the page reconnects and re-reads `/meta` within two seconds.
+- **A dump takes 6 seconds instead of finishing instantly** — the dump path drives the mirror, so it is paced at `SAVER_FPS` whenever the mirror is live. Fix: `SAVER_HTTP=off` for a dump you only want the PPMs from.
+
 ## How it works
 
 `image/src/main.rs` opens `/dev/dri/card0`, modesets the connector's preferred
@@ -75,6 +85,47 @@ and `font.rs` (character grid + the one glyph blitter), `fire.rs` / `matrix.rs`
 (DRM), `dump.rs` (headless PPM rendering). Adding a saver is a module plus one
 arm in `saver::make`.
 
+## The web mirror
+
+`https://screensaver.<tailnet>.ts.net` shows what the panel is drawing,
+live. Identity is the Tailscale-injected `Tailscale-User-Login` header enforced
+by the `tailscale-auth` sidecar — there is no login and there must never be one.
+
+**What crosses the wire is cells, not pixels.** Every saver paints through
+`Grid`, so the panel's whole state is `cols * rows` of a `Cell` — a glyph index
+and a palette index packed into one `u32` — over a palette and a glyph table
+that are both fixed for the modeset. The mirror sends the changed cells. It is
+not compression; it is sending the thing the renderer already has.
+
+Measured at 1920x1080, `SAVER_FPS=15`:
+
+| `SAVER`  | grid    | cells  | changed/frame | damaged scanlines/frame |
+| -------- | ------- | ------ | ------------- | ----------------------- |
+| `matrix` | 120x33  | 3960   | 792 (20.0%)   | 1056 — the whole panel  |
+| `ascii`  | 120x67  | 8040   | 2546 (31.7%)  | 1056                    |
+| `blocks` | 480x270 | 129600 | 11022 (8.5%)  | ~620                    |
+
+The right-hand column is why every pixel-shaped answer loses. Matrix dirties
+every scanline every frame, so "ship the damaged rows" ships 8.1 MB per frame;
+the same frame is 6.4 KB of cells. Re-encoding the panel as JPEG or PNG instead
+costs the Pi tens of milliseconds per frame, against a renderer that measures
+113m of one core in total.
+
+**What it costs the renderer.** With nobody watching: one relaxed atomic load
+per frame. With a viewer: one `memcpy` of the cell array (15.8 KB for matrix)
+under a `try_lock` that is _skipped_ rather than waited on — the display can
+never be made to wait for the web path, and a frame the mirror misses is just a
+frame the mirror misses. The diff, the encode and the socket are all on the
+viewer's own thread.
+
+`GET /stream` is an HTTP/1.1 chunked binary stream — one-way server → client,
+which `fetch` and a stream reader already do, so a WebSocket would buy nothing
+for a hand-rolled SHA-1 and a frame codec. Records are self-describing
+(`u32 count`, then `count * (u32 index, u32 cell)`), which is what makes them
+survive nginx re-chunking them on the way through the gate. `GET /meta` is the
+geometry, palette and glyph table; `GET /` is the page. `SAVER_HTTP=off`
+removes all of it.
+
 ## Looking at a saver without a monitor
 
 `SAVER_DUMP` renders to PPM files and exits, on any machine, with no display:
@@ -93,6 +144,11 @@ the one bug a monitor cannot help with and a laptop can.
 
 `<dir>/damage.txt` gets a line per frame with the reported runs — the headless
 read on whether a saver is quietly flushing the whole panel.
+
+The dump also drives the **web mirror**, so http://127.0.0.1:8080 shows the same
+saver in a browser with no card at all — the one way the mirror is testable off
+the hardware. Pass a large `SAVER_DUMP_FRAMES` and it runs at `SAVER_FPS`
+indefinitely.
 
 View with `magick frame-00000.ppm out.png`, or
 `ffmpeg -i 'frame-%05d.ppm' out.gif`.
@@ -125,6 +181,22 @@ namespace via `k8s/secrets/ghcr-screensaver.sops.yaml`.
 
 Then bump the `image:` digest in `deployment.yaml` — in its own commit, with no
 env changes in it, so the new binary always runs against the old env block first.
+
+<!-- gen:facts -->
+
+|              |                                                                                                                                                    |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Namespace    | screensaver                                                                                                                                        |
+| Image        | `ghcr.io/northisup/screensaver@sha256:9915d08d26378a6a7c06998ab0100861b195b635c80297b3a15e219cdcb2144a`, `nginxinc/nginx-unprivileged:1.27-alpine` |
+| Ports        | `screensaver 8080`, `ts-auth 8085`                                                                                                                 |
+| Storage      | —                                                                                                                                                  |
+| Memory limit | `screensaver 128Mi`, `ts-auth 64Mi`                                                                                                                |
+| Strategy     | `Recreate`                                                                                                                                         |
+| nodeSelector | `hardware.homelab/display=true`                                                                                                                    |
+| Components   | `tailscale-auth`                                                                                                                                   |
+| Depends on   | —                                                                                                                                                  |
+
+<!-- /gen:facts -->
 
 ## Debugging
 
