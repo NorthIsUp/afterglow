@@ -51,6 +51,7 @@ usual imitation, and all three are in `image/src/matrix.rs`:
 
 ## Gotchas
 
+- **The mirror looks perfect while the panel is wrong** — the mirror publishes `saver.grid().cells()`, the frame we just _wrote_, not a read-back of the scanout. Anything that clobbers the panel downstream of that write (fbcon, another DRM client) is invisible to it, which is why it sat green for four days while the monitor showed console text. Fix: trust the mirror for "is the renderer running", never for "is this what the screen shows".
 - **The monitor shows console text, not the saver** — Talos boots `console=tty0 consoleblank=0`, so fbcon owns the framebuffer and repaints over every frame the renderer flips in. Nothing in the DRM path can see it: our ioctls all succeed, so the pod looks perfect at the right CPU for days. Fix: the `release-fbcon` initContainer writes 0 into the vtconsole bind before the renderer starts. Confirmed 2026-09-12.
 - **The panel is black and there is no login prompt** — that is the cost of the above: the display node has no HDMI console while this runs. Fix: nothing, by design. A reboot restores it, or `echo 1 > /sys/class/vtconsole/vtcon1/bind` rebinds it by hand.
 - **`Forbidden: a valid Tailscale identity is required` (403)** — the nginx auth sidecar 403s any request without a matching `Tailscale-User-Login` header. Fix: reach it over the tailnet at the URL above, not by port-forward.
