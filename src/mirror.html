@@ -44,12 +44,31 @@
     color: #7cf65d;
     font-weight: 500;
   }
+  #pick {
+    display: flex;
+    gap: 0.4rem;
+  }
+  #pick button {
+    font: inherit;
+    letter-spacing: 0.08em;
+    color: #4b8b4b;
+    background: #000;
+    border: 1px solid #132;
+    padding: 0.3rem 0.8rem;
+    cursor: pointer;
+  }
+  #pick button[aria-pressed="true"] {
+    color: #7cf65d;
+    border-color: #3a6;
+  }
 </style>
 <canvas id="screen" width="16" height="16"></canvas>
+<div id="pick"></div>
 <div id="status">connecting…</div>
 <script>
   const canvas = document.getElementById("screen");
   const status = document.getElementById("status");
+  const pick = document.getElementById("pick");
   const ctx = canvas.getContext("2d", { alpha: false });
 
   let meta = null,
@@ -96,8 +115,34 @@
     blank = glyphs.map((rows) => rows.every((v) => v === 0x00));
   }
 
+  // The tailnet is the auth boundary (the ts-auth sidecar 403s anything without
+  // an identity header), so there is nothing to send but the name.
+  async function select(name) {
+    const res = await fetch("/select?saver=" + encodeURIComponent(name), {
+      method: "POST",
+      cache: "no-store",
+    });
+    // A rejected name leaves the panel alone; say so rather than lying about it.
+    if (!res.ok) status.textContent = "cannot draw " + name;
+    // No redraw here: the switch bumps the mirror's epoch, so the stream ends
+    // and the reconnect below re-reads /meta — the same path a modeset takes.
+  }
+
+  function buildPicker(m) {
+    pick.replaceChildren(
+      ...(m.savers || []).map((name) => {
+        const b = document.createElement("button");
+        b.textContent = name;
+        b.setAttribute("aria-pressed", name === m.saver);
+        b.onclick = () => select(name);
+        return b;
+      }),
+    );
+  }
+
   function applyMeta(m) {
     meta = m;
+    buildPicker(m);
     canvas.width = m.cols * m.cell_w;
     canvas.height = m.rows * m.cell_h;
     canvas.style.setProperty("--ar", canvas.width / canvas.height);

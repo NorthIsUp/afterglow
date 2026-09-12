@@ -89,7 +89,9 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
     let pitch = db.pitch();
     // A 32bpp pitch is always a multiple of 4, so this division is exact.
     let panel = Panel::new(w as usize, h as usize, pitch as usize / 4);
-    let mut saver = saver::make(&cfg.saver, &panel, cfg.fps);
+    // Built from the mirror's selection, not cfg.saver: one validated path,
+    // so make's fallback arm stops being load-bearing for user input.
+    let mut saver = saver::make(saver::name_at(mirror.selected()), &panel, cfg.fps);
     eprintln!(
         "[screensaver] drm {} {}x{}@{}Hz crtc={:?} pitch={} saver={} fps={}",
         cfg.device,
@@ -102,19 +104,10 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
         cfg.fps
     );
 
-    // Geometry, palette and glyph table are fixed for this modeset, so the
-    // mirror is told once and every frame after it is only cells.
-    {
-        let g = saver.grid();
-        mirror.describe(
-            saver.name(),
-            g.cols(),
-            g.rows(),
-            g.cell_w(),
-            g.cell_h(),
-            saver.palette(),
-        );
-    }
+    // Geometry, palette and glyph table are fixed until the saver changes, so
+    // the mirror is told once and every frame after it is only cells.
+    saver::announce(mirror, saver.as_ref());
+    let mut selected = mirror.selected();
 
     let frame_dur = Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps));
     // simpledrm — the driver U-Boot hands over on a Pi5 — scans out of a SHADOW
@@ -129,6 +122,11 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
 
     while !SIGNALLED.load(Ordering::Relaxed) {
         let t0 = Instant::now();
+        // One relaxed load per frame, same as the mirror's viewer count. The
+        // new saver's grid geometry and palette differ, so announcing it bumps
+        if saver::switch(&mut saver, &mut selected, mirror, &panel, cfg.fps) {
+            eprintln!("[screensaver] now drawing {}", saver.name());
+        }
         let damage = {
             let mut map = card
                 .map_dumb_buffer(&mut db)

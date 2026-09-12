@@ -54,6 +54,7 @@ use std::time::Duration;
 
 use crate::font;
 use crate::grid::Cell;
+use crate::saver;
 
 /// Each viewer holds its own `prev` grid and does its own diff. Two people
 /// looking at a screensaver is already generous; the cap is what stops a
@@ -84,6 +85,10 @@ struct Frame {
 
 pub struct Mirror {
     viewers: AtomicUsize,
+    /// Index into `saver::NAMES` the render loop should be drawing. An atomic
+    /// rather than a lock because the render loop reads it every frame and must
+    /// never wait on a browser; `POST /select` is the only writer.
+    selected: AtomicUsize,
     frame: Mutex<Frame>,
     ready: Condvar,
     /// `/meta` JSON, rebuilt on modeset. Empty until the first one.
@@ -94,10 +99,27 @@ impl Mirror {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             viewers: AtomicUsize::new(0),
+            selected: AtomicUsize::new(0),
             frame: Mutex::new(Frame::default()),
             ready: Condvar::new(),
             meta: Mutex::new(String::new()),
         })
+    }
+
+    /// Index into `saver::NAMES` the render loop should be drawing.
+    pub fn selected(&self) -> usize {
+        self.selected.load(Ordering::Relaxed)
+    }
+
+    /// Point the render loop at `name`. False for a name no saver answers to,
+    /// leaving the selection untouched — the render loop must never be handed
+    /// an index that is not a saver.
+    pub fn select(&self, name: &str) -> bool {
+        let Some(i) = saver::index_of(name) else {
+            return false;
+        };
+        self.selected.store(i, Ordering::Relaxed);
+        true
     }
 
     /// Publish this frame's cells. Called from the render thread, once per
@@ -129,11 +151,16 @@ impl Mirror {
     ) {
         let mut json = String::with_capacity(8 << 10);
         json.push_str(&format!(
-            "{{\"saver\":\"{saver}\",\"cols\":{cols},\"rows\":{rows},\
+            "{{\"saver\":\"{saver}\",\"savers\":[{savers}],\
+             \"cols\":{cols},\"rows\":{rows},\
              \"cell_w\":{cw},\"cell_h\":{ch},\
              \"glyph_w\":{},\"glyph_h\":{},\"palette\":[",
             font::GLYPH_W,
-            font::GLYPH_H
+            font::GLYPH_H,
+            savers = crate::saver::names()
+                .map(|n| format!("\"{n}\""))
+                .collect::<Vec<_>>()
+                .join(",")
         ));
         for (i, c) in pal.iter().enumerate() {
             json.push_str(&format!(
@@ -191,19 +218,53 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
     s.set_write_timeout(Some(Duration::from_secs(10)))?;
     let _ = s.set_nodelay(true);
 
-    let path = match read_request_path(&mut s)? {
-        Some(p) => p,
-        None => return send(&mut s, "400 Bad Request", "text/plain", b"bad request"),
+    let Some((method, path, query)) = read_request(&mut s)? else {
+        return send(&mut s, "400 Bad Request", "text/plain", b"bad request");
     };
 
-    match path.as_str() {
-        "/" => send(
+    match (method.as_str(), path.as_str()) {
+        // Restored after /select added a method column: the old parser rejected
+        // every non-GET at the parse layer, and dropping that made POST /stream
+        // able to take one of the four viewer slots and hold a thread.
+        (m, p) if p == "/select" && m != "POST" => send(
+            &mut s,
+            "405 Method Not Allowed",
+            "text/plain",
+            b"method not allowed: POST /select\n",
+        ),
+        (m, p) if m != "GET" && !(m == "POST" && p == "/select") => send(
+            &mut s,
+            "405 Method Not Allowed",
+            "text/plain",
+            b"method not allowed",
+        ),
+        // A GET must not be able to change the saver.
+        ("POST", "/select") => match param(&query, "saver") {
+            Some(name) if mirror.select(&name) => send(
+                &mut s,
+                "200 OK",
+                "application/json",
+                selected_json(mirror).as_bytes(),
+            ),
+            // Unknown name: say so and change nothing. The render loop only
+            // ever sees an index that is a saver.
+            other => {
+                eprintln!("[screensaver] rejected saver {other:?}");
+                send(
+                    &mut s,
+                    "400 Bad Request",
+                    "application/json",
+                    br#"{"error":"unknown saver"}"#,
+                )
+            }
+        },
+        (_, "/") => send(
             &mut s,
             "200 OK",
             "text/html; charset=utf-8",
             PAGE.as_bytes(),
         ),
-        "/meta" => {
+        (_, "/meta") => {
             let meta = mirror.meta.lock().unwrap().clone();
             if meta.is_empty() {
                 // No modeset yet: the pod is up but idling on a node with no
@@ -213,15 +274,16 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
                 send(&mut s, "200 OK", "application/json", meta.as_bytes())
             }
         }
-        "/stream" => stream(mirror, s),
+        (_, "/stream") => stream(mirror, s),
         _ => send(&mut s, "404 Not Found", "text/plain", b"not found"),
     }
 }
 
-/// The request line's path, or None if this is not a GET we can parse. Reads at
-/// most 8 KiB: no route here takes a body, so a larger request is a mistake or
-/// an attack, and either way the answer is the same.
-fn read_request_path(s: &mut TcpStream) -> std::io::Result<Option<String>> {
+/// Method, path and query string, or None if there is no request line to parse.
+/// Reads at most 8 KiB: no route here takes a body — `/select` carries its
+/// argument in the query string, so nothing waits on a second packet — and a
+/// larger request is a mistake or an attack, either way answered the same.
+fn read_request(s: &mut TcpStream) -> std::io::Result<Option<(String, String, String)>> {
     let mut buf = [0u8; 8 << 10];
     let mut n = 0;
     while n < buf.len() {
@@ -238,13 +300,27 @@ fn read_request_path(s: &mut TcpStream) -> std::io::Result<Option<String>> {
     let Some(line) = head.lines().next() else {
         return Ok(None);
     };
-    let mut parts = line.split(' ');
-    if parts.next() != Some("GET") {
+    let mut parts = line.split_whitespace();
+    let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
         return Ok(None);
-    }
-    Ok(parts
-        .next()
-        .map(|p| p.split('?').next().unwrap_or(p).to_string()))
+    };
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    Ok(Some((method.into(), path.into(), query.into())))
+}
+
+fn param(query: &str, key: &str) -> Option<String> {
+    query.split('&').find_map(|kv| {
+        kv.split_once('=')
+            .filter(|(k, _)| *k == key)
+            .map(|(_, v)| v.to_string())
+    })
+}
+
+fn selected_json(mirror: &Mirror) -> String {
+    format!(
+        "{{\"saver\":\"{}\"}}",
+        crate::saver::name_at(mirror.selected())
+    )
 }
 
 fn send(s: &mut TcpStream, status: &str, ctype: &str, body: &[u8]) -> std::io::Result<()> {
@@ -447,6 +523,67 @@ mod tests {
         assert!(head.contains("X-Accel-Buffering: no"), "{head}");
         // Chunk of 4 + 4 cells * 8 = 36 bytes: a connect always keyframes.
         assert!(head.contains("\r\n\r\n24\r\n"), "{head}");
+    }
+
+    /// /select is the one route that changes what the panel draws, so it is the
+    /// one route where a bad request must not be taken at face value: an
+    /// unknown name 400s and leaves the selection alone. Over a real socket,
+    /// because the method check and the query parsing are both on that path.
+    #[test]
+    fn select_switches_the_saver_and_refuses_a_name_that_is_not_one() {
+        let m = Mirror::new();
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        {
+            let m = Arc::clone(&m);
+            std::thread::spawn(move || {
+                for s in l.incoming().flatten() {
+                    let m = Arc::clone(&m);
+                    std::thread::spawn(move || handle(&m, s));
+                }
+            });
+        }
+        let req = |line: &str| {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.write_all(format!("{line} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+                .unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).unwrap();
+            out
+        };
+
+        assert_eq!(m.selected(), 0);
+        let body = req("POST /select?saver=matrix");
+        assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+        assert!(body.contains("\"saver\":\"matrix\""), "{body}");
+        assert_eq!(crate::saver::name_at(m.selected()), "matrix");
+
+        for bad in [
+            "POST /select?saver=nope",   // not a saver
+            "POST /select?saver=",       // truncated away
+            "POST /select?saver=MATRIX", // names are exact
+            "POST /select",              // no parameter at all
+            "POST /select?other=ascii",  // wrong parameter
+        ] {
+            let body = req(bad);
+            assert!(body.starts_with("HTTP/1.1 400 "), "{bad}: {body}");
+            assert_eq!(crate::saver::name_at(m.selected()), "matrix", "{bad}");
+        }
+
+        // A GET must not be able to change the panel. 405, not 404: the route
+        // exists, the method is what is wrong.
+        let body = req("GET /select?saver=ascii");
+        assert!(body.starts_with("HTTP/1.1 405 "), "{body}");
+        assert_eq!(crate::saver::name_at(m.selected()), "matrix");
+
+        // Adding a method column to the router deleted the parse-layer check
+        // that used to reject every non-GET, which let POST /stream take one of
+        // the four viewer slots and hold a thread open on it.
+        for bad in ["POST /stream", "PUT /meta", "DELETE /"] {
+            let body = req(bad);
+            assert!(body.starts_with("HTTP/1.1 405 "), "{bad}: {body}");
+        }
+        assert_eq!(m.viewers.load(Ordering::Relaxed), 0, "a slot was taken");
     }
 
     /// The display never waits on a viewer: a held lock drops the frame.

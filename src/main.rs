@@ -32,7 +32,7 @@
 //! * `mirror` — the web mirror: the same cells the panel shows, over HTTP.
 //! * `grid` / `font` — the character grid and the one glyph blitter.
 //! * `fire` / `matrix` — the savers. `saver` is the trait and the name -> saver
-//!   dispatch; adding one is a module plus an arm in `saver::make`.
+//!   dispatch; adding one is a module plus a row in `saver::SAVERS`.
 //! * `host` — DRM: modeset, mapping, dirty, teardown.
 //! * `dump` — the same frame code rendered to PPM on a machine with no display,
 //!   with the damage self-check that no monitor can perform.
@@ -40,7 +40,9 @@
 //! # Environment
 //!
 //! * `DRM_DEVICE`     — card to open (default `/dev/dri/card0`)
-//! * `SAVER`          — `ascii` (default), `blocks`, or `matrix`
+//! * `SAVER`          — `ascii` (default), `blocks`, or `matrix`. The
+//!   startup choice only: `POST /select?saver=<name>` on the web mirror
+//!   switches it live, and a restart goes back to this.
 //! * `SAVER_FPS`      — target frames/sec, 1..=120 (default 30)
 //! * `FIRE_CELL`      — ascii fire: character cell in px, 8..=64 (default 16)
 //! * `FIRE_SCALE`     — blocks fire: cell in px, 1..=16 (default 4)
@@ -139,6 +141,18 @@ fn main() {
     // monitor is absent — which is exactly when someone is asking why. A dump
     // drives it too, which is how it is testable with no card at all.
     let mirror = mirror::Mirror::new();
+    // The env var is the startup default; after that the web UI owns the choice,
+    // and both loops build their saver from this selection rather than reading
+    // cfg.saver again. An unrecognised name is refused here and leaves the
+    // selection at row 0 — the same fallback `make` has always had, now reached
+    // through the one validation point instead of a second path beside it.
+    if !mirror.select(&cfg.saver) {
+        eprintln!(
+            "[screensaver] SAVER={} is not a saver, using {}",
+            cfg.saver,
+            saver::name_at(0)
+        );
+    }
     if cfg.http != "off" {
         let (m, addr) = (Arc::clone(&mirror), cfg.http.clone());
         std::thread::spawn(move || mirror::serve(m, &addr));

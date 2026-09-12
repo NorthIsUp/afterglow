@@ -64,7 +64,9 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
     // fails to paint frame 0 in full shows up here as black, same as on the panel.
     let mut buf = vec![0u32; panel.buf_len()];
     let mut check = vec![0u32; buf.len()];
-    let mut saver = saver::make(&cfg.saver, &panel, cfg.fps);
+    // Built from the mirror's selection, not cfg.saver: one validated path,
+    // so make's fallback arm stops being load-bearing for user input.
+    let mut saver = saver::make(saver::name_at(mirror.selected()), &panel, cfg.fps);
 
     // The mirror is fed from here too, so it is exercisable on a laptop with no
     // card — the same argument that put the damage self-check in this file.
@@ -72,17 +74,8 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
     // mirror rather than a burst; `SAVER_HTTP=off` keeps a dump instant.
     let paced =
         (cfg.http != "off").then(|| Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps)));
-    {
-        let g = saver.grid();
-        mirror.describe(
-            saver.name(),
-            g.cols(),
-            g.rows(),
-            g.cell_w(),
-            g.cell_h(),
-            saver.palette(),
-        );
-    }
+    saver::announce(mirror, saver.as_ref());
+    let mut selected = mirror.selected();
 
     std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {dir}: {e}"))?;
     let log_path = format!("{dir}/damage.txt");
@@ -97,6 +90,8 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
 
     for n in 0..frames {
         let t0 = Instant::now();
+        // The same switch the DRM host honours, so /select is exercisable on a
+        saver::switch(&mut saver, &mut selected, mirror, &panel, cfg.fps);
         check.copy_from_slice(&buf);
         let damage = saver::frame(saver.as_mut(), &mut buf, &panel);
         mirror.publish(saver.grid().cells());

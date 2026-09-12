@@ -31,6 +31,12 @@ Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
 
 All of these are plain deployment env changes — no image rebuild.
 
+`SAVER` is only the startup choice: the mirror page has a button per saver, and
+`POST /select?saver=<name>` does the same thing by hand. An unknown name is a
+400 that changes nothing. The switch rebuilds the saver on the render thread and
+bumps the mirror's epoch, so viewers reconnect onto the new geometry exactly as
+they do for a modeset — and a restart goes back to whatever `SAVER` says.
+
 ### About the matrix saver
 
 It copies the _Reloaded/Revolutions_ look, not the literal 1999 one: the first
