@@ -368,20 +368,21 @@ The flock's mix is COUNTED, not rolled per object. A 25% coin flip over sixteen
 objects lands on a single slice about one seed in twenty, and nothing re-rolls
 an object's kind, so that seed's sky holds one slice for the life of the pod.
 
-Cost scales with the OBJECTS and never with the grid: the scene lives in the
-grid's own buffer between frames, each object clears the rectangle it last
-stamped and stamps a new one, and `Grid::flush_sparse` blits exactly the cells
-named. The dirty list is sorted and deduped before the blit — row-major order is
-what lets `Damage` merge marks into runs (out of order it reported 2832
-scanlines of a 1072-line grid), and the dedup drops the second blit of every
-cell an object cleared and then repainted. It is not literally O(objects): that
-sort is `k log k` over the 4237 cells the objects touched, deduping to 2701
-blits, and is the largest single cost in the renderer. `k` follows the object
-count, not the panel. Measured over 599 frames at 1920x1080: median 800
-damaged scanlines of the 1072 the grid owns, against `toasters`' 672 of 1056 —
-more because sixteen sprites at a 16 px row pitch make more distinct bands than
-`MAX_RUNS` can hold apart — and against 1056 for `ascii` and `matrix`, which
-repaint everything every frame.
+This one draws through `Grid::flush`, not the sparse path every other
+object-based saver uses, and that is measured rather than assumed. It ran on
+`flush_sparse` with a hand-maintained dirty list and paid MORE than the
+whole-grid diff it was avoiding: 4237 indices pushed per frame, sorted
+(`k log k`, the largest single cost in the renderer), deduped to 2701, and most
+of those blitted twice, because `flush_sparse` blits its whole list
+unconditionally while the clear pass had just written a cell the stamp pass
+immediately rewrote with the same value. Clear the grid, stamp the flock,
+`flush`: 0.0799 → 0.0299 ms/frame, and 737 → 676 median damaged scanlines of
+the 1072 the grid owns (against `toasters`' 672 of 1056, and 1056 for `ascii`
+and `matrix`, which repaint everything every frame).
+
+The second half of the trade is not speed. A hand-maintained dirty list can
+under-report, and a cell written but left out of it keeps its old pixels on the
+panel forever; damage derived by diffing cannot.
 
 ## Gotchas
 

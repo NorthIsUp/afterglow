@@ -28,20 +28,23 @@
 //!
 //! # Per-frame cost
 //!
-//! Proportional to the OBJECTS and never to the grid: the scene lives in the
-//! grid's own `cur` buffer between frames, each object clears the rectangle it
-//! last stamped and stamps a new one, and `flush_sparse` blits exactly the
-//! cells named in `dirty`. There is no `fill` walking 16k cells and no scan for
-//! changes — which matters more here than it did at 16x32, because halving the
-//! cell quadrupled the grid.
+//! Clear the grid, stamp the flock, `Grid::flush`. The whole-grid clear and the
+//! whole-grid diff together are 5.6 us at 240x67, and that is the cheaper half
+//! of the choice: this saver ran on `flush_sparse` with a hand-maintained dirty
+//! list and paid MORE than the diff it was avoiding. Measured, 30 fps, 1080p:
+//! 0.0799 ms/frame sparse against 0.0299 ms/frame here.
 //!
-//! It is not literally O(objects), and the one place a reader will come looking
-//! for that is this paragraph. `dirty` is sorted every frame, which is
-//! `k log k` in the cells the objects touched — 4237 `u32` at the default
-//! density and 1920x1080, deduping to 2701 blits, and the largest single cost
-//! in the renderer. `k` is proportional to the object count and not to the
-//! panel, so the shape of the claim holds; the sort is not free, and the
-//! comment at the call site says what it buys.
+//! Where the sparse version's time went — 4237 indices pushed per frame at the
+//! default density, sorted (`k log k`, the largest single cost in the
+//! renderer), deduped to 2701, and most of those blitted twice because the
+//! clear pass wrote a cell that the stamp pass immediately rewrote with the
+//! same value. `flush_sparse` blits its whole list unconditionally; `flush`
+//! skips a cell whose value did not change, which is most of them.
+//!
+//! The second win is not speed. A hand-maintained dirty list can UNDER-report —
+//! a cell written and left out of it keeps its old pixels on the panel forever —
+//! and that bug is unrepresentable here, because damage is derived by diffing
+//! rather than declared.
 //!
 //! The SHADOW-TO-HARDWARE copy is not sparse, and saying otherwise would be a
 //! lie a future reader acts on: damage is whole scanlines merged into at most
@@ -90,16 +93,13 @@ struct Obj {
     kind: u8,
     /// Offset into `FLAP`, so the flock is not one synchronised wing.
     phase: u8,
-    /// Cell coordinates of the rectangle this object last stamped, which is the
-    /// rectangle it has to clear next frame.
-    drawn: (i32, i32),
 }
 
 impl Obj {
     /// A slice is a different SIZE from a toaster, so this is the only answer
-    /// to "how big is it" anywhere: the clear pass, the stamp and the despawn
-    /// check all go through here. A shared constant would leave the toaster
-    /// trailing its right-hand columns across the panel.
+    /// to "how big is it" anywhere: the stamp and the despawn check both go
+    /// through here. A shared constant would clip the toaster's right-hand
+    /// columns off as it leaves the panel.
     fn size(&self) -> (usize, usize) {
         if self.kind == 0 {
             (TOASTER_W, TOASTER_H)
@@ -122,6 +122,16 @@ impl Obj {
         }
     }
 
+    /// Top-left CELL of the sprite. `div_euclid`, not `/`: an object off the
+    /// left edge has a negative x and truncating division would round its cell
+    /// towards zero, which makes the sprite jump a column as it crosses x = 0.
+    fn at(&self, cell_w: i32, cell_h: i32) -> (i32, i32) {
+        (
+            (self.x >> SUB).div_euclid(cell_w),
+            (self.y >> SUB).div_euclid(cell_h),
+        )
+    }
+
     fn cells(&self, tick: u32, flap_div: u32) -> &'static [Cell] {
         let i = self.sprite(tick, flap_div);
         if self.kind == 0 {
@@ -139,10 +149,6 @@ pub struct Toasters2 {
     cell_w: i32,
     cell_h: i32,
     objs: Vec<Obj>,
-    /// Cells written this frame, for `flush_sparse`. Reserved once at
-    /// construction and only ever cleared — a push past the reserve is an
-    /// allocation in the render path, which is what the capacity test guards.
-    dirty: Vec<u32>,
     step_x: i32,
     step_y: i32,
     flap_div: u32,
@@ -150,22 +156,16 @@ pub struct Toasters2 {
     rng: u32,
 }
 
-/// Clear or paint one sprite-sized rectangle of the grid, clipped, recording
-/// every cell it wrote. `sprite` of `None` clears the whole rectangle; painting
-/// SKIPS the blanks rather than clearing them, so sprites are transparent where
-/// they overlap. Writing blanks instead punches the other sprite's art out —
-/// visible in a dump as toasters eating each other.
-///
-/// Every write goes into `dirty`. A cell written and left out of it keeps its
-/// old pixels on the panel forever, because `flush_sparse` blits that list and
-/// nothing else.
+/// Paint one sprite-sized rectangle of the grid, clipped. Blanks are SKIPPED
+/// rather than written, so sprites are transparent where they overlap. Writing
+/// blanks instead punches the other sprite's art out — visible in a dump as
+/// toasters eating each other.
 fn stamp(
     grid: &mut Grid,
-    dirty: &mut Vec<u32>,
     (cols, rows): (i32, i32),
     at: (i32, i32),
     size: (usize, usize),
-    sprite: Option<&[Cell]>,
+    sprite: &[Cell],
 ) {
     let (cx, cy) = at;
     for r in 0..size.1 as i32 {
@@ -178,23 +178,15 @@ fn stamp(
             if x < 0 || x >= cols {
                 continue;
             }
-            let cell = match sprite {
-                Some(cells) => {
-                    let cell = cells[r as usize * size.0 + c as usize];
-                    // On the GLYPH, not on the whole packed word: the invariant
-                    // is "this cell draws nothing", and a cell with no shape but
-                    // some colour index draws nothing while still comparing
-                    // unequal to `Cell::CLEAR`.
-                    if cell.glyph() == font::BLANK as usize {
-                        continue;
-                    }
-                    cell
-                }
-                None => Cell::CLEAR,
-            };
-            let i = (y * cols + x) as usize;
-            grid.set(i, cell);
-            dirty.push(i as u32);
+            let cell = sprite[r as usize * size.0 + c as usize];
+            // On the GLYPH, not on the whole packed word: the invariant is
+            // "this cell draws nothing", and a cell with no shape but some
+            // colour index draws nothing while still comparing unequal to
+            // `Cell::CLEAR`.
+            if cell.glyph() == font::BLANK as usize {
+                continue;
+            }
+            grid.set((y * cols + x) as usize, cell);
         }
     }
 }
@@ -245,9 +237,6 @@ impl Toasters2 {
             cell_w,
             cell_h,
             objs: Vec::with_capacity(count),
-            // Worst case is every object clearing a full rectangle and then
-            // painting one: two writes per cell of the biggest sprite.
-            dirty: Vec::with_capacity(count * TOASTER_W * TOASTER_H * 2),
             step_x: -unit * RUN,
             step_y: unit * RISE,
             flap_div: (fps / flap_fps).max(1),
@@ -271,7 +260,6 @@ impl Toasters2 {
                 y: 0,
                 kind,
                 phase: (next_rand(&mut t.rng) % FLAP.len() as u32) as u8,
-                drawn: (i32::MIN, i32::MIN),
             };
             // Frame 0 must already be a flock, not an empty screen filling up,
             // so the initial scatter is over the whole panel rather than over
@@ -307,24 +295,13 @@ impl Toasters2 {
 
 impl Saver for Toasters2 {
     fn render(&mut self, s: &mut Surface<'_>) {
-        self.dirty.clear();
         let bounds = (self.cols, self.rows);
 
-        // Clear every footprint before drawing any of them: an object whose new
-        // rectangle overlaps another's old one would otherwise erase a sprite
-        // that had already been redrawn.
-        for o in &self.objs {
-            if o.drawn.0 != i32::MIN {
-                stamp(
-                    &mut self.grid,
-                    &mut self.dirty,
-                    bounds,
-                    o.drawn,
-                    o.size(),
-                    None,
-                );
-            }
-        }
+        // Clear the WHOLE grid rather than each object's last footprint. It is
+        // one linear pass over 16080 cells, and it retires the `drawn`
+        // bookkeeping, the order dependency between the clear and stamp passes,
+        // and the dirty list — see the module doc for the measurement.
+        self.grid.fill(|_, _| Cell::CLEAR);
 
         for i in 0..self.objs.len() {
             self.objs[i].x += self.step_x;
@@ -338,35 +315,18 @@ impl Saver for Toasters2 {
         }
 
         let (tick, flap_div) = (self.tick, self.flap_div);
-        for o in &mut self.objs {
-            // div_euclid, not `/`: an object off the left edge has a negative x
-            // and truncating division would round its cell towards zero, which
-            // makes the sprite jump a column as it crosses x = 0.
-            let at = (
-                (o.x >> SUB).div_euclid(self.cell_w),
-                (o.y >> SUB).div_euclid(self.cell_h),
-            );
+        for o in &self.objs {
             stamp(
                 &mut self.grid,
-                &mut self.dirty,
                 bounds,
-                at,
+                o.at(self.cell_w, self.cell_h),
                 o.size(),
-                Some(o.cells(tick, flap_div)),
+                o.cells(tick, flap_div),
             );
-            o.drawn = at;
         }
         self.tick = self.tick.wrapping_add(1);
 
-        // Sorted and deduped, in place, before the blit. Both halves earn
-        // their keep: row-major order lets `Damage` merge each new mark into
-        // the last run instead of opening a fresh one — out of order it
-        // reported 2832 scanlines of a 1072-line grid, counting the same rows
-        // over and over — and the dedup drops the second blit of every cell an
-        // object cleared and then repainted, which is most of them.
-        self.dirty.sort_unstable();
-        self.dirty.dedup();
-        self.grid.flush_sparse(s, &PAL, &self.dirty);
+        self.grid.flush(s, &PAL);
     }
 
     fn name(&self) -> &'static str {
@@ -431,7 +391,6 @@ mod tests {
             y: 0,
             kind: 0,
             phase: 0,
-            drawn: (i32::MIN, i32::MIN),
         };
         let walk: Vec<usize> = (0..FLAP.len() as u32).map(|t| o.sprite(t, 1)).collect();
         let mut positions = walk.clone();
@@ -518,10 +477,13 @@ mod tests {
     /// nothing else: the union of what the objects stamped, no cell more and no
     /// cell less. A single trailing column fails it.
     ///
-    /// It also checks the other half of the `flush_sparse` bargain — that
-    /// `dirty` named every cell the saver wrote. A cell written and left out
-    /// keeps its old pixels forever, and the scene comparison cannot see that
-    /// because the scene is right; only `cur` against `prev` can.
+    /// It reads `grid.cells()` — the frame that was FLUSHED — and not
+    /// `grid.cell(i)`, which is next frame's scratch. Under `flush_sparse` the
+    /// two had to be compared against each other, because a hand-maintained
+    /// dirty list can under-report and only `cur` against `prev` could see it.
+    /// `flush` derives damage by diffing, so an unreported write is not
+    /// expressible and there is nothing left to compare: what is under test is
+    /// now only whether the scene is the flock.
     #[test]
     fn a_sprite_leaves_no_trail() {
         let p = panel();
@@ -537,9 +499,10 @@ mod tests {
             for o in &t.objs {
                 let (w, h) = o.size();
                 let cells = o.cells(tick, t.flap_div);
+                let at = o.at(t.cell_w, t.cell_h);
                 for r in 0..h as i32 {
                     for c in 0..w as i32 {
-                        let (x, y) = (o.drawn.0 + c, o.drawn.1 + r);
+                        let (x, y) = (at.0 + c, at.1 + r);
                         if x < 0 || x >= t.cols || y < 0 || y >= t.rows {
                             continue;
                         }
@@ -549,8 +512,9 @@ mod tests {
                     }
                 }
             }
-            let stale = (0..want.len())
-                .find(|&i| want[i] != (t.grid.cell(i).glyph() != font::BLANK as usize));
+            let drawn = t.grid.cells();
+            let stale =
+                (0..want.len()).find(|&i| want[i] != (drawn[i].glyph() != font::BLANK as usize));
             if let Some(i) = stale {
                 let (x, y) = (i as i32 % t.cols, i as i32 / t.cols);
                 panic!(
@@ -559,11 +523,6 @@ mod tests {
                     if want[i] { "lit" } else { "blank" }
                 );
             }
-            assert_eq!(
-                t.grid.cells(),
-                (0..want.len()).map(|i| t.grid.cell(i)).collect::<Vec<_>>(),
-                "frame {n}: a cell was written but left out of `dirty`"
-            );
         }
     }
 
@@ -579,38 +538,28 @@ mod tests {
         assert!(t.objs.iter().any(|o| o.kind == 0), "and some toasters");
     }
 
-    /// `dirty` is reserved once and pushed to per cell; a push past the reserve
-    /// is an allocation in the render path, which is the one cost this design
-    /// exists to avoid.
+    /// The flock is a SPARSE scene drawn through a dense flush, so the density
+    /// knob is what keeps the diff cheap: `flush` blits only the cells that
+    /// changed, and a flock covering most of the grid would blit most of it.
+    /// The original sized its crowd at about a quarter of the screen.
     #[test]
-    fn the_render_path_never_allocates() {
+    fn the_flock_covers_a_small_fraction_of_the_grid() {
         let p = panel();
         let mut t = Toasters2::new(&p, 30);
         let mut buf = vec![0u32; p.buf_len()];
-        let reserved = t.dirty.capacity();
+        let cells = (t.cols * t.rows) as usize;
         let mut worst = 0;
         for _ in 0..200 {
             saver::frame(&mut t, &mut buf, &p);
-            worst = worst.max(t.dirty.len());
-            assert_eq!(
-                t.dirty.capacity(),
-                reserved,
-                "`dirty` grew past its reserve"
-            );
-            // Sorted AND unique, pinned together because they are one property
-            // in practice: strictly ascending is what lets `Damage` merge each
-            // mark into the last run instead of opening a fresh one. Duplicates
-            // are legal for `flush_sparse` and merely blit twice, so nothing
-            // else here notices the `dedup` going missing.
-            assert!(
-                t.dirty.windows(2).all(|w| w[0] < w[1]),
-                "`dirty` is not strictly ascending"
-            );
+            let lit = t
+                .grid
+                .cells()
+                .iter()
+                .filter(|c| c.glyph() != font::BLANK as usize)
+                .count();
+            worst = worst.max(lit);
         }
-        assert!(worst > 0, "`dirty` was never used");
-        // And the whole point of the sparse path: a frame touches a small
-        // fraction of the grid, not all of it.
-        let cells = (t.cols * t.rows) as usize;
-        assert!(worst < cells / 2, "{worst} writes against {cells} cells");
+        assert!(worst > 0, "nothing was ever drawn");
+        assert!(worst < cells / 2, "{worst} lit cells against {cells}");
     }
 }

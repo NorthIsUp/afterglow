@@ -77,6 +77,8 @@
 //! is bumped in a separate commit, so a new binary always runs against the old
 //! env block first.
 
+#[cfg(test)]
+mod bench;
 mod city;
 mod confetti;
 mod dump;

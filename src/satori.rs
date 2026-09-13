@@ -6,10 +6,16 @@
 //! colour the composition could have had, and the split lines glide a cell at a
 //! time so the layout recomposes without a cut.
 //!
-//! Full repaint (`Grid::flush`), not the sparse path, and deliberately: the
-//! scene is almost always identical to the last frame, so the diff finds
-//! nothing and the frame costs one u32 compare per cell. The sparse path would
-//! buy a compare we can already afford and hand us the one bug it can have.
+//! Full repaint (`Grid::flush`), not the sparse path — but only on the frames
+//! the scene actually moved, which is a couple in a hundred. `step` already
+//! knows whether anything changed, so the frames that changed nothing skip the
+//! fill and the diff entirely rather than doing 8040 writes and 8040 compares
+//! to rediscover it. The sparse path would buy the same thing at the price of a
+//! hand-maintained dirty *list*; this is a hand-maintained dirty *bit*, and the
+//! asymmetry is why: a spurious `true` costs one wasted diff, a missed `true`
+//! freezes the panel forever. Every scene input a `fill` reads must therefore
+//! report its own change through `step` — `the_drawn_frame_is_never_stale` is
+//! what catches a fourth one that doesn't.
 
 use crate::font;
 use crate::grid::{bake, Cell, Grid};
@@ -91,8 +97,11 @@ struct Tone {
 }
 
 impl Tone {
-    /// One step toward the target, the short way round the ribbon.
-    fn step(&mut self) {
+    /// One step toward the target, the short way round the ribbon. True when
+    /// the tone actually moved — a tone already on its target is most of them,
+    /// most of the time, and that is what lets `render` skip a frame.
+    fn step(&mut self) -> bool {
+        let was = (self.hue, self.lvl);
         let d = (self.thue as usize + HUES - self.hue as usize) % HUES;
         if d != 0 {
             self.hue = if d * 2 <= HUES {
@@ -106,6 +115,7 @@ impl Tone {
             std::cmp::Ordering::Greater => self.lvl - 1,
             std::cmp::Ordering::Equal => self.lvl,
         };
+        (self.hue, self.lvl) != was
     }
 }
 
@@ -136,6 +146,9 @@ pub struct Satori {
     drift: u32,
     frame: u32,
     rng: u32,
+    /// The scene changed since the last flush, so the next frame has to be
+    /// drawn. True at construction because frame 0 must paint the panel.
+    dirty: bool,
 }
 
 impl Satori {
@@ -192,6 +205,7 @@ impl Satori {
             drift,
             frame: 0,
             rng,
+            dirty: true,
         };
         s.rebuild();
         s
@@ -212,11 +226,16 @@ impl Satori {
         );
     }
 
-    fn step(&mut self) {
+    /// True when the frame this produces differs from the last one. Only two
+    /// things below are visible: a tone that moved, and a split line that moved
+    /// (which rebuilds the field map). Retargeting writes `thue`/`tlvl`/`tgt`,
+    /// which nothing draws from until a later fade or glide acts on them.
+    fn step(&mut self) -> bool {
         self.frame = self.frame.wrapping_add(1);
+        let mut changed = false;
         if self.frame.is_multiple_of(self.fade) {
             for t in &mut self.tone {
-                t.step();
+                changed |= t.step();
             }
         }
         if self.frame.is_multiple_of(self.retone) {
@@ -236,7 +255,9 @@ impl Satori {
         }
         if self.frame.is_multiple_of(self.glide) && self.glide_splits() {
             self.rebuild();
+            changed = true;
         }
+        changed
     }
 
     fn retarget_split(&mut self) {
@@ -283,7 +304,15 @@ impl Satori {
 
 impl Saver for Satori {
     fn render(&mut self, s: &mut Surface<'_>) {
-        self.step();
+        self.dirty |= self.step();
+        // On ~98% of frames the scene is the one already on the panel, and both
+        // `fill` and `flush` are O(cells) — 8040 writes and 8040 compares to
+        // reach the same conclusion `step` just reached for free. Skipping them
+        // reports no damage, which is exactly what the diff reported anyway.
+        if !self.dirty {
+            return;
+        }
+        self.dirty = false;
         let (grid, region, tex, tone, cols) = (
             &mut self.grid,
             &self.region[..],
@@ -596,6 +625,46 @@ mod tests {
             }
         }
         assert!(glides > 0, "no split line was ever in motion");
+    }
+
+    /// The frame on the panel must be the scene, on EVERY frame — including the
+    /// ones `render` skipped. That is the whole risk of the skip: a mutation
+    /// that moves the scene without marking it dirty leaves a stale panel, and
+    /// every other test here passes while it happens, because they all read the
+    /// scene (`region`/`tex`/`tone`) rather than what was drawn from it.
+    ///
+    /// So rebuild the expected cells independently, every frame, and compare
+    /// against `grid.cells()` — the frame actually flushed.
+    #[test]
+    fn the_drawn_frame_is_never_stale() {
+        let p = panel();
+        let mut c = saver_at(16);
+        let mut buf = vec![0u32; p.buf_len()];
+        let (cols, rows) = (c.grid.cols(), c.grid.rows());
+        let mut skipped = 0;
+        let mut drawn = 0;
+        for n in 0..4_000 {
+            let before = c.grid.cells().to_vec();
+            saver::frame(&mut c, &mut buf, &p);
+            let want: Vec<Cell> = (0..cols * rows)
+                .map(|i| {
+                    let t = c.tex[i] as usize;
+                    let tn = c.tone[c.region[i] as usize];
+                    let lvl = (tn.lvl as i32 + TEX_OFF[t]).clamp(0, LVLS as i32 - 1) as u16;
+                    Cell::new(TEX_GLYPH[t], 1 + tn.hue as u16 * LVLS as u16 + lvl)
+                })
+                .collect();
+            assert_eq!(c.grid.cells(), &want[..], "frame {n}: the panel is stale");
+            if c.grid.cells() == &before[..] {
+                skipped += 1;
+            } else {
+                drawn += 1;
+            }
+        }
+        // Both arms have to be exercised, or the assert above proves nothing
+        // about the skip.
+        assert!(skipped > 3_000, "only {skipped} frames were idle");
+        assert!(drawn > 5, "only {drawn} frames ever changed");
     }
 
     /// Every leaf rectangle the tree currently describes.
