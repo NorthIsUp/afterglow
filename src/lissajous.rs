@@ -30,7 +30,7 @@
 //! 8x16 cell and is what keeps this a grid saver.
 
 use crate::font;
-use crate::grid::{bake, Cell, Grid};
+use crate::grid::{bake, dot_bit, Cell, Grid};
 use crate::saver::Saver;
 use crate::surface::{Panel, Surface};
 use crate::{env_num, next_rand};
@@ -89,18 +89,6 @@ const fn ramp() -> [[u8; 3]; PAL_LEN] {
 }
 
 const PAL: [u32; PAL_LEN] = bake(&ramp());
-
-/// Braille bit for a sub-cell. Dot 1 is bit 0 and the numbering runs down the
-/// left column (1,2,3), down the right (4,5,6), then the two dot-7/8 feet —
-/// which is why row 3 is not `col * 3 + 3`.
-#[inline]
-const fn dot_bit(col: usize, row: usize) -> u8 {
-    if row < 3 {
-        1u8 << (col * 3 + row)
-    } else {
-        1u8 << (6 + col)
-    }
-}
 
 struct Pen {
     /// Integrated phase of each axis. See the module doc.

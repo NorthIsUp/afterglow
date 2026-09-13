@@ -44,7 +44,7 @@
 use std::f32::consts::TAU;
 
 use crate::font;
-use crate::grid::{bake, Cell, Grid};
+use crate::grid::{bake, dot_bit, Cell, Grid};
 use crate::saver::Saver;
 use crate::surface::{Panel, Surface};
 use crate::{env_num, env_str};
@@ -328,15 +328,11 @@ impl Hypercube {
     #[inline]
     fn plot(&mut self, dx: usize, dy: usize, shade: f32) {
         let i = (dy >> 2) * self.cols + (dx >> 1);
-        // Dots 1..6 fill column-major down three rows, then 7 and 8 are the
-        // bottom pair — the braille numbering, not a raster order.
-        let (sx, sy) = (dx & 1, dy & 3);
-        let bit = if sy == 3 { 6 + sx } else { sx * 3 + sy };
         if self.stamp[i] != self.frame {
             self.stamp[i] = self.frame;
             self.touched.push(i as u32);
         }
-        self.mask[i] |= 1 << bit;
+        self.mask[i] |= dot_bit(dx & 1, dy & 3);
         // Nearest wins. At peak inversion most edges pass through the middle of
         // the figure at once; averaging there flattens the near face into the
         // far one and the whole centre reads as a smear.

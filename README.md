@@ -20,15 +20,23 @@ writes pixels straight into a DRM/KMS dumb buffer.
 Pick one with `SAVER` (older spelling: `FIRE_STYLE`). Anything unrecognised
 falls back to `ascii` — a headless pod must never crash-loop on a typo.
 
-| `SAVER`     | What                                                                                                                                                                                    | Knobs                                                                                                                                                                                                                                                                                                                         |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ascii`     | Doom fire as an ASCII ramp (`" .:-=+*#%@"`), one heat sample per character cell, coloured by the 37-step fire palette. The default.                                                     | `FIRE_CELL` (px, 8..64, default 16)                                                                                                                                                                                                                                                                                           |
-| `blocks`    | The same fire drawn as chunky pixels — a solid glyph per cell.                                                                                                                          | `FIRE_SCALE` (px, 1..16, default 4)                                                                                                                                                                                                                                                                                           |
-| `matrix`    | Digital rain.                                                                                                                                                                           | `MATRIX_CELL_W` (8..64, default 16), `MATRIX_CELL_H` (8..128, default 32)                                                                                                                                                                                                                                                     |
-| `toasters`  | Flying toasters, after After Dark's. Four distinct models.                                                                                                                              | `TOASTER_DENSITY` (per 1000 cells, 1..60, default 4), `TOASTER_SPEED` (px/sec, 8..2000, default 170), `TOASTER_TOAST_PCT` (0..100, default 25), `TOASTER_FLAP_FPS` (1..120, default 15), `TOASTER_CELL_W` / `TOASTER_CELL_H`                                                                                                  |
-| `toasters2` | The same flock in BLOCK ELEMENTS at 8x16 cells, so the olive chassis is a solid fill rather than edge strokes.                                                                          | `TOASTER2_DENSITY`, `TOASTER2_SPEED`, `TOASTER2_TOAST_PCT`, `TOASTER2_FLAP_FPS`, `TOASTER2_CELL_W` / `TOASTER2_CELL_H`                                                                                                                                                                                                        |
-| `toasters3` | The same flock drawn with a BRAILLE-style 2x4 dot matrix per cell, so one 16x6-cell toaster is a 32x24 bitmap — real slot openings, a dial, a lever, barbed wings. One model, not four. | `TOASTER3_DENSITY` (per 1000 cells, 1..60, default 2), `TOASTER3_SPEED`, `TOASTER3_TOAST_PCT`, `TOASTER3_FLAP_FPS`, `TOASTER3_CELL_W` / `TOASTER3_CELL_H`                                                                                                                                                                     |
-| `city`      | The After Dark night skyline — lit windows on a black silhouette, scattered stars, a beacon on the tallest tower and the odd shooting star.                                             | `CITY_WINDOW_PCT` (0..100, default 88), `CITY_TWINKLE` (window flips per second, default 40), `CITY_SKY_TWINKLE` (sky re-shades per second, default 12), `CITY_BEACON_MS` (beacon period, default 1500), `CITY_SHOOT_SECS` (mean seconds between shooting stars, 0 = off, default 60), `CITY_CELL_W` / `CITY_CELL_H` (12, 16) |
+| `SAVER`     | What                                                                                                                                                                                                                                                                                                                                                                             | Knobs                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ascii`     | Doom fire as an ASCII ramp (`" .:-=+*#%@"`), one heat sample per character cell, coloured by the 37-step fire palette. The default.                                                                                                                                                                                                                                              | `FIRE_CELL` (px, 8..64, default 16)                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `blocks`    | The same fire drawn as chunky pixels — a solid glyph per cell.                                                                                                                                                                                                                                                                                                                   | `FIRE_SCALE` (px, 1..16, default 4)                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `matrix`    | Digital rain.                                                                                                                                                                                                                                                                                                                                                                    | `MATRIX_CELL_W` (8..64, default 16), `MATRIX_CELL_H` (8..128, default 32)                                                                                                                                                                                                                                                                                                                                                                       |
+| `toasters`  | Flying toasters, after After Dark's. Four distinct models.                                                                                                                                                                                                                                                                                                                       | `TOASTER_DENSITY` (per 1000 cells, 1..60, default 4), `TOASTER_SPEED` (px/sec, 8..2000, default 170), `TOASTER_TOAST_PCT` (0..100, default 25), `TOASTER_FLAP_FPS` (1..120, default 15), `TOASTER_CELL_W` / `TOASTER_CELL_H`                                                                                                                                                                                                                    |
+| `toasters2` | The same flock in BLOCK ELEMENTS at 8x16 cells, so the olive chassis is a solid fill rather than edge strokes.                                                                                                                                                                                                                                                                   | `TOASTER2_DENSITY`, `TOASTER2_SPEED`, `TOASTER2_TOAST_PCT`, `TOASTER2_FLAP_FPS`, `TOASTER2_CELL_W` / `TOASTER2_CELL_H`                                                                                                                                                                                                                                                                                                                          |
+| `toasters3` | The same flock drawn with a BRAILLE-style 2x4 dot matrix per cell, so one 16x6-cell toaster is a 32x24 bitmap — real slot openings, a dial, a lever, barbed wings. One model, not four.                                                                                                                                                                                          | `TOASTER3_DENSITY` (per 1000 cells, 1..60, default 2), `TOASTER3_SPEED`, `TOASTER3_TOAST_PCT`, `TOASTER3_FLAP_FPS`, `TOASTER3_CELL_W` / `TOASTER3_CELL_H`                                                                                                                                                                                                                                                                                       |
+| `city`      | The After Dark night skyline — lit windows on a black silhouette, scattered stars, a beacon on the tallest tower and the odd shooting star.                                                                                                                                                                                                                                      | `CITY_WINDOW_PCT` (0..100, default 88), `CITY_TWINKLE` (window flips per second, default 40), `CITY_SKY_TWINKLE` (sky re-shades per second, default 12), `CITY_BEACON_MS` (beacon period, default 1500), `CITY_SHOOT_SECS` (mean seconds between shooting stars, 0 = off, default 60), `CITY_CELL_W` / `CITY_CELL_H` (12, 16)                                                                                                                   |
+| `tactiles`  | After Dark's TacTiles — a grid of square tiles carrying one geometric glyph each (bar, diagonal, corner, arc). Shape, rotation and colour are three travelling sine waves quantised into bands, so the tiling rearranges itself continuously without ever looking rolled.                                                                                                        | `TACTILES_CELL_W` / `TACTILES_CELL_H` (px, 4..32, default 8 each), `TACTILES_TILE` (tile side in CELLS, 2..24, default 6 — so a 48px tile), `TACTILES_SPEED` (wave travel, milli-rad/sec, 10..5000, default 700), `TACTILES_SCALE` (wave spatial frequency, milli-rad per tile, 10..3000, default 430), `TACTILES_STROKE` (glyph stroke as a percent of the tile, 5..50, default 24)                                                            |
+| `zot`       | Lightning. A leader crosses the panel and forks, each fork forking again; the channel strobes through a few return strokes over a white core in a blue halo, a faint wash lights the whole panel, and then it is dark for a second or three. Endpoints are drawn on the perimeter by arc length, so the bolt crosses the panel at any aspect — 1920x1080 or the native 1280x400. | `ZOT_BOLT_MS` (60..3000, default 320, ±25% per strike), `ZOT_GAP_MIN_MS` / `ZOT_GAP_MAX_MS` (100..60000, default 900 / 3500), `ZOT_FORK_PCT` (0..100, default 9), `ZOT_AIR_PCT` (bolts ending in mid-air, 0..100, default 30), `ZOT_JITTER` (milli-radians of wander per step, 10..3000, default 900), `ZOT_GLOW_PCT` (afterglow wash peak, 0..100, default 45), `ZOT_HALO_PCT` (0..100, default 70), `ZOT_CELL_W` / `ZOT_CELL_H` (8, 16)       |
+| `strings`   | "String Theory", the After Dark module — a polygon whose corners each bounce independently, redrawn every frame over the fading outlines behind it, so a ribbon of lines sweeps and folds. Three ribbons, one hue each.                                                                                                                                                          | `STRINGS_RIBBONS` (1..4, default 3), `STRINGS_VERTICES` (corners per polygon, 2..8, default 4), `STRINGS_FADE_MS` (200..20000, default 1000), `STRINGS_SPEED` (sub-cells/sec per corner, 5..1000, default 60), `STRINGS_CELL_W` / `STRINGS_CELL_H` (8, 16)                                                                                                                                                                                      |
+| `life`      | Conway's Game of Life on a toroidal board, cells coloured by age — white-hot at birth, cooling to blue — with a fading ash trail. A churn-triggered "meteor" of fresh soup keeps it from settling into still lifes.                                                                                                                                                              | `LIFE_GPS` (generations per second, 1..60, default 10), `LIFE_DENSITY` (percent alive in fresh soup, 5..80, default 38), `LIFE_SEEDS` (startup soup discs, 1..64, default 12), `LIFE_QUIET` (churn per MILLE below which a generation is quiet, 1..500, default 30), `LIFE_PATIENCE` (quiet generations before a meteor, 1..600, default 12), `LIFE_FADE` (generations of ash, 0..6, default 5), `LIFE_CELL_W` / `LIFE_CELL_H` (4..64, 8 and 8) |
+
+| `hardrain` | A downpour: steeply slanted streaks under a gusting wind, a mist the sky is veiled in, squalls sweeping across, and standing water at the bottom that ripples where the rain lands. The storm to `rain`'s drizzle. | `HARDRAIN_DENSITY` (per 1000 cells, 0..400, default 55), `HARDRAIN_SPEED` (hundredths of a panel height per second, 10..1000, default 110), `HARDRAIN_WIND` (cells sideways per 100 of fall, -300..300, default 95), `HARDRAIN_GUST` (same units, 0..300, default 70), `HARDRAIN_GUST_SECS` (1..600, default 11), `HARDRAIN_POOL_PCT` (water depth as a percent of rows, 0..40, default 9; 0 = off), `HARDRAIN_SQUALL_SECS` (mean seconds between squalls, 0..600, default 17; 0 = off), `HARDRAIN_SPRAY` (droplets per impact, 0..4, default 2), `HARDRAIN_CELL_W` / `HARDRAIN_CELL_H` (8, 16) |
+| `doodles` | After Dark's scribbler: pens wander the panel leaving one continuous freehand line each, looping back over themselves until the sheet is full, then it fades and a new one starts. Each pen's hue sweeps across the life of a doodle, so the scribble shows its own history. | `DOODLES_PENS` (1..4, default 3), `DOODLES_SPEED` (pen steps/sec at 1080p, 30..8000, default 420), `DOODLES_INERTIA` (per-mille of the turn rate carried to the next step, 500..999, default 960), `DOODLES_WANDER` (milli-rad of turn-rate noise per step, 1..300, default 20), `DOODLES_CURL` (milli-rad/step, tightest curl, 5..500, default 90), `DOODLES_FILL_PCT` (1..90, default 28), `DOODLES_MAX_S` (5..900, default 90), `DOODLES_FADE_MS` (200..10000, default 1600), `DOODLES_CELL_W` / `DOODLES_CELL_H` (8, 16) |
+| `pov` | Points of View — a rotating platonic solid drawn as a grid of dots on its own surface, changing to the next of the five every ten seconds in a burst that throws the points outward and lands them on the new shape with an overshoot. | `POV_HOLD_SECS` (1..600, default 10), `POV_BURST_MS` (100..5000, default 1200), `POV_SPACING` (dots between surface samples, 2..24, default 6), `POV_SCALE` (figure radius in thousandths of the SHORTER panel side, 50..600, default 420), `POV_BURST` (outward scatter in thousandths of the figure radius, 0..2000, default 450), `POV_Z_DIST` (2000..40000, default 6000), `POV_RATE_XY` / `POV_RATE_XZ` / `POV_RATE_YZ` (milli-revolutions per second, default 7 / 23 / 13), `POV_CELL_W` / `POV_CELL_H` (8, 16) |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
 `SAVER_ROTATE_SECS` (0..86400, default 0 = off), `DRM_DEVICE` (default
@@ -72,6 +80,41 @@ two-second reconnect backoff and show an error banner on a stream that ended
 without a click; it now reconnects immediately and silently, because with this
 knob on that is a routine event rather than a fault.
 
+### About the pov saver
+
+Five platonic solids in a fixed cycle — tetrahedron, cube, octahedron,
+dodecahedron, icosahedron — each held for `POV_HOLD_SECS` and then **burst**
+into the next one. The surface is sampled as a triangular lattice of dots rather
+than drawn as a wireframe: an edge is shared by two faces so both lattices land
+on it and it comes out twice as dense, which is what keeps the faces and edges
+legible while the figure turns. Back faces are drawn too — there is no cull, and
+depth shading does the work instead, so the far side shows through dim and the
+near side bright.
+
+The burst is the point of the saver. Each point is kicked outward along its own
+direction by a bump that peaks about a third of the way through and is exactly
+zero at both ends, while an `easeOutBack` carries it to its new position — so
+the cloud expands, the new solid emerges out of it over the back half of the
+transition, and the figure snaps a little past its final shape before settling.
+`POV_BURST` is how far the kick throws a point; 0 turns it into a plain morph.
+
+The solids do not have the same number of samples, so the pool is sized to the
+largest and a point beyond a smaller solid's count doubles up on an existing
+sample. Nothing fades in or out: on a shrink several points converge and merge,
+on a grow several leave one site and split.
+
+Sizing is off the SHORTER panel side, so the figure is whole on the 1280x400
+panel with empty width either side rather than running off the top and bottom,
+and `POV_SPACING` is in dots, so the point count falls with the panel instead of
+packing a fixed count into a quarter of the area. Each solid is inflated to the
+same mid-radius (the mean of its in- and circumradius) so the five read as one
+object changing shape rather than as the figure growing and shrinking — a
+tetrahedron inscribed in the same sphere as an icosahedron looks half the size.
+
+A braille dot is `cell_w/2` by `cell_h/4`, square at the default 8x16. Keep that
+ratio if you change `POV_CELL_W` / `POV_CELL_H`, or the solid comes out as an
+ellipsoid.
+
 ### About the matrix saver
 
 It copies the _Reloaded/Revolutions_ look, not the literal 1999 one: the first
@@ -89,6 +132,29 @@ usual imitation, and all three are in `image/src/matrix.rs`:
   two random floats per column, so several drops share a column at different
   speeds and no column is ever idle. Discrete drops with black gaps are the
   giveaway most implementations ship.
+
+### About the doodles saver
+
+The point is that it reads as hand-drawn rather than mathematical, which is the
+whole difference from `lissajous`. Lissajous evaluates a closed-form curve —
+position is a function of t, the figure is periodic, and it looks like
+mathematics because it is. A doodle pen carries a heading and a turn rate, and
+only the TURN RATE is driven, by a damped random walk. Position is the double
+integral of noise: the line commits to an arc, curls out of it and wanders off,
+and no frame of it can be reproduced from a formula.
+
+Two knobs bracket the degenerate ends, and `DOODLES_INERTIA` is the one that
+matters: too little and the heading is uncorrelated between steps, which is a
+fuzzy blob rather than a line; too much and the turn rate never changes sign,
+which is a circle retracing itself forever. The default 960 puts the turn rate's
+correlation at about 25 steps and the typical radius at ~17 sub-cells, so
+curvature persists for roughly one loop's arc.
+
+`DOODLES_SPEED` is quoted for a 1080p panel and is scaled down with panel AREA
+(to a floor of a third). A doodle lasts as long as the pen needs to fill the
+sheet, so without that the same hand speed finishes a 1280x400 panel four times
+sooner — measured 5s against 19s. With it, a doodle is ~16s at 1280x400 and
+~20s at 1920x1080.
 
 ### About the city saver
 
@@ -234,6 +300,43 @@ changes and a framebuffer diff cannot see it. Nothing here is special-cased
 around that path: the beacon and the streak report their cells like everything
 else, which is why `damage_covers_every_changed_scanline` can catch them.
 
+### About the life saver
+
+Conway's Life is a bad screensaver by default: B3/S23 on a random soup burns
+brightly for two hundred generations and then settles into blocks and blinkers
+that never change again. Measured on this board at 240x135, churn falls from 49
+changes per thousand cells per generation at generation 100 to 9 by generation
+2000 and stays there for the next eighteen thousand — a torus keeps a few
+gliders circulating, so the population never actually hits zero, which is why
+"is anything alive" is not a test of anything.
+
+The rules stay exact; the fix sits outside them. `step` already counts births
+and deaths, and that one number catches all three ways a board gets boring —
+still lifes churn zero, blinker fields churn a handful, and a nearly-black board
+with one glider on it churns ten. A rolling board hash, the textbook stagnation
+detector, sees the first two and is blind to the third. So when churn stays
+under `LIFE_QUIET` per mille for `LIFE_PATIENCE` consecutive generations, one
+disc of fresh soup lands at a random spot — the same `meteor` that seeds the
+board at startup, so the panel never shows a transition it did not show at
+second zero. At the defaults that settles into an equilibrium of 31 changes per
+thousand cells per generation and 52 cells per thousand alive, flat from
+generation 600 out to 20000 on both panel shapes, at about one meteor every ten
+seconds. With the injector disabled the same measurement over eight seeded
+boards reads 6 and 3 per mille; `it_never_dies_down` asserts a floor of 15.
+
+Edges wrap. A dead border is a permanent absorber — every glider that reaches it
+dies, and after an hour they all have.
+
+Colour is age: white-hot at birth, cooling through amber and violet to a settled
+blue after eight generations, with a dark-red ash that fades for `LIFE_FADE`
+generations behind anything that dies. Both come free out of a pass that visits
+every cell anyway, and they are what makes an age-saturated still life read as
+debris rather than as part of the action.
+
+`LIFE_GPS` paces generations independently of `SAVER_FPS` because Life at 30
+generations a second is unreadable. A frame with no generation in it costs one
+u32 compare per cell and reports no damage.
+
 ### About the toasters saver
 
 The art in `image/src/toasters.rs` is this repo's own ASCII, drawn from a
@@ -328,6 +431,19 @@ Measured over 599 frames at 1920x1080, damaged scanlines per frame:
 and costs a median 112 scanlines for the ~25 frames it crosses in. Its quiet
 frames — 3,553 of 3,599 in a two-minute run — top out at 64.
 
+### About the tactiles saver
+
+`image/src/tactiles.rs` reports the WHOLE panel as damaged every frame, and
+that is not a bug on the list above. The three waves cross the entire tile
+grid, so every 48px band of scanlines has some tile flipping in it and the runs
+merge into one. What stays small is the blit: about 1% of cells a frame, since
+`Grid::flush` skips every cell whose packed `Cell` did not change. Measured
+interleaved against `moire` at 1920x1080, it costs 0.76x `moire` per frame.
+
+The glyphs are baked once in the constructor — sixteen shape-by-rotation
+bitmaps rasterised into braille cells — so the frame loop is four array reads
+and a multiply per cell, with the trig per TILE rather than per cell.
+
 `toasters3` is _cheaper_ than `toasters` despite the bigger sprite: the default
 density is 2 per 1000 cells rather than 4, because the original sized its flock
 by area under sprite (~22% of the screen) and this sprite is 96 cells where the
@@ -383,6 +499,97 @@ and `matrix`, which repaint everything every frame).
 The second half of the trade is not speed. A hand-maintained dirty list can
 under-report, and a cell written but left out of it keeps its old pixels on the
 panel forever; damage derived by diffing cannot.
+
+### About the strings saver
+
+`image/src/strings.rs` is After Dark's "String Theory": a polygon whose corners
+each bounce around the panel on their own heading, redrawn every frame while the
+outlines behind it fade, so the stack reads as one ribbon sweeping and folding
+through space. Three independent ribbons, one hue each.
+
+- **The trail is a fading heat buffer, not a ring of polygons.** The classic
+  keeps N outlines and erases the oldest as it draws the newest, which needs the
+  old vertices kept, the old lines re-walked to erase, and — because ribbons
+  overlap — an erase that cannot simply write black. A per-cell brightness that
+  decays does all three: a cell's age IS its colour, an overlap is the newer
+  stamp winning, and nothing is re-walked.
+- **`STRINGS_SPEED` is in SUB-CELLS per second, not a fraction of the panel**,
+  and that is what makes this look right at 1920x1080 and at 1280x400. What
+  separates the outlines — and so what makes a ribbon read as strings rather
+  than as a solid sheet — is the per-frame step in sub-cells and nothing else.
+  Scaled to the panel, the 1280x400 one has 2.7x fewer sub-cells down its short
+  edge, gets 2.7x less separation, and fills in. The first cut of this did scale
+  it, and rendered coloured sheets.
+- **`STRINGS_FADE_MS` is the cost knob, and it runs the wrong way round.** A
+  cell steps down eight brightness levels over its life, and a level step is a
+  re-blit; a SHORTER fade means more steps per frame, not fewer. Measured
+  against `lissajous` in the same process: 3.3x at the default 1000 ms, 2.8x at
+  2000, 2.4x at 4000. It is 1000 anyway, because a 4000 ms ribbon saturates the
+  400-tall panel.
+- **The dots carry a freshness guard.** A cell whose heat is below "what a cell
+  stamped last frame would have after this frame's decay" has its braille dots
+  cleared rather than OR-ed into. Without it, a nearly-faded crossing keeps the
+  old pass's dots, which are then redrawn in the new pass's colour lying ACROSS
+  the new line — phantom ticks at every crossing. `lissajous` shipped that bug;
+  `a_faded_pass_leaves_no_dots_in_a_cell_a_later_pass_relights` pins the fix.
+
+Like `lissajous` it draws through `Grid::flush` and repaints most of the panel
+every frame (median 960 of 1080 damaged scanlines at 1920x1080, 400 of 400 at
+1280x400). That is not an oversight: the trail fades, so every lit cell changes
+colour on the frame it steps down a level, and "what changed" is most of the
+trail. Interleaved against the other savers on one machine it measures the same
+per frame as `matrix`: 122 vs 116 us over 4,000 frames, 3.8x and 3.6x
+`lissajous`. Those are ratios on a laptop and do not convert to milli-cores on
+the Pi — `matrix` is the saver to compare it to there, not a number derived from
+`lissajous`'s 87m.
+
+# ||||||| parent of fe5f68d (feat(screensaver): add the hardrain saver — a downpour, not a drizzle)
+
+### About the hardrain saver
+
+`image/src/hardrain.rs` is the storm; `image/src/rain.rs` is the drizzle. They
+share the braille sub-cell trick and nothing else, because two savers that are
+hard to tell apart in a rotation are one saver that shows up twice.
+
+- **The wind is a variable.** `rain` has one constant lean. This has a base
+  slant nearly three times as steep, plus a gust — two sines that do not share
+  a period — swinging it by most of the base again over an eleven-second cycle.
+  A streak is re-derived from its head every frame, so a gust re-leans the rain
+  that is already falling, not only what spawns next.
+- **Four depth tiers, and the furthest is a MIST.** One-to-two sub-rows of
+  speck, six-sixteenths of the draw, barely above black: the sky is veiled
+  rather than empty. `rain` has three tiers and black between them.
+- **Squalls.** About every seventeen seconds a band a third of the panel wide
+  sweeps downwind across it. Inside the band every streak is drawn a whole
+  depth tier brighter, two and a half times as long, and half of what respawns
+  respawns into the band — so it is genuinely more water and not only brighter
+  water. Measured at 4-5x the luminance of the sky beside it; a brightness-only
+  version measured 1.2x against 1.3x frame-to-frame noise and was invisible.
+- **Water, not a splash row.** `rain` reserves the bottom grid row for a
+  two-stage ripple. This has a pool 9% of the panel deep carrying a damped 1D
+  wave: an impact digs a dip, the dip runs out both ways and reflects off the
+  edges, a moving crest catches foam, and near rain throws spray that arcs up
+  and falls back. The impulse is spread over three columns on purpose — a
+  single-column spike propagates as a spike and the surface renders as a picket
+  fence of 8px teeth.
+- **Five times the rain.** 55 drops per thousand cells against `rain`'s 11, and
+  a fall that crosses the panel in a little under a second.
+
+**Nothing here is measured in rows.** Speed is hundredths of a PANEL HEIGHT per
+second, streak length is a percent of panel height, and the pool is a percent of
+rows — so the same knobs read the same on 1920x1080 (67 rows) and on the
+1280x400 panel (25 rows), where a streak sized in cells would be a quarter of
+the screen tall. The steep default slant is also what makes a streak read
+ACROSS a panel that wide. Both shapes are rendered by every test in the module.
+
+It is a FULL REPAINT every frame (`Grid::flush`), where `rain` is sparse
+(`flush_sparse`). A hand-maintained dirty list can under-report and freeze a
+region on the panel forever; a diff cannot, and nothing here is sparse anyway —
+the mist, the squall and the pool all touch broad regions every frame. Measured
+interleaved at 1920x1080: `hardrain` is 4.8x `rain`, 2.3x `matrix` and 1.0x
+`moire` per frame, which puts it in `moire`'s class rather than `rain`'s.
+
+> > > > > > > fe5f68d (feat(screensaver): add the hardrain saver — a downpour, not a drizzle)
 
 ## Gotchas
 

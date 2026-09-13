@@ -219,6 +219,18 @@ impl Grid {
     }
 }
 
+/// Braille bit for a sub-cell of a 2x4 cell. Dot 1 is bit 0 and the numbering
+/// runs down the left column (1,2,3), down the right (4,5,6), then the two
+/// dot-7/8 feet — which is why row 3 is not `col * 3 + 3`.
+#[inline]
+pub const fn dot_bit(col: usize, row: usize) -> u8 {
+    if row < 3 {
+        1u8 << (col * 3 + row)
+    } else {
+        1u8 << (6 + col)
+    }
+}
+
 /// RGB -> XRGB8888 (`0x00RRGGBB`) at compile time, so no saver bakes a palette
 /// at runtime.
 pub const fn bake<const N: usize>(rgb: &[[u8; 3]; N]) -> [u32; N] {

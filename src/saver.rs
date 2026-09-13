@@ -4,24 +4,31 @@ use std::time::{Duration, Instant};
 
 use crate::city::City;
 use crate::confetti::Confetti;
+use crate::doodles::Doodles;
 use crate::dvd::Dvd;
 use crate::fire::Fire;
 use crate::fractal::Fractal;
 use crate::grid::Grid;
+use crate::hardrain::HardRain;
 use crate::hypercube::Hypercube;
+use crate::life::Life;
 use crate::lissajous::Lissajous;
 use crate::matrix::Matrix;
 use crate::mirror::Mirror;
 use crate::moire::Moire;
+use crate::pov::Pov;
 use crate::rain::Rain;
 use crate::sakura::Sakura;
 use crate::satori::Satori;
+use crate::strings::Strings;
 use crate::surface::{Damage, Panel, Surface};
+use crate::tactiles::Tactiles;
 use crate::toasters::Toasters;
 use crate::toasters2::Toasters2;
 use crate::toasters3::Toasters3;
 use crate::warp::Warp;
 use crate::worms::Worms;
+use crate::zot::Zot;
 use crate::{env_num, next_rand};
 
 /// A screensaver. One frame, one call. Dispatch happens here and NOWHERE below
@@ -82,6 +89,13 @@ const SAVERS: &[(&str, Build)] = &[
     ("worms", |p, fps| Box::new(Worms::new(p, fps))),
     ("confetti", |p, fps| Box::new(Confetti::new(p, fps))),
     ("city", |p, fps| Box::new(City::new(p, fps))),
+    ("life", |p, fps| Box::new(Life::new(p, fps))),
+    ("doodles", |p, fps| Box::new(Doodles::new(p, fps))),
+    ("strings", |p, fps| Box::new(Strings::new(p, fps))),
+    ("tactiles", |p, fps| Box::new(Tactiles::new(p, fps))),
+    ("pov", |p, fps| Box::new(Pov::new(p, fps))),
+    ("hardrain", |p, fps| Box::new(HardRain::new(p, fps))),
+    ("zot", |p, fps| Box::new(Zot::new(p, fps))),
 ];
 
 /// The name at an index the render loop is holding. Panics on an index no

@@ -72,14 +72,23 @@ jobs:
       # review and show up only on the panel.
       #
       # SAVER_DUMP exits non-zero on the second. The byte count below does NOT
-      # catch the first, despite reading like it should: it samples frame 19, by
-      # which point a saver that skipped its first-frame full paint has long
-      # since converged. Measured with `first` forced false — ascii 747065,
-      # blocks 6220817, matrix 435293 non-NUL bytes, all far over the threshold.
-      # What actually catches it is the unit test
+      # catch the first, despite reading like it should: a saver that skipped
+      # its first-frame full paint has long since converged by the end of the
+      # run. Measured with `first` forced false — ascii 747065, blocks 6220817,
+      # matrix 435293 non-NUL bytes, all far over the threshold. What actually
+      # catches it is the unit test
       # `grid::tests::frame_zero_paints_every_cell_then_only_changes`, run by the
       # `cargo test` below. The byte count's real job is narrower: a saver that
       # renders nothing at all.
+      #
+      # It is the BRIGHTEST of frames 1..19, not the last one: `zot` is a bolt
+      # and then a second or three of darkness, so its frame 19 is legitimately
+      # black and a last-frame sample would call that a blank render.
+      #
+      # Frame 0 is excluded because it is lit by construction, not by the saver:
+      # `Grid::flush`'s `first` arm blits every cell whether the saver drew into
+      # it or not. Include it and a saver that paints nothing at all still scores
+      # a full panel, which is the one failure this check exists to catch.
       - name: fmt, clippy, tests, render check
         working-directory: k8s/apps/screensaver/image
         run: |
@@ -95,11 +104,31 @@ jobs:
             # Coverage for the mirror itself is in the cargo test above, which
             # is where its HTTP round-trip and never-block-the-display
             # invariants live.
-            for s in ascii blocks matrix toasters toasters2 toasters3 city; do
+            for s in ascii blocks matrix toasters toasters2 toasters3 city life doodles strings tactiles pov hardrain zot; do
               SAVER=$s SAVER_HTTP=off SAVER_DUMP=/tmp/dump-$s SAVER_DUMP_FRAMES=20 \
-                SAVER_DUMP_EVERY=19 ./target/release/screensaver
-              lit=$(tr -d "\000" < /tmp/dump-$s/frame-00019.ppm | wc -c)
-              [ "$lit" -gt 1000 ] || { echo "$s rendered a blank frame"; exit 1; }
+                SAVER_DUMP_EVERY=1 ./target/release/screensaver
+              # DISTINCT FRAMES, not lit bytes. Counting non-NUL bytes only
+              # discriminates for a saver whose background is pure black: zot
+              # paints 0x0e1221, so a wholly dark zot frame still counts ~6M of
+              # its 6.2M bytes and sails past any byte threshold. Frame 0 is
+              # excluded for the opposite reason -- the `first` arm of
+              # Grid::flush
+              # blits every cell whatever the saver drew, so a saver that paints
+              # nothing still scores a full panel there.
+              #
+              # What "renders nothing" really means is that the panel never
+              # changes, so compare the frames to each other. Header length
+              # varies with the panel size, which is why this hashes whole files
+              # rather than trying to parse pixels out of them.
+              moved=$(md5sum /tmp/dump-$s/frame-0000[1-9].ppm \
+                             /tmp/dump-$s/frame-0001[0-9].ppm 2>/dev/null \
+                        | sort -u -k1,1 | wc -l)
+              [ "${moved:-0}" -gt 1 ] || {
+                echo "$s: frames 1..19 are all identical" \
+                     "($(ls /tmp/dump-$s/*.ppm 2>/dev/null | wc -l) frames dumped)"
+                exit 1
+              }
+              rm -rf /tmp/dump-$s
             done
           '
 

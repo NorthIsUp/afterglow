@@ -35,7 +35,7 @@
 //! accumulators are sized in `new` against a bound the draw cannot exceed, so
 //! the frame loop never allocates.
 use crate::font;
-use crate::grid::{bake, Cell, Grid};
+use crate::grid::{bake, dot_bit, Cell, Grid};
 use crate::saver::Saver;
 use crate::surface::{Panel, Surface};
 use crate::{env_num, next_rand};
@@ -197,13 +197,10 @@ impl Warp {
         let i = cy * self.grid.cols() + cx;
         let sx = (((px % cw) as f32 / self.sub_w) as usize).min(1);
         let sy = (((py % ch) as f32 / self.sub_h) as usize).min(3);
-        // Braille dot numbering: dots 1-3 and 4-6 are the top three rows of the
-        // left and right columns, 7 and 8 the bottom row of each.
-        let bit = if sy < 3 { sx * 3 + sy } else { 6 + sx };
         if self.bits[i] == 0 {
             self.stamped.push(i as u32);
         }
-        self.bits[i] |= 1 << bit;
+        self.bits[i] |= dot_bit(sx, sy);
         self.col[i] = self.col[i].max(lev);
     }
 

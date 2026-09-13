@@ -40,30 +40,15 @@
 //! # Environment
 //!
 //! * `DRM_DEVICE`     — card to open (default `/dev/dri/card0`)
-//! * `SAVER`          — `ascii` (default), `blocks`, `matrix`, `toasters`,
-//!   `toasters3` or `city`. The
-//!   startup choice only: `POST /select?saver=<name>` on the web mirror
-//!   switches it live, and a restart goes back to this.
+//! * `SAVER`          — which saver starts, one of the names in
+//!   `saver::SAVERS` (`ascii` is both the default and the fallback for an
+//!   unrecognised name). The startup choice only: `POST /select?saver=<name>`
+//!   on the web mirror switches it live, and a restart goes back to this.
 //! * `SAVER_ROTATE_SECS` — seconds each saver holds the panel before another
 //!   one is picked at random, 0..=86400. **0, the default, is off.** Never the
 //!   saver already showing, and a `/select` gives the saver it picked a full
 //!   interval before rotation moves on again.
 //! * `SAVER_FPS`      — target frames/sec, 1..=120 (default 30)
-//! * `FIRE_CELL`      — ascii fire: character cell in px, 8..=64 (default 16)
-//! * `FIRE_SCALE`     — blocks fire: cell in px, 1..=16 (default 4)
-//! * `MATRIX_CELL_W`  — matrix: cell width in px, 8..=64 (default 16)
-//! * `MATRIX_CELL_H`  — matrix: cell height in px, 8..=128 (default 32)
-//! * `TOASTER_CELL_W` / `TOASTER_CELL_H` — toasters: cell in px (16, 32)
-//! * `TOASTER_DENSITY` — toasters per 1000 cells, 1..=60 (default 4)
-//! * `TOASTER_TOAST_PCT` — percent of the flock that is toast (default 25)
-//! * `TOASTER_SPEED`  — horizontal px per SECOND, 8..=2000 (default 170)
-//! * `TOASTER_FLAP_FPS` — wing frames per second, 1..=120 (default 15)
-//! * `TOASTER3_*` — toasters3: the same knobs under a `TOASTER3_` prefix,
-//!   density defaulting to 2 because the sprite is nearly twice the cells
-//! * `CITY_CELL_W` / `CITY_CELL_H` — city: cell in px (12, 16)
-//! * `CITY_WINDOW_PCT` — percent of a building's windows lit (default 51)
-//! * `CITY_TWINKLE`  — windows switching per SECOND (default 150)
-//! * `CITY_SKY_TWINKLE` — sky lights re-shaded per second (default 45)
 //! * `RETRY_SECONDS`  — wait between attempts when no display is present (default 30)
 //! * `SAVER_HTTP`     — address the web mirror listens on (default
 //!   `127.0.0.1:8080`, which is the `tailscale-auth` sidecar's default upstream;
@@ -71,6 +56,9 @@
 //! * `SAVER_DUMP`     — render to PPM files in this directory instead of to a
 //!   display, then exit. Also honours `SAVER_DUMP_FRAMES`, `SAVER_DUMP_EVERY`,
 //!   `SAVER_WIDTH`, `SAVER_HEIGHT`.
+//!
+//! Per-saver knobs are documented in `k8s/apps/screensaver/README.md`, one row
+//! per saver — it is the only complete list, and a second copy here goes stale.
 //!
 //! `FIRE_FPS` and `FIRE_STYLE` remain accepted as the older spellings of
 //! `SAVER_FPS` and `SAVER` — the live deployment sets them, and its image digest
@@ -81,23 +69,29 @@
 mod bench;
 mod city;
 mod confetti;
+mod doodles;
 mod dump;
 mod dvd;
 mod fire;
 mod font;
 mod fractal;
 mod grid;
+mod hardrain;
 mod host;
 mod hypercube;
+mod life;
 mod lissajous;
 mod matrix;
 mod mirror;
 mod moire;
+mod pov;
 mod rain;
 mod sakura;
 mod satori;
 mod saver;
+mod strings;
 mod surface;
+mod tactiles;
 #[cfg(test)]
 mod testalloc;
 mod toasters;
@@ -105,6 +99,7 @@ mod toasters2;
 mod toasters3;
 mod warp;
 mod worms;
+mod zot;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
