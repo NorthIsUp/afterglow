@@ -36,10 +36,15 @@
 //! # Knobs
 //!
 //! * `ZOT_CELL_W` / `ZOT_CELL_H` — cell in px (8, 16)
-//! * `ZOT_BOLT_MS` — how long a bolt lasts, 60..=3000 (default 320). Each
-//!   strike varies this by ±25%.
+//! * `ZOT_BOLT_MS` — how long ONE stroke lasts, 60..=3000 (default 380). Each
+//!   stroke varies this by ±25%.
+//! * `ZOT_RESTRIKE_PCT` — chance that another return stroke follows down the
+//!   same channel, 0..=100 (default 70), rolled again for each stroke after
+//!   the first up to `MAX_STROKES`. This is what makes a bolt flash twice.
+//! * `ZOT_STROKE_GAP_MS` — dark between those strokes, 10..=1000 (default
+//!   110). Short enough that the two flashes read as one bolt.
 //! * `ZOT_GAP_MIN_MS` / `ZOT_GAP_MAX_MS` — darkness between bolts,
-//!   100..=60000 (default 900 / 3500)
+//!   100..=60000 (default 700 / 2400)
 //! * `ZOT_FORK_PCT` — chance per step that the leader forks, 0..=100
 //!   (default 9), and every fork's own forks at the same rate. The tree
 //!   thins out because a fork is only a fraction of what is left of its
@@ -128,6 +133,18 @@ const LEADER_PULL: f32 = 0.22;
 /// is drawn from.
 const FLICKER_FRAMES: u32 = 32;
 
+/// Strokes one channel may carry, the first included. Real flashes run to a
+/// dozen; past three the channel is dimmer than its own afterglow and the
+/// flicker reads as a fault rather than as lightning.
+const MAX_STROKES: u32 = 3;
+
+/// Each stroke's peak and length as a percent of the one before it. A
+/// re-strike runs down a channel the last one already half-discharged, so it
+/// is dimmer and quicker — which is also what keeps a three-stroke bolt from
+/// outstaying its welcome.
+const RESTRIKE_PEAK_PCT: u32 = 72;
+const RESTRIKE_LIFE_PCT: u32 = 80;
+
 /// A branch of the channel, walked to exhaustion and free to spawn more.
 #[derive(Clone, Copy)]
 struct Branch {
@@ -209,6 +226,16 @@ pub struct Zot {
     /// first seen at a third brightness.
     flicker: u32,
     bolt_frames: u32,
+    /// Strokes still owed to the CURRENT channel, and the dark between them.
+    strokes_left: u32,
+    stroke_gap: u32,
+    restrike_pct: u32,
+    /// This stroke's peak channel brightness, 0..=255. The first stroke of a
+    /// bolt gets all of it; each re-strike a fraction of the last.
+    peak: u32,
+    /// The wash peak for this stroke — `peak_glow` scaled by `peak`, folded in
+    /// here so the frame path does not multiply it every frame.
+    glow_peak: u32,
     gap_lo: u32,
     gap_hi: u32,
     peak_glow: u32,
@@ -224,9 +251,11 @@ impl Zot {
     pub fn new(panel: &Panel, fps: u32) -> Self {
         let cell_w = env_num(&["ZOT_CELL_W"], 8, 4, 64) as usize;
         let cell_h = env_num(&["ZOT_CELL_H"], 16, 8, 128) as usize;
-        let bolt_ms = env_num(&["ZOT_BOLT_MS"], 320, 60, 3000) as u32;
-        let gap_min = env_num(&["ZOT_GAP_MIN_MS"], 900, 100, 60_000) as u32;
-        let gap_max = env_num(&["ZOT_GAP_MAX_MS"], 3500, 100, 60_000) as u32;
+        let bolt_ms = env_num(&["ZOT_BOLT_MS"], 380, 60, 3000) as u32;
+        let gap_min = env_num(&["ZOT_GAP_MIN_MS"], 700, 100, 60_000) as u32;
+        let gap_max = env_num(&["ZOT_GAP_MAX_MS"], 2400, 100, 60_000) as u32;
+        let restrike_pct = env_num(&["ZOT_RESTRIKE_PCT"], 70, 0, 100) as u32;
+        let stroke_gap_ms = env_num(&["ZOT_STROKE_GAP_MS"], 110, 10, 1000) as u32;
         let fork_pct = env_num(&["ZOT_FORK_PCT"], 9, 0, 100) as u32;
         let air_pct = env_num(&["ZOT_AIR_PCT"], 30, 0, 100) as u32;
         let jitter = env_num(&["ZOT_JITTER"], 900, 10, 3000) as f32 / 1000.0;
@@ -256,6 +285,11 @@ impl Zot {
             wait: 0,
             flicker: 1,
             bolt_frames: frames(bolt_ms),
+            strokes_left: 0,
+            stroke_gap: frames(stroke_gap_ms),
+            restrike_pct,
+            peak: 255,
+            glow_peak: 255 * glow_pct / 100,
             gap_lo: frames(gap_min.min(gap_max)),
             gap_hi: frames(gap_min.max(gap_max)),
             peak_glow: 255 * glow_pct / 100,
@@ -444,10 +478,36 @@ impl Zot {
         // mask toward set bits, so roughly a quarter of the strobe window is
         // dark — three or four visible return strokes.
         self.life = (self.bolt_frames * (75 + next_rand(&mut self.rng) % 51) / 100).max(1);
+        self.peak = 255;
+        // How many times this channel fires, rolled once here rather than
+        // once per stroke, so a bolt is a fixed thing the moment it is drawn.
+        self.strokes_left = 0;
+        while self.strokes_left + 1 < MAX_STROKES && self.chance(self.restrike_pct) {
+            self.strokes_left += 1;
+        }
+        self.envelope();
+    }
+
+    /// Fire the SAME channel again, dimmer and quicker. The geometry is
+    /// untouched — that is the whole point: a re-lit channel is one bolt
+    /// flashing twice, where a second `strike` would be two bolts in a row
+    /// somewhere else on the panel.
+    fn restrike(&mut self) {
+        self.wait = 0;
+        self.age = 0;
+        self.strokes_left -= 1;
+        self.peak = self.peak * RESTRIKE_PEAK_PCT / 100;
+        self.life = (self.life * RESTRIKE_LIFE_PCT / 100).max(1);
+        self.envelope();
+    }
+
+    /// The brightness envelope for the stroke that is about to be drawn.
+    fn envelope(&mut self) {
         self.flicker = {
             let r = next_rand(&mut self.rng);
             (r | (r >> 1)) | 1
         };
+        self.glow_peak = self.peak_glow * self.peak / 255;
         // The wash outlasts the channel: the panel is still faintly lit for a
         // moment after the bolt is gone, which is the afterimage.
         self.glow_life = (self.life * 17 / 10).max(1);
@@ -458,12 +518,21 @@ impl Zot {
         if self.wait > 0 {
             self.wait -= 1;
             if self.wait == 0 {
-                self.strike();
+                if self.strokes_left > 0 {
+                    self.restrike();
+                } else {
+                    self.strike();
+                }
             }
             return;
         }
         self.age += 1;
-        if self.age >= self.total {
+        // A re-strike waits only for the CHANNEL to go out, not for the wash:
+        // the beat of dark between two flashes is the channel's, and the wash
+        // holding through it is what says they are the same bolt.
+        if self.strokes_left > 0 && self.age >= self.life {
+            self.wait = self.stroke_gap;
+        } else if self.age >= self.total {
             let span = self.gap_hi - self.gap_lo + 1;
             self.wait = (self.gap_lo + next_rand(&mut self.rng) % span).max(1);
         }
@@ -475,7 +544,13 @@ impl Zot {
         if self.age >= self.life {
             return 0;
         }
-        let base = 255 - 255 * self.age / self.life;
+        // `1 - t^2`, not `1 - t`: a linear fall spends its last third in the
+        // bottom two ramp steps, which on an 8x16 cell is a thread you cannot
+        // see. Squaring holds the channel in the visible half of the ramp for
+        // most of the stroke and then drops it off a cliff, which is also
+        // closer to how a real channel cools.
+        let left = self.life - self.age;
+        let base = self.peak * left * (self.life + self.age) / (self.life * self.life);
         if self.age < FLICKER_FRAMES && (self.flicker >> self.age) & 1 == 0 {
             base / 3
         } else {
@@ -491,7 +566,7 @@ impl Zot {
         if self.age >= self.glow_life {
             return 0;
         }
-        self.peak_glow * (self.glow_life - self.age) / self.glow_life
+        self.glow_peak * (self.glow_life - self.age) / self.glow_life
     }
 }
 
@@ -806,11 +881,70 @@ mod tests {
                 run = 0;
             }
         }
-        assert!(dark > 300, "only {dark}/900 frames were black");
-        assert!(longest > 20, "the longest unbroken dark run was {longest}");
+        // Over half the run, with the defaults as they stand (563/900 as
+        // written). The bar moves with ZOT_GAP_*: shorten the gap enough and
+        // this is the test that says so.
+        assert!(dark > 450, "only {dark}/900 frames were black");
+        // The long gap, not the beat between two strokes of one bolt: that
+        // one is `stroke_gap` frames and much shorter. Tied to the configured
+        // gap rather than to a number, so the two cannot be confused.
+        assert!(
+            longest as u32 >= z.gap_lo,
+            "the longest dark run was {longest}, under the {} frame gap floor",
+            z.gap_lo
+        );
         assert!(
             idle_dark > 200,
             "{idle_dark} free frames: the gap is not free"
+        );
+    }
+
+    /// T13. A bolt flashes more than once, down the SAME channel. Re-lighting
+    /// the channel is what makes a bolt read as lightning rather than as a
+    /// line fading out, and "same channel" is the half that matters: draw a
+    /// fresh bolt instead and it is two strikes in a row somewhere else.
+    #[test]
+    fn a_bolt_flashes_again_down_the_same_channel() {
+        let p = panel(PANELS[0]);
+        let mut z = seeded(&p, 30, 0xB0_17_00_0D);
+        let (mut multi, mut bolts) = (0usize, 0usize);
+        for _ in 0..80 {
+            z.strike();
+            let channel = z.dots.clone();
+            let expect = z.strokes_left + 1;
+            let (mut flashes, mut lit, mut dark, mut longest_dark) = (1u32, true, 0u32, 0u32);
+            loop {
+                z.step();
+                // A long wait with nothing owed is the gap: this bolt is over.
+                if z.wait > 0 && z.strokes_left == 0 {
+                    break;
+                }
+                let on = z.core_intensity() > 0;
+                if on && !lit {
+                    flashes += 1;
+                }
+                dark = if on { 0 } else { dark + 1 };
+                longest_dark = longest_dark.max(dark);
+                lit = on;
+            }
+            assert_eq!(z.dots, channel, "a re-strike moved the channel");
+            assert_eq!(
+                flashes, expect,
+                "a bolt owed {expect} strokes, saw {flashes}"
+            );
+            if flashes > 1 {
+                multi += 1;
+                assert!(
+                    longest_dark < z.gap_lo,
+                    "{longest_dark} dark frames inside one bolt: that is a gap, \
+                     not a flicker"
+                );
+            }
+            bolts += 1;
+        }
+        assert!(
+            multi * 2 > bolts,
+            "only {multi}/{bolts} bolts flashed more than once"
         );
     }
 
