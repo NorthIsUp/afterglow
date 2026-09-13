@@ -65,7 +65,8 @@ pub struct Grid {
 
 impl Grid {
     /// `cols = panel.w / cell_w`, `rows = panel.h / cell_h`, both at least 1.
-    /// The right/bottom remainder is never written — see the damage contract.
+    /// The right/bottom remainder belongs to no cell, so `flush` paints it
+    /// black on frame 0 — see `paint_margins`.
     pub fn new(panel: &Panel, cell_w: usize, cell_h: usize) -> Self {
         let cell_w = cell_w.max(1);
         let cell_h = cell_h.max(1);
@@ -164,6 +165,17 @@ impl Grid {
         }
     }
 
+    /// Black out the panel the cell grid does not cover: the `w % cell_w` right
+    /// strip and the `h % cell_h` bottom strip. Frame 0 only, because nothing
+    /// writes there afterwards. It has to go through `Surface` so the strip is
+    /// REPORTED as damage — simpledrm scans out of a shadow buffer, so pixels
+    /// written but not reported look right in a dump and stay garbage on the
+    /// panel. That is the bottom "error line" on matrix/toasters/city.
+    #[inline]
+    fn paint_margins(&self, s: &mut Surface<'_>) {
+        s.fill_outside(self.cols * self.cell_w, self.rows * self.cell_h, BG);
+    }
+
     /// Blit every changed cell (every cell on frame 0), report exactly the rows
     /// blitted, then swap `cur` into `prev`. Snapshotting is folded in: there is
     /// nothing to misorder.
@@ -172,6 +184,11 @@ impl Grid {
             if self.first || self.cur[i] != self.prev[i] {
                 self.blit(s, pal, i);
             }
+        }
+        if self.first {
+            // After the cells, so the strip merges into the frame-0 run
+            // instead of opening a second ClipRect.
+            self.paint_margins(s);
         }
         self.first = false;
         std::mem::swap(&mut self.cur, &mut self.prev);
@@ -189,6 +206,7 @@ impl Grid {
             for i in 0..self.cur.len() {
                 self.blit(s, pal, i);
             }
+            self.paint_margins(s);
             self.prev.copy_from_slice(&self.cur);
             self.first = false;
             return;
@@ -240,6 +258,66 @@ mod tests {
                 assert_eq!(g.mask[px], 0x80u8 >> (px * 8 / cell));
             }
         }
+    }
+
+    /// The bottom "error line" on the real panel: `h % cell_h` scanlines no
+    /// cell covers, left holding whatever was in simpledrm's shadow buffer.
+    /// The garbage prefill is the point — a zeroed buffer hides this bug,
+    /// which is why it survived every dump.
+    #[test]
+    fn frame_zero_covers_the_whole_panel_not_just_whole_cells() {
+        const JUNK: u32 = 0xDEAD_BEEF;
+        // (w, h, cell_w, cell_h): the first two are the shipped savers at
+        // 1080, then heights with odd remainders, then one that divides
+        // exactly (must not regress), an odd WIDTH, and a panel narrower
+        // than one cell.
+        for (w, h, cw, ch) in [
+            (1920, 1080, 16, 32),
+            (1920, 1080, 12, 16),
+            (1920, 1050, 16, 32),
+            (1920, 800, 12, 16),
+            (1024, 768, 16, 16),
+            (1918, 1080, 16, 32),
+            (90, 100, 64, 64),
+        ] {
+            let panel = Panel::new(w, h, w);
+            let mut g = Grid::new(&panel, cw, ch);
+            let mut buf = vec![JUNK; panel.buf_len()];
+
+            g.fill(|_, _| Cell::new(font::SOLID, 0));
+            let mut s = Surface::new(&mut buf, &panel);
+            g.flush(&mut s, &[0x11]);
+            let d = s.finish();
+
+            let case = format!("{w}x{h} cell {cw}x{ch}");
+            assert_eq!(d.runs(), [(0, h as u16)], "{case}: frame 0 damage");
+            assert_eq!(d.rows(), h, "{case}: frame 0 rows");
+            assert!(
+                !buf.contains(&JUNK),
+                "{case}: {} pixels never painted on frame 0",
+                buf.iter().filter(|&&v| v == JUNK).count()
+            );
+
+            // And it stays a frame-0 cost.
+            let mut s = Surface::new(&mut buf, &panel);
+            g.fill(|_, _| Cell::new(font::SOLID, 0));
+            g.flush(&mut s, &[0x11]);
+            assert!(s.finish().is_empty(), "{case}: idle frame dirtied rows");
+        }
+    }
+
+    /// Same panel coverage for the sparse path, which has its own frame-0 arm.
+    #[test]
+    fn sparse_frame_zero_covers_the_whole_panel() {
+        const JUNK: u32 = 0xDEAD_BEEF;
+        let panel = Panel::new(1920, 1080, 1920);
+        let mut g = Grid::new(&panel, 12, 16);
+        let mut buf = vec![JUNK; panel.buf_len()];
+        g.fill(|_, _| Cell::new(font::SOLID, 0));
+        let mut s = Surface::new(&mut buf, &panel);
+        g.flush_sparse(&mut s, &[0x11], &[]);
+        assert_eq!(s.finish().runs(), [(0, 1080)]);
+        assert!(!buf.contains(&JUNK));
     }
 
     #[test]

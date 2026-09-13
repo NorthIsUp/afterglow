@@ -13,7 +13,7 @@
 //!
 //! | saver  | grid    | cells  | cells changed/frame | damaged scanlines/frame |
 //! | ------ | ------- | ------ | ------------------- | ----------------------- |
-//! | matrix | 120x33  |   3960 |   792 (20.0%)       | 1056 (the whole panel)  |
+//! | matrix | 120x33  |   3960 |   792 (20.0%)       | 1056 (every grid row)   |
 //! | ascii  | 120x67  |   8040 |  2546 (31.7%)       | 1056                    |
 //! | blocks | 480x270 | 129600 | 11022  (8.5%)       | ~620                    |
 //!

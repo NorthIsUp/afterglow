@@ -835,11 +835,8 @@ mod tests {
         let mut prev = buf.clone();
 
         let d = saver::frame(&mut c, &mut buf, &p);
-        assert_eq!(
-            d.rows(),
-            c.grid.rows() * c.grid.cell_h(),
-            "frame 0 must paint every cell"
-        );
+        // The whole panel, strip included — see grid.rs `paint_margins`.
+        assert_eq!(d.rows(), p.h, "frame 0 must paint the whole panel");
         // And it must actually be the SCENE, not a black panel that happens to
         // be reported: a vacuous frame-0 assertion is worth nothing.
         assert!(

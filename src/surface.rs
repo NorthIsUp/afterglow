@@ -23,9 +23,10 @@
 //!    not use `Grid` must handle it itself.
 //! 3. Rows never written keep the previous frame. The host clears nothing and
 //!    the mapping is the same buffer object every frame.
-//! 4. Pixels outside the cell grid (`w % cell_w`, `h % cell_h`) are never
-//!    written and stay at the dumb buffer's zeroed black. At 1920x1080 with
-//!    `FIRE_CELL=16` that is an 8 px bottom strip, which is what ships today.
+//! 4. Pixels outside the cell grid (`w % cell_w`, `h % cell_h`) belong to no
+//!    cell. They are painted and reported ONCE, on frame 0, by
+//!    [`Surface::fill_outside`] — see `Grid::flush`. Writing them without
+//!    reporting them looks right in a dump and stays garbage on the panel.
 //!
 //! Row slices are cut to `w`, never `stride32`. `pitch` may exceed `w * 4`;
 //! on this panel it does not, so getting that wrong would survive hardware
@@ -196,6 +197,25 @@ impl<'a> Surface<'a> {
         self.buf[start..end]
             .chunks_mut(stride)
             .map(move |r| &mut r[x..x + w])
+    }
+
+    /// Paint everything outside a `gw` x `gh` area and report it. The grid
+    /// covers whole cells only, so a panel whose height is not a multiple of
+    /// `cell_h` has a bottom strip (and one on the right for the width) that no
+    /// saver ever writes; on simpledrm it shows whatever the shadow buffer held,
+    /// which is the garbage line along the bottom of the real panel. Frame 0
+    /// only — after that the strip is already this colour and nothing moves it.
+    pub fn fill_outside(&mut self, gw: usize, gh: usize, v: u32) {
+        if gw < self.w {
+            for row in self.cell_rows(gw, 0, self.w - gw, gh.min(self.h)) {
+                row.fill(v);
+            }
+        }
+        if gh < self.h {
+            for row in self.cell_rows(0, gh, self.w, self.h - gh) {
+                row.fill(v);
+            }
+        }
     }
 
     pub fn finish(self) -> Damage {

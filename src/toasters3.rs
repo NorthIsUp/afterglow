@@ -396,11 +396,7 @@ mod tests {
         let mut prev = buf.clone();
 
         let d = saver::frame(&mut t, &mut buf, &p);
-        assert_eq!(
-            d.rows(),
-            t.grid.rows() * t.cell_h as usize,
-            "frame 0 must paint every cell"
-        );
+        assert_eq!(d.rows(), p.h, "frame 0 must paint the whole panel");
 
         let (mut worst, mut moved) = (0, 0);
         for n in 1..40 {
@@ -424,9 +420,9 @@ mod tests {
         }
         assert!(moved > 30, "a flying flock must change pixels ({moved}/39)");
 
-        // Against the GRID's height, not the panel's: the grid never owns the
-        // bottom `h % cell_h` strip, so `worst < p.h` was true for any
-        // implementation — including one repainting everything every frame.
+        // Against the GRID's height, not the panel's: after frame 0 nothing
+        // touches the bottom `h % cell_h` strip, so `worst < p.h` was true for
+        // any implementation — including one repainting everything every frame.
         let all = t.grid.rows() * t.cell_h as usize;
         assert!(worst < all, "damaged every scanline ({worst} of {all})");
     }
