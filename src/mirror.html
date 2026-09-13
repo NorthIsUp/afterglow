@@ -123,9 +123,18 @@
       cache: "no-store",
     });
     // A rejected name leaves the panel alone; say so rather than lying about it.
-    if (!res.ok) status.textContent = "cannot draw " + name;
-    // No redraw here: the switch bumps the mirror's epoch, so the stream ends
-    // and the reconnect below re-reads /meta — the same path a modeset takes.
+    if (!res.ok) {
+      status.textContent = "cannot draw " + name;
+      return;
+    }
+    // The switch bumps the mirror's epoch, so the server is about to close the
+    // stream. Abort it ourselves instead of waiting to be dropped: a chunked
+    // response closed mid-read REJECTS reader.read() (Safari: "Load failed")
+    // rather than resolving done, so letting the server do it turned every
+    // successful switch into a two-second error banner.
+    status.textContent = "switching to " + name + "\u2026";
+    switching = true;
+    abort();
   }
 
   function buildPicker(m) {
@@ -178,12 +187,22 @@
     return n;
   }
 
+  // Set while a switch we initiated is tearing the stream down, so the loop can
+  // tell "the user pressed a button" apart from "the pod went away".
+  let switching = false;
+  let ctl = new AbortController();
+  const abort = () => ctl.abort();
+
   async function run() {
-    const res = await fetch("/meta", { cache: "no-store" });
+    ctl = new AbortController();
+    const res = await fetch("/meta", { cache: "no-store", signal: ctl.signal });
     if (!res.ok) throw new Error("no display yet (" + res.status + ")");
     applyMeta(await res.json());
 
-    const stream = await fetch("/stream", { cache: "no-store" });
+    const stream = await fetch("/stream", {
+      cache: "no-store",
+      signal: ctl.signal,
+    });
     if (!stream.ok) throw new Error("stream " + stream.status);
     const reader = stream.body.getReader();
     // Records straddle chunk boundaries, so hold a buffer and consume only
@@ -218,6 +237,12 @@
       try {
         await run();
       } catch (e) {
+        // A switch we asked for is not a failure: reconnect at once and say
+        // nothing. Only a real drop gets the banner and the backoff.
+        if (switching) {
+          switching = false;
+          continue;
+        }
         status.textContent = e.message + " — retrying";
       }
       await new Promise((r) => setTimeout(r, 2000));
