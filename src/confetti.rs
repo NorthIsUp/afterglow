@@ -258,7 +258,7 @@ impl Confetti {
         } else {
             (3 + next_rand(&mut rng) as usize % 5).min(cols / 6)
         };
-        let slot = if want == 0 { 0 } else { cols / want };
+        let slot = cols.checked_div(want).unwrap_or(0);
         let mut shelves: Vec<Shelf> = Vec::with_capacity(want);
         for k in 0..want {
             let avail = slot - 4;
