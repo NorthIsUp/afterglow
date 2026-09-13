@@ -117,6 +117,7 @@ mod toasters2;
 mod toasters3;
 mod warp;
 mod worms;
+mod xwing;
 mod zot;
 
 use std::sync::atomic::{AtomicBool, Ordering};

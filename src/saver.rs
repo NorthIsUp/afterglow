@@ -32,6 +32,7 @@ use crate::toasters2::Toasters2;
 use crate::toasters3::Toasters3;
 use crate::warp::Warp;
 use crate::worms::Worms;
+use crate::xwing::XWing;
 use crate::zot::Zot;
 
 /// A screensaver. One frame, one call. Dispatch happens here and NOWHERE below
@@ -100,6 +101,7 @@ const SAVERS: &[(&str, Build)] = &[
     ("podracer", |p, fps| Box::new(Podracer::new(p, fps))),
     ("speeder", |p, fps| Box::new(Speeder::new(p, fps))),
     ("marble", |p, fps| Box::new(Marble::new(p, fps))),
+    ("xwing", |p, fps| Box::new(XWing::new(p, fps))),
     ("hardrain", |p, fps| Box::new(HardRain::new(p, fps))),
     ("zot", |p, fps| Box::new(Zot::new(p, fps))),
 ];

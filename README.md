@@ -40,6 +40,7 @@ falls back to `ascii` — a headless pod must never crash-loop on a typo.
 | `pov` | Points of View — a rotating platonic solid drawn as a grid of dots on its own surface, changing to the next of the five every ten seconds in a burst that throws the points outward and lands them on the new shape with an overshoot. | `POV_HOLD_SECS` (1..600, default 10), `POV_BURST_MS` (100..5000, default 1200), `POV_SPACING` (dots between surface samples, 2..24, default 6), `POV_SCALE` (figure radius in thousandths of the SHORTER panel side, 50..600, default 420), `POV_BURST` (outward scatter in thousandths of the figure radius, 0..2000, default 450), `POV_Z_DIST` (2000..40000, default 6000), `POV_RATE_XY` / `POV_RATE_XZ` / `POV_RATE_YZ` (milli-revolutions per second, default 7 / 23 / 13), `POV_CELL_W` / `POV_CELL_H` (8, 16) |
 | `podracer` | First-person Boonta Eve: two podracer engines hang ahead of you on their cables, flaring and yawing independently as you turn, while an ochre canyon rips past on both sides. One ray per cell column finds the wall; the floor and sky fall out of the ground-plane solve. Arches you fly through, rock spires, slot canyons barely wider than the pod, heat shimmer over the rim, and every so often a rival's engine wash crossing the view. Full repaint — it damages most of the panel every frame, because most of the panel is moving. | `PODRACER_CELL` (px, 4..32, default 8), `PODRACER_SPEED` (course m/s, 40..900, default 300), `PODRACER_FOV` (focal as a percent of panel width, 30..200, default 78), `PODRACER_WIDTH` (canyon half-width in metres, 6..90, default 30), `PODRACER_PINCH` (how far a slot closes, percent, 0..90, default 64), `PODRACER_SPREAD` (engine separation, percent of panel width, 10..90, default 46), `PODRACER_ENGINE` (engine radius, percent of panel width, 3..30, default 7, capped at 22% of the aspect-corrected height), `PODRACER_SHIMMER` (0..100, default 70), `PODRACER_FEATURES` (arches and spires alive at once, 0..24, default 7), `PODRACER_WASH_SECS` (mean seconds between a rival's wash, 0 = off..600, default 9), `PODRACER_SEED` (0 = roll one from the clock and pid; any other value reproduces the run exactly) |
 | `speeder` | A first-person speeder-bike chase through the forest moon — enormous redwood trunks rush past at parallax while the bike weaves between them on two incommensurate sines, dappled canopy light streams over the mossy floor, and every so often a fallen trunk sweeps up out of frame to be ducked under or another bike flashes across the view. One spawn in twenty is aimed at where the camera WILL be, so the near misses are deliberate; a trunk moving too fast for the eye to hold an edge on is stippled rather than solid. Its grid is SQUARE, so all of the perspective is in cells and `SAVER_PIXEL_ASPECT` corrects it for free — the opposite choice to `warp`'s. | `SPEEDER_CELL` (px, 4..32, default 8, square), `SPEEDER_SPEED` (metres/sec, 10..300, default 58), `SPEEDER_TRUNKS` (8..400, default 60), `SPEEDER_FOV` (focal as a per-cent of COLUMNS, 20..200, default 62 — smaller is wider and faster-looking), `SPEEDER_HORIZON` (eye line as a per-cent of rows, 10..80, default 44), `SPEEDER_WEAVE` (swing off the path in DECIMETRES, 0..200, default 64; 0 flies straight), `SPEEDER_DAPPLE` (per-cent of the floor in a pool of light, 0..100, default 34), `SPEEDER_LOG_SECS` (mean seconds between fallen trunks, 0..600, default 16; 0 = off), `SPEEDER_RIDER_SECS` (mean seconds between other bikes, 0..600, default 12; 0 = off), `SPEEDER_SEED` (0 = roll one from the clock and pid; any other value reproduces the ride exactly) |
+| `xwing` | The Death Star run from the cockpit, in three acts on a loop: the station swelling out of a starfield, a low pass over its greebled surface, then the trench — walls closing in, green turret fire coming up at you and red going out, and the targeting computer swinging down over the view. | `XWING_SEED`, `XWING_APPROACH_SECS` / `XWING_SURFACE_SECS` / `XWING_TRENCH_SECS` (1..600, default 11 / 9 / 13), `XWING_SPEED` (world units/sec, 50..20000, default 900), `XWING_GREEBLE` (plating block size, 4..2000, default 60), `XWING_FOV` (focal length in thousandths of the visual panel width, 200..3000, default 800), `XWING_STARS` (0..4000, default 170), `XWING_TOWERS` (0..400, default 16), `XWING_BOLTS` (0..400, default 28), `XWING_CELL_W` / `XWING_CELL_H` (4..32, default 8 / 8) |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
 `SAVER_ROTATE_SECS` (0..86400, default 0 = off), `SAVER_PIXEL_ASPECT` (25..400,
@@ -799,6 +800,45 @@ region on the panel forever; a diff cannot, and nothing here is sparse anyway �
 the mist, the squall and the pool all touch broad regions every frame. Measured
 interleaved at 1920x1080: `hardrain` is 4.8x `rain`, 2.3x `matrix` and 1.0x
 `moire` per frame, which puts it in `moire`'s class rather than `rain`'s.
+
+### About the xwing saver
+
+`image/src/xwing.rs` is the only saver here with a beginning, a middle and an
+end. The other forward-motion savers are steady states you can join at any
+moment; this one builds — open space, then a surface, then a trench that closes
+in — and then cuts back and does it again.
+
+- **Black and cold grey, and the only saver with stars in it.** Every grey in
+  the palette is blue-shifted (`b > g > r`); the only colours are green turret
+  fire, red cannon fire, and the targeting computer's amber. If a frame of this
+  could be recoloured into a desert or a forest, the palette has drifted.
+- **The plating is generated, not tiled.** One function, `greeble`, textures the
+  station, the plain and the trench walls from their own two surface
+  coordinates. It hashes at two scales — a block that may be sunk into the
+  surface (a trench within the trench) or raised into a housing, and a
+  third-size detail inside it (a vent, a nub) — so there is no period to catch.
+  The equatorial trench and the superlaser dish are cut in the same coordinates,
+  which is why they swell with the station instead of being drawn onto it.
+- **Panel seams are NEGATIVE space.** A cell carries one colour, so a seam drawn
+  as a darker shade would have to be a whole cell wide. Drawn as unlit braille
+  dots punched out of a full block it is a quarter of one and lands where the
+  seam actually is. Seams stop being drawn once a cell is wider than a block —
+  past that they are finer than the panel can resolve, and drawing them anyway
+  is moire. That cut-off doubles as the distance LOD, and without it the horizon
+  — where every surface here converges — is a band of static.
+- **The geometry is in square-pixel units, not cells.** `SAVER_PIXEL_ASPECT=180`
+  nearly halves `rows`, so a trench whose walls were placed at "a quarter of
+  `cols`" would close at a different rate on the panel than in a 1080p dump.
+  Everything projects into visual units (one unit = one framebuffer pixel wide,
+  a cell is `cell_h * aspect` tall) and converts to cells once, at the stamp;
+  `the_shot_is_the_same_at_both_pixel_aspects` renders 1920x1080 at 100 and
+  1920x600 at 180 — the same shot on two grids with 2.7x different row counts —
+  and compares how much of the frame is sky.
+- **Cost.** A full repaint with a couple of divides and two hashes per cell.
+  Measured at 1920x1080 against `moire`: act 1 (approach) 1.5x, act 2 (surface)
+  1.1x, act 3 (trench) 1.8x — the trench resolves a wall AND a floor per cell
+  and takes the nearer. On the 1280x400 panel the whole cycle is 1.4x `moire`,
+  which puts it around 200m of the pod's 500m.
 
 ### About the zot saver
 
