@@ -96,7 +96,7 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
         (cfg.http != "off").then(|| Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps)));
     saver::announce(mirror, saver.as_ref(), &panel);
     let mut selected = mirror.selected();
-    let mut rot = saver::Rotate::from_env(Instant::now());
+    let mut rot = saver::Rotate::new(Instant::now());
 
     std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {dir}: {e}"))?;
     let log_path = format!("{dir}/damage.txt");

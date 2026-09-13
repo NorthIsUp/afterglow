@@ -121,9 +121,10 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
     // the mirror is told once and every frame after it is only cells.
     saver::announce(mirror, saver.as_ref(), &panel);
     let mut selected = mirror.selected();
-    // Off unless SAVER_ROTATE_SECS says otherwise. Built here, not once in
-    // main, so a modeset retry gives the current saver a full turn.
-    let mut rot = saver::Rotate::from_env(Instant::now());
+    // The interval is the mirror's; this is only the deadline it implies. Built
+    // here, not once in main, so a modeset retry gives the current saver a full
+    // turn — and it picks up whatever `/rotate` has been set to since.
+    let mut rot = saver::Rotate::new(Instant::now());
 
     let frame_dur = Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps));
     // simpledrm — the driver U-Boot hands over on a Pi5 — scans out of a SHADOW

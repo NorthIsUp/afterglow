@@ -105,6 +105,25 @@
   #calnow {
     opacity: 0.7;
   }
+  #rot {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  #rot input[type="number"] {
+    font: inherit;
+    width: 4rem;
+    color: #4b8b4b;
+    background: #000;
+    border: 1px solid #132;
+    padding: 0.2rem 0.3rem;
+  }
+  #rot input:disabled {
+    opacity: 0.4;
+  }
+  #rot input[type="checkbox"] {
+    accent-color: #3a6;
+  }
   #pick button[aria-pressed="true"] {
     color: #7cf65d;
     border-color: #3a6;
@@ -112,6 +131,13 @@
 </style>
 <canvas id="screen" width="16" height="16"></canvas>
 <div id="pick"></div>
+<div id="rot">
+  <label><input id="roton" type="checkbox" /> auto-rotate</label>
+  <label
+    >every
+    <input id="rotmins" type="number" min="1" max="1440" step="1" /> min</label
+  >
+</div>
 <div id="status">connecting…</div>
 <div id="life">
   <span id="modes" hidden
@@ -203,6 +229,43 @@
     switching = true;
     abort();
   }
+
+  // Rotation. The interval is the pod's, not this tab's — /meta carries it, so
+  // a second browser shows what the first one set rather than its own guess.
+  // Seconds on the wire because that is the renderer's unit and what
+  // SAVER_ROTATE_SECS is in; minutes here because that is what a person asks
+  // for. An interval that is not a whole number of minutes (only reachable from
+  // the env var) shows rounded.
+  const roton = document.getElementById("roton");
+  const rotmins = document.getElementById("rotmins");
+  // What the box goes back to when it is ticked again — turning rotation off
+  // must not also forget the interval, which posting 0 does on the server.
+  let rotlast = 5;
+
+  function showRotate(secs) {
+    roton.checked = secs > 0;
+    if (secs > 0) rotlast = Math.max(1, Math.round(secs / 60));
+    rotmins.value = rotlast;
+    rotmins.disabled = !roton.checked;
+  }
+
+  async function setRotate(mins) {
+    const res = await fetch("/rotate?mins=" + mins, {
+      method: "POST",
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      status.textContent = "cannot rotate every " + mins + " min";
+      return;
+    }
+    showRotate((await res.json()).rotate_secs);
+  }
+
+  roton.onchange = () => setRotate(roton.checked ? rotlast : 0);
+  rotmins.onchange = () => {
+    rotlast = Math.min(1440, Math.max(1, Math.round(+rotmins.value) || 1));
+    setRotate(roton.checked ? rotlast : 0);
+  };
 
   function buildPicker(m) {
     pick.replaceChildren(
@@ -433,6 +496,7 @@
   function applyMeta(m) {
     meta = m;
     buildPicker(m);
+    showRotate(m.rotate_secs);
     // The PANEL, not the cell grid — see Grid::new on why they differ.
     //
     // No fallback for a /meta missing these: this page is include_str!'d into

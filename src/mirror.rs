@@ -49,7 +49,7 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -68,6 +68,20 @@ const MAX_VIEWERS: usize = 4;
 const KEEPALIVE: Duration = Duration::from_secs(10);
 
 const PAGE: &str = include_str!("mirror.html");
+
+/// The rotation interval lives in the low 32 bits of the control word.
+const ROTATE_SECS: u64 = u32::MAX as u64;
+
+/// Longest interval `POST /rotate` accepts, in minutes — the same day
+/// `SAVER_ROTATE_SECS` tops out at.
+const MAX_ROTATE_MINS: u64 = 86_400 / 60;
+
+/// Seconds out of a rotation control word. The packing is this module's, so the
+/// render loop asks rather than masking a layout it would have to be kept in
+/// step with.
+pub fn ctl_secs(ctl: u64) -> u64 {
+    ctl & ROTATE_SECS
+}
 
 /// Cell state that cannot occur: `font::GLYPHS` is nowhere near `u16::MAX`
 /// entries, so a `prev` filled with this forces the first
@@ -100,9 +114,16 @@ pub struct Mirror {
     /// rather than a lock because the render loop reads it every frame and must
     /// never wait on a browser; `POST /select` is the only writer.
     selected: AtomicUsize,
+    /// Seconds between automatic switches in the low 32 bits, a change counter
+    /// in the high 32. One word rather than two so the render loop spots a
+    /// change with a single relaxed load — see `set_rotate_secs`.
+    rotate: AtomicU64,
     frame: Mutex<Frame>,
     ready: Condvar,
-    /// `/meta` JSON, rebuilt on modeset. Empty until the first one.
+    /// `/meta` JSON, rebuilt on modeset, MINUS its closing brace: the rotation
+    /// interval is live-settable and so cannot be baked into a string cached at
+    /// modeset time. The `/meta` route closes the object with it. Empty until
+    /// the first modeset.
     meta: Mutex<String>,
 }
 
@@ -113,6 +134,7 @@ impl Mirror {
             overruns: AtomicUsize::new(0),
             fps,
             selected: AtomicUsize::new(0),
+            rotate: AtomicU64::new(0),
             frame: Mutex::new(Frame::default()),
             ready: Condvar::new(),
             meta: Mutex::new(String::new()),
@@ -152,6 +174,34 @@ impl Mirror {
     /// `select`, which is where a user-supplied name is checked.
     pub fn select_at(&self, i: usize) {
         self.selected.store(i, Ordering::Relaxed);
+    }
+
+    /// The rotation control word, for the render loop: one relaxed load, same
+    /// as `selected` and adjacent to it. Relaxed is right for the same reason —
+    /// the word publishes no data, it is a number of seconds and a counter.
+    pub fn rotate_ctl(&self) -> u64 {
+        self.rotate.load(Ordering::Relaxed)
+    }
+
+    /// Seconds between automatic switches; 0 is off.
+    pub fn rotate_secs(&self) -> u64 {
+        ctl_secs(self.rotate_ctl())
+    }
+
+    /// Set the interval. Out-of-range seconds are the caller's problem — the
+    /// route validates, exactly as `select` is the one place a saver name is
+    /// checked.
+    ///
+    /// The counter in the high half is bumped on EVERY call, so the render loop
+    /// restarts the turn even when the number did not change. Without it,
+    /// asking for five minutes 4:59 into a five-minute turn would buy one
+    /// second, which is the infuriating version of this control.
+    pub fn set_rotate_secs(&self, secs: u64) {
+        let _ = self
+            .rotate
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some((v >> 32).wrapping_add(1) << 32 | (secs & ROTATE_SECS))
+            });
     }
 
     /// Publish this frame's cells. Called from the render thread, once per
@@ -230,7 +280,9 @@ impl Mirror {
             }
             json.push(']');
         }
-        json.push_str("]}");
+        // No closing brace: the `/meta` route appends the live rotation
+        // interval and closes the object there.
+        json.push(']');
         *self.meta.lock().unwrap() = json;
     }
 }
@@ -258,6 +310,11 @@ pub fn serve(mirror: Arc<Mirror>, addr: &str) {
     }
 }
 
+/// Routes that change what the panel does. POST only — a GET must not be able
+/// to, and everything else on any other path is a 405 so `POST /stream` cannot
+/// take a viewer slot and hold a thread.
+const WRITES: &[&str] = &["/select", "/rotate"];
+
 fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
     s.set_read_timeout(Some(Duration::from_secs(10)))?;
     // Writes must not park a thread forever on a client that stopped reading.
@@ -272,13 +329,13 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
         // Restored after /select added a method column: the old parser rejected
         // every non-GET at the parse layer, and dropping that made POST /stream
         // able to take one of the four viewer slots and hold a thread.
-        (m, p) if p == "/select" && m != "POST" => send(
+        (m, p) if WRITES.contains(&p) && m != "POST" => send(
             &mut s,
             "405 Method Not Allowed",
             "text/plain",
-            b"method not allowed: POST /select\n",
+            format!("method not allowed: POST {p}\n").as_bytes(),
         ),
-        (m, p) if m != "GET" && !(m == "POST" && p == "/select") => send(
+        (m, p) if m != "GET" && !WRITES.contains(&p) => send(
             &mut s,
             "405 Method Not Allowed",
             "text/plain",
@@ -304,6 +361,36 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
                 )
             }
         },
+        // Minutes, because that is the unit anyone setting this thinks in; the
+        // renderer's own unit is seconds and `/meta` reports those. 0 is off.
+        ("POST", "/rotate") => match param(&query, "mins")
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|m| *m <= MAX_ROTATE_MINS)
+        {
+            Some(mins) => {
+                mirror.set_rotate_secs(mins * 60);
+                send(
+                    &mut s,
+                    "200 OK",
+                    "application/json",
+                    rotate_json(mirror).as_bytes(),
+                )
+            }
+            // Anything else changes nothing: a garbled number must not be able
+            // to turn rotation off, which is what a lenient parse would do.
+            None => {
+                eprintln!(
+                    "[screensaver] rejected rotate mins {:?}",
+                    param(&query, "mins")
+                );
+                send(
+                    &mut s,
+                    "400 Bad Request",
+                    "application/json",
+                    br#"{"error":"rotate mins must be 0..=1440"}"#,
+                )
+            }
+        },
         (_, "/") => send(
             &mut s,
             "200 OK",
@@ -311,12 +398,17 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
             PAGE.as_bytes(),
         ),
         (_, "/meta") => {
-            let meta = mirror.meta.lock().unwrap().clone();
+            let mut meta = mirror.meta.lock().unwrap().clone();
             if meta.is_empty() {
                 // No modeset yet: the pod is up but idling on a node with no
                 // monitor. A 503 is the honest answer and the page retries.
                 send(&mut s, "503 Service Unavailable", "application/json", b"{}")
             } else {
+                // Closes the object. The interval is read HERE rather than
+                // cached with the rest, because `/rotate` moves it between
+                // modesets and a stale one is a page showing a number that is
+                // not what the panel is doing.
+                meta.push_str(&format!(",\"rotate_secs\":{}}}", mirror.rotate_secs()));
                 send(&mut s, "200 OK", "application/json", meta.as_bytes())
             }
         }
@@ -378,6 +470,12 @@ fn stat_json(mirror: &Mirror) -> String {
         mirror.viewers.load(Ordering::Relaxed),
         mirror.fps,
     )
+}
+
+/// Seconds, not the minutes that were posted: the page shows what the renderer
+/// will actually use, and `/meta` says the same thing in the same unit.
+fn rotate_json(mirror: &Mirror) -> String {
+    format!("{{\"rotate_secs\":{}}}", mirror.rotate_secs())
 }
 
 fn selected_json(mirror: &Mirror) -> String {
@@ -729,6 +827,135 @@ mod tests {
             assert!(body.starts_with("HTTP/1.1 405 "), "{bad}: {body}");
         }
         assert_eq!(m.viewers.load(Ordering::Relaxed), 0, "a slot was taken");
+    }
+
+    /// The other route that changes what the panel does, held to the same bar:
+    /// a POST moves the interval, a GET cannot, and anything that is not a
+    /// number of minutes in range is a 400 that changes NOTHING — a lenient
+    /// parse of "5x" or "" would turn rotation off, which is the one outcome
+    /// nobody asked for. `/meta` is checked here too, because a page that
+    /// reads the interval from a string cached at modeset shows the value it
+    /// had before the POST and there is no second place to notice that.
+    #[test]
+    fn rotate_sets_the_interval_and_refuses_anything_that_is_not_minutes() {
+        let m = Mirror::new(15);
+        scene(&m, "matrix", 2, 2, 8, 16);
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        {
+            let m = Arc::clone(&m);
+            std::thread::spawn(move || {
+                for s in l.incoming().flatten() {
+                    let m = Arc::clone(&m);
+                    std::thread::spawn(move || handle(&m, s));
+                }
+            });
+        }
+        let req = |line: &str| {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.write_all(format!("{line} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+                .unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).unwrap();
+            out
+        };
+        // Geometry only — the glyph table is 260 rows nobody can read.
+        let meta_tail = || {
+            let body = req("GET /meta");
+            body.rsplit_once("]],").unwrap().1.to_string()
+        };
+
+        assert_eq!(m.rotate_secs(), 0);
+        assert!(meta_tail().contains("\"rotate_secs\":0"), "{}", meta_tail());
+
+        let body = req("POST /rotate?mins=7");
+        assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+        assert!(body.contains("\"rotate_secs\":420"), "{body}");
+        assert_eq!(m.rotate_secs(), 420);
+        assert!(
+            meta_tail().contains("\"rotate_secs\":420"),
+            "{}",
+            meta_tail()
+        );
+
+        // 0 is off, and is the one value that is not a mistake.
+        let body = req("POST /rotate?mins=0");
+        assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+        assert_eq!(m.rotate_secs(), 0);
+        req("POST /rotate?mins=7");
+
+        for bad in [
+            "POST /rotate?mins=1441", // past a day
+            "POST /rotate?mins=-1",   // not unsigned
+            "POST /rotate?mins=5.5",  // whole minutes only
+            "POST /rotate?mins=5x",   // not a number
+            "POST /rotate?mins=",     // truncated away
+            "POST /rotate",           // no parameter at all
+            "POST /rotate?secs=60",   // wrong parameter
+        ] {
+            let body = req(bad);
+            assert!(body.starts_with("HTTP/1.1 400 "), "{bad}: {body}");
+            assert_eq!(m.rotate_secs(), 420, "{bad}");
+        }
+
+        // A GET must not be able to change the panel's pace. 405, not 404.
+        let body = req("GET /rotate?mins=1");
+        assert!(body.starts_with("HTTP/1.1 405 "), "{body}");
+        assert_eq!(m.rotate_secs(), 420);
+    }
+
+    /// `/meta` must report the interval the TIMER is actually enforcing, not
+    /// the number the last POST happened to send: a page that shows 5 while the
+    /// panel moves every 2 minutes is the same class of bug as an aspect ratio
+    /// the renderer did not use, and just as invisible in review. So drive the
+    /// real `saver::switch` and check the two agree.
+    #[test]
+    fn meta_reports_the_interval_the_timer_actually_enforces() {
+        let panel = Panel::new(128, 128, 128);
+        let m = Mirror::new(15);
+        let t0 = std::time::Instant::now();
+        let mut rot = saver::Rotate::new(t0);
+        let mut selected = m.selected();
+        let mut sav = saver::make(saver::name_at(selected), &panel, 30);
+        saver::announce(&m, sav.as_ref(), &panel);
+
+        m.set_rotate_secs(120);
+        let mut step = |rot: &mut saver::Rotate, sav: &mut Box<dyn saver::Saver>, secs: u64| {
+            saver::switch(
+                sav,
+                &mut selected,
+                rot,
+                t0 + Duration::from_secs(secs),
+                &m,
+                &panel,
+                30,
+            )
+        };
+        assert!(!step(&mut rot, &mut sav, 0));
+        assert!(!step(&mut rot, &mut sav, 119), "rotated early");
+        assert!(step(&mut rot, &mut sav, 120), "did not rotate on time");
+
+        // Over the socket, because the interval is spliced in by the route: a
+        // /meta served straight out of the cached string would answer with
+        // whatever was set at the last modeset.
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        {
+            let m = Arc::clone(&m);
+            std::thread::spawn(move || {
+                for s in l.incoming().flatten() {
+                    let m = Arc::clone(&m);
+                    std::thread::spawn(move || handle(&m, s));
+                }
+            });
+        }
+        let mut body = String::new();
+        let mut s = TcpStream::connect(addr).unwrap();
+        s.write_all(b"GET /meta HTTP/1.1\r\nHost: x\r\n\r\n")
+            .unwrap();
+        s.read_to_string(&mut body).unwrap();
+        let tail = body.rsplit_once("]],").unwrap().1.to_string();
+        assert!(tail.contains("\"rotate_secs\":120"), "{tail}");
     }
 
     /// A `/select` landing between the page's `/meta` and `/stream` fetches

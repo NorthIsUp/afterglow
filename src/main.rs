@@ -189,6 +189,7 @@ pub struct Config {
     device: String,
     fps: u32,
     saver: String,
+    rotate_secs: u64,
     retry: Duration,
     dump: Option<String>,
     http: String,
@@ -203,6 +204,7 @@ impl Config {
             // has always done — it tested `!= "blocks"`. The only value whose
             // meaning changes is "matrix", which used to mean ascii.
             saver: env_str(&["SAVER", "FIRE_STYLE"], "ascii"),
+            rotate_secs: env_num(&["SAVER_ROTATE_SECS"], 0, 0, 86_400) as u64,
             retry: Duration::from_secs(env_num(&["RETRY_SECONDS"], 30, 1, 3600) as u64),
             dump: std::env::var("SAVER_DUMP").ok(),
             // Loopback by default: the only thing that should reach the mirror
@@ -237,6 +239,10 @@ fn main() {
             saver::name_at(0)
         );
     }
+    // Same deal as SAVER: the env var is the startup default and the web UI
+    // owns it after that, so the render loop has one place to read it from
+    // rather than an env lookup and a live value that can disagree.
+    mirror.set_rotate_secs(cfg.rotate_secs);
     if cfg.http != "off" {
         let (m, addr) = (Arc::clone(&mirror), cfg.http.clone());
         std::thread::spawn(move || mirror::serve(m, &addr));

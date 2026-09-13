@@ -50,6 +50,8 @@ All of these are plain deployment env changes — no image rebuild.
 400 that changes nothing. The switch rebuilds the saver on the render thread and
 bumps the mirror's epoch, so viewers reconnect onto the new geometry exactly as
 they do for a modeset — and a restart goes back to whatever `SAVER` says.
+`SAVER_ROTATE_SECS` works the same way: the page can move it live and a restart
+goes back to the env value. See [Rotating on a timer](#rotating-on-a-timer).
 
 ### Squashed on pine: `SAVER_PIXEL_ASPECT`
 
@@ -159,12 +161,41 @@ the default and means off**, so a deployment that does not set it behaves as it
 always did; anything outside 0..86400 falls back to 0 rather than being clamped,
 which is what every other numeric knob here does.
 
-`SAVER` still picks the STARTING saver — rotation moves on from there. The next
-one is drawn at random from the other rows, never the one already showing: a
-walk down the table is predictable in the wrong way (the three toaster variants
-are adjacent, so a walk shows them back to back to back), and excluding the
-current row by construction rather than re-rolling makes "it never repeats
-itself" a property of the code instead of a probability. Every saver gets the
+Like `SAVER`, the env var is only the STARTUP value: the mirror page has an
+`auto-rotate` tick box and a minutes field, and `POST /rotate?mins=N` does the
+same thing by hand (`mins=0` is off, the ceiling is 1440 — a day, same as the
+env var). A value that is not a whole number of minutes in range is a 400 that
+changes nothing, because a lenient parse of `5x` would turn rotation off, which
+is the one outcome nobody asked for. The change takes effect on the next frame,
+with no restart, and `/meta` reports the live interval as `rotate_secs` so a
+second browser shows what the first one set rather than its own guess. Minutes
+on the wire because that is what a person asks for, seconds in `/meta` because
+that is the renderer's unit and the env var's; an interval that is not a whole
+number of minutes (only reachable from the env var) shows rounded on the page.
+
+Setting the interval **restarts the turn**, even when the number did not change:
+asking for five minutes 4:59 into a five-minute turn must buy five minutes, not
+one second. What the render loop reads per frame is one relaxed atomic load of a
+control word — the interval in its low half, a change counter in its high half,
+which is what makes re-asking for the same number count as a change. No lock, no
+env lookup, no clock read: see CLAUDE.md on the frame loop.
+
+`SAVER` still picks the STARTING saver — rotation moves on from there. The order
+is a **shuffled bag**: every saver, in random order, none of them again until all
+of them have been shown, then reshuffled. That is what "rotate through all the
+savers" has to mean — rolling an independent choice each time takes about 95
+turns to show you all 25 (coupon collector), eight hours at a five-minute
+interval, where the bag takes exactly 25 and two hours.
+
+A bag is not a walk down the table: a walk is predictable in the wrong way (the
+same saver always follows the same saver, and the three toaster variants are
+adjacent, so a walk shows them back to back to back), and a bag is reshuffled
+every cycle. "It never shows the same saver twice in a row" stays a property of
+the code rather than a probability — inside a bag the entries are distinct, and
+at the boundary between two bags the refill swaps the top entry away if it is
+the saver still on screen, rather than re-shuffling until it looks right. The bag
+is a fixed-size array sized from the table, shuffled in place, so nothing
+allocates. Every saver gets the
 same length turn; there is no per-saver table of seconds, because the expensive
 ones hold the target fps on this panel and so there is nothing to compensate for.
 
@@ -825,7 +856,7 @@ survive nginx re-chunking them on the way through the gate. `GET /meta` is the
 geometry, palette and glyph table; `GET /` is the page. `SAVER_HTTP=off`
 removes all of it.
 
-`GET /stat` is the live counters — `{"overruns":N,"viewers":N,"fps":N}`.
+`POST /rotate?mins=N` sets the rotation interval; `GET /stat` is the live counters — `{"overruns":N,"viewers":N,"fps":N}`.
 `overruns` is frames that ran past the frame budget, which is what a raised
 `SAVER_FPS` against the pod's 500m CFS quota shows up as: the render loop is
 stopped mid-period and runs a burst, and the burst is visible stutter on the

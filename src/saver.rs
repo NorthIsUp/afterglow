@@ -14,8 +14,9 @@ use crate::hypercube::Hypercube;
 use crate::life::Life;
 use crate::lissajous::Lissajous;
 use crate::matrix::Matrix;
-use crate::mirror::Mirror;
+use crate::mirror::{self, Mirror};
 use crate::moire::Moire;
+use crate::next_rand;
 use crate::pov::Pov;
 use crate::rain::Rain;
 use crate::sakura::Sakura;
@@ -29,7 +30,6 @@ use crate::toasters3::Toasters3;
 use crate::warp::Warp;
 use crate::worms::Worms;
 use crate::zot::Zot;
-use crate::{env_num, next_rand};
 
 /// A screensaver. One frame, one call. Dispatch happens here and NOWHERE below
 /// it: no `&dyn Palette`, no `fn cell(&self, x, y) -> Cell`, no `&mut dyn FnMut`
@@ -98,6 +98,11 @@ const SAVERS: &[(&str, Build)] = &[
     ("zot", |p, fps| Box::new(Zot::new(p, fps))),
 ];
 
+/// How many savers there are, for `Rotate`'s bag. A const because the bag is a
+/// fixed-size array: adding a row to the table above resizes it, and no refill
+/// ever allocates.
+const NSAVERS: usize = SAVERS.len();
+
 /// The name at an index the render loop is holding. Panics on an index no
 /// `index_of` produced, which is unreachable: the only writer is `select`.
 pub fn name_at(i: usize) -> &'static str {
@@ -120,18 +125,32 @@ pub fn make(name: &str, panel: &Panel, fps: u32) -> Box<dyn Saver> {
     build(panel, fps)
 }
 
-/// Automatic rotation: move to another saver every `SAVER_ROTATE_SECS`.
+/// Automatic rotation: move to another saver every N seconds.
+///
+/// The interval is the MIRROR's, not this struct's: `SAVER_ROTATE_SECS` is only
+/// the startup value and `POST /rotate` moves it while the pod runs. What lives
+/// here is the deadline that interval implies, re-derived whenever the mirror's
+/// control word changes under it.
 ///
 /// Zero — the default — is off, so a deployment that does not ask for this
 /// behaves exactly as it did. Out of range falls back to the default rather
 /// than clamping, which is `env_num`'s contract everywhere else.
 ///
-/// Order is RANDOM over the other rows rather than a walk down `SAVERS`. A walk
-/// is predictable in the wrong way: the same saver always follows the same
-/// saver forever, and the three toaster variants are adjacent in the table, so
-/// a walk shows them back to back to back. Excluding the current row by
-/// construction — rather than rolling again on a collision — makes "it never
-/// repeats itself" a property of the code instead of a probability.
+/// Order is a SHUFFLED BAG: every row, in random order, none repeated until all
+/// of them have been shown. Not a walk down `SAVERS` — the objection to a walk
+/// stands and is not being ignored here. A walk is predictable in the wrong way
+/// (the same saver always follows the same saver forever, and the three toaster
+/// variants are adjacent in the table, so a walk shows them back to back to
+/// back); a bag is reshuffled every cycle, so neither is true of it. What the
+/// bag adds over the plain roll this used to do is coverage: "rotate through
+/// ALL the savers" was the ask, and an independent roll each time takes ~95
+/// turns to show you all 25 (coupon collector) where the bag takes exactly 25 —
+/// eight hours versus two at a five-minute interval.
+///
+/// "Never the same saver twice in a row" stays a property of the code rather
+/// than a probability, which is the standard the old roll held itself to. Inside
+/// a bag it is free (the entries are distinct); across the boundary between two
+/// bags it is `refill`'s one swap.
 ///
 /// Uniform turns for every saver, deliberately: the cheap ones do not get
 /// longer ones. That trades one number for a table of per-saver seconds to
@@ -139,47 +158,94 @@ pub fn make(name: &str, panel: &Panel, fps: u32) -> Box<dyn Saver> {
 /// this panel, so there is nothing to compensate for.
 pub struct Rotate {
     every: Duration,
+    /// The control word `every` was decoded from. A `!=` against this is how a
+    /// live change is noticed without a lock — see `Mirror::set_rotate_secs`.
+    seen: u64,
     next: Instant,
     rng: u32,
+    /// The rows still to be shown this cycle, in `bag[..left]`, drawn from the
+    /// top. Sized once from the table and shuffled in place, so a refill
+    /// allocates nothing — it lands on a rotation boundary, which is already a
+    /// saver rebuild, but the frame path is no place to grow a Vec.
+    bag: [usize; NSAVERS],
+    left: usize,
 }
 
 impl Rotate {
-    pub fn from_env(now: Instant) -> Self {
+    pub fn new(now: Instant) -> Self {
         // Seeded off the clock so a restart does not replay the same order.
         // Same trick sakura grows its tree from.
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
             .unwrap_or(0x5EED_1234);
-        Self::new(
-            Duration::from_secs(env_num(&["SAVER_ROTATE_SECS"], 0, 0, 86_400) as u64),
-            now,
-            seed ^ std::process::id().wrapping_mul(0x9E37_79B9),
-        )
+        Self::seeded(now, seed ^ std::process::id().wrapping_mul(0x9E37_79B9))
     }
 
-    fn new(every: Duration, now: Instant, seed: u32) -> Self {
+    /// Starts with no interval at all: the first `due` adopts whatever the
+    /// mirror holds, which is the `SAVER_ROTATE_SECS` main put there.
+    fn seeded(now: Instant, seed: u32) -> Self {
         Self {
-            every,
-            next: now + every,
+            every: Duration::ZERO,
+            seen: 0,
+            next: now,
             rng: seed,
+            // Empty, so the first rotation fills it knowing what is on screen.
+            bag: [0; NSAVERS],
+            left: 0,
         }
     }
 
     /// The row to move to, or None when rotation is off or this saver's turn is
-    /// not up yet. `now` is the frame's OWN clock read, handed down rather than
-    /// taken here: with rotation off this is one compare per frame and no clock
-    /// read at all, and with it on it is no more than that. See CLAUDE.md on
-    /// the frame loop.
-    fn due(&mut self, now: Instant, cur: usize) -> Option<usize> {
+    /// not up yet. `now` is the frame's OWN clock read and `ctl` the mirror's
+    /// rotation word, both handed down rather than taken here: with rotation
+    /// off this is two compares per frame and no clock read at all, and with it
+    /// on it is no more than that. See CLAUDE.md on the frame loop.
+    fn due(&mut self, now: Instant, cur: usize, ctl: u64) -> Option<usize> {
+        // Someone moved the interval since the last frame. Adopt it and give
+        // what is on screen a full turn at the NEW length — the same restart a
+        // click gets, and for the same reason: five minutes asked for at 4:59
+        // into a turn must mean five minutes, not one second. The counter in
+        // the word's high half is what makes re-posting the same number count.
+        if ctl != self.seen {
+            self.seen = ctl;
+            self.every = Duration::from_secs(mirror::ctl_secs(ctl));
+            self.restart(now);
+        }
         if self.every.is_zero() || now < self.next {
             return None;
         }
         self.restart(now);
-        // `1 + rand % (len - 1)` is a non-zero step, so the result is uniform
-        // over every row EXCEPT `cur`. A one-row table has nowhere to go.
-        let span = SAVERS.len().checked_sub(1).filter(|s| *s > 0)?;
-        Some((cur + 1 + next_rand(&mut self.rng) as usize % span) % SAVERS.len())
+        if self.left == 0 {
+            self.refill(cur)?;
+        }
+        self.left -= 1;
+        Some(self.bag[self.left])
+    }
+
+    /// Every row, shuffled, none of them repeated until the bag empties.
+    /// Fisher-Yates in place: no allocation, and no re-rolling of the whole
+    /// shuffle to satisfy the boundary rule below. None for a one-row table,
+    /// which has nowhere to go.
+    fn refill(&mut self, cur: usize) -> Option<()> {
+        let top = NSAVERS.checked_sub(1).filter(|t| *t > 0)?;
+        for (i, slot) in self.bag.iter_mut().enumerate() {
+            *slot = i;
+        }
+        for i in (1..NSAVERS).rev() {
+            self.bag
+                .swap(i, next_rand(&mut self.rng) as usize % (i + 1));
+        }
+        // The top of the bag is drawn first, so it is the row that would follow
+        // `cur` immediately — the one place a bag can show the same saver twice
+        // in a row. Swapping it with any other entry fixes that by construction
+        // and keeps the bag a permutation; re-shuffling until it comes out
+        // right would make it a probability again.
+        if self.bag[top] == cur {
+            self.bag.swap(top, next_rand(&mut self.rng) as usize % top);
+        }
+        self.left = NSAVERS;
+        Some(())
     }
 
     /// Give whatever is on screen now a full turn.
@@ -210,7 +276,9 @@ pub fn switch(
     panel: &Panel,
     fps: u32,
 ) -> bool {
-    if let Some(i) = rot.due(now, *selected) {
+    // Two relaxed loads per frame now — the rotation word and the selection —
+    // off the same cache line, for the reason below.
+    if let Some(i) = rot.due(now, *selected, mirror.rotate_ctl()) {
         mirror.select_at(i);
     }
     // One relaxed load per frame, same as the mirror's viewer count, and free
@@ -257,6 +325,14 @@ pub fn frame(saver: &mut dyn Saver, buf: &mut [u32], panel: &Panel) -> Damage {
 mod tests {
     use super::*;
 
+    /// A control word for `secs`, built the way the HTTP thread builds it —
+    /// the packing is the mirror's and no test gets to hand-roll it.
+    fn ctl(secs: u64) -> u64 {
+        let m = Mirror::new(15);
+        m.set_rotate_secs(secs);
+        m.rotate_ctl()
+    }
+
     /// One table makes NAMES-vs-make drift impossible, so what is left to check
     /// is a copy-paste inside a row: a name paired with the constructor for a
     /// different saver. That still renders the wrong thing for a valid name.
@@ -281,13 +357,14 @@ mod tests {
     #[test]
     fn a_turn_lasts_the_whole_interval_and_then_ends() {
         let t0 = Instant::now();
-        let mut r = Rotate::new(Duration::from_secs(30), t0, 1);
-        assert_eq!(r.due(t0, 0), None);
-        assert_eq!(r.due(t0 + Duration::from_millis(29_999), 0), None);
-        assert!(r.due(t0 + Duration::from_secs(30), 0).is_some());
+        let c = ctl(30);
+        let mut r = Rotate::seeded(t0, 1);
+        assert_eq!(r.due(t0, 0, c), None);
+        assert_eq!(r.due(t0 + Duration::from_millis(29_999), 0, c), None);
+        assert!(r.due(t0 + Duration::from_secs(30), 0, c).is_some());
         // And the next turn is a full interval from THERE, not from t0.
-        assert_eq!(r.due(t0 + Duration::from_secs(59), 0), None);
-        assert!(r.due(t0 + Duration::from_secs(60), 0).is_some());
+        assert_eq!(r.due(t0 + Duration::from_secs(59), 0, c), None);
+        assert!(r.due(t0 + Duration::from_secs(60), 0, c).is_some());
     }
 
     /// Zero is the default and must be genuinely off — not a very short
@@ -296,31 +373,105 @@ mod tests {
     #[test]
     fn zero_never_rotates() {
         let t0 = Instant::now();
-        let mut r = Rotate::new(Duration::ZERO, t0, 1);
+        let c = ctl(0);
+        let mut r = Rotate::seeded(t0, 1);
         for s in [0, 1, 30, 3600, 86_400, 172_800] {
-            assert_eq!(r.due(t0 + Duration::from_secs(s), 3), None, "at {s}s");
+            assert_eq!(r.due(t0 + Duration::from_secs(s), 3, c), None, "at {s}s");
         }
     }
 
-    /// "Never the same saver twice in a row" is by construction, so check the
-    /// construction: from every row, over many rolls, the step is never zero
-    /// and never lands off the table.
+    /// The whole point of `POST /rotate`: a new interval takes effect on the
+    /// next frame, and what is on screen gets a full turn at the NEW length
+    /// rather than being cut off by what was left of the old one. Re-asking for
+    /// the same number restarts it too — that is what the counter in the
+    /// control word buys, and a plain seconds compare would not.
+    #[test]
+    fn setting_the_interval_takes_effect_live_and_restarts_the_turn() {
+        let t0 = Instant::now();
+        let m = Mirror::new(15);
+        m.set_rotate_secs(30);
+        let mut r = Rotate::seeded(t0, 3);
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        assert_eq!(r.due(t0, 0, m.rotate_ctl()), None);
+
+        // 29s into a 30s turn, someone asks for 10s. Nothing at 30 — where the
+        // old interval would have fired — and the new turn ends at 39.
+        m.set_rotate_secs(10);
+        assert_eq!(r.due(at(29), 0, m.rotate_ctl()), None);
+        assert_eq!(r.due(at(30), 0, m.rotate_ctl()), None);
+        assert_eq!(r.due(at(38), 0, m.rotate_ctl()), None);
+        assert!(r.due(at(39), 0, m.rotate_ctl()).is_some());
+
+        // Asking for ten again at 48 is still a restart: 58, not the 49 the
+        // turn that started at 39 was heading for.
+        m.set_rotate_secs(10);
+        assert_eq!(r.due(at(48), 0, m.rotate_ctl()), None);
+        assert_eq!(r.due(at(49), 0, m.rotate_ctl()), None);
+        assert!(r.due(at(58), 0, m.rotate_ctl()).is_some());
+
+        // And off is off from the next frame, not at the end of this turn.
+        m.set_rotate_secs(0);
+        assert_eq!(r.due(at(3600), 0, m.rotate_ctl()), None);
+    }
+
+    /// The bag's coverage rule, which is the whole reason it is a bag: exactly
+    /// one visit to every saver before any of them comes round again. Checked
+    /// over several cycles, because a bag that refills wrong is right once.
+    /// The boundary between two bags is checked at the same time — it is the
+    /// one place a shuffle can show the same saver twice in a row, and the
+    /// `assert_ne` below straddles it.
+    #[test]
+    fn a_bag_shows_every_saver_once_before_any_of_them_again() {
+        let t0 = Instant::now();
+        let c = ctl(1);
+        let mut r = Rotate::seeded(t0, 0x0BA6_5EED);
+        assert_eq!(r.due(t0, 0, c), None);
+        let mut cur = 0;
+        let mut t = 0u64;
+        for cycle in 0..4 {
+            let mut shown = Vec::new();
+            for _ in 0..SAVERS.len() {
+                t += 1;
+                let next = r.due(t0 + Duration::from_secs(t), cur, c).unwrap();
+                assert_ne!(next, cur, "{} twice in a row, cycle {cycle}", name_at(cur));
+                shown.push(next);
+                cur = next;
+            }
+            let mut once = shown.clone();
+            once.sort_unstable();
+            once.dedup();
+            // Same length after dedup as before, and as the table: every saver,
+            // exactly one apiece. A bag that refills early or drops a row fails
+            // here however plausible its order looks.
+            assert_eq!(
+                (once.len(), shown.len()),
+                (SAVERS.len(), SAVERS.len()),
+                "cycle {cycle} was not a clean sweep: {shown:?}"
+            );
+        }
+    }
+
+    /// A bag is not a walk, and this is where that is enforced: over many
+    /// cycles the distance from one saver to the next takes every non-zero
+    /// value. A fixed walk (always +1) and a shuffle too narrow to reach the
+    /// far end of the table both satisfy "never repeats" and are both wrong.
     #[test]
     fn rotation_never_picks_the_saver_already_showing() {
         let t0 = Instant::now();
-        let mut r = Rotate::new(Duration::from_secs(1), t0, 0xC0FF_EE01);
+        let c = ctl(1);
+        let mut r = Rotate::seeded(t0, 0xC0FF_EE01);
+        // The first frame is where the interval is adopted and the clock
+        // starts; the rolls under test are the ones after it.
+        assert_eq!(r.due(t0, 0, c), None);
         let mut steps = vec![false; SAVERS.len()];
         let mut cur = 0;
         for i in 1..=2000u32 {
-            let next = r.due(t0 + Duration::from_secs(i.into()), cur).unwrap();
+            let next = r.due(t0 + Duration::from_secs(i.into()), cur, c).unwrap();
             assert_ne!(next, cur, "repeated {} at roll {i}", name_at(cur));
             assert!(next < SAVERS.len());
             steps[(next + SAVERS.len() - cur) % SAVERS.len()] = true;
             cur = next;
         }
-        // Every non-zero distance and no zero one. A fixed walk (always +1) and
-        // a roll too narrow to reach the far end of the table both pass the
-        // line above, and both are the wrong shuffle.
         assert!(!steps[0], "a zero step is the repeat this test is about");
         assert!(
             steps[1..].iter().all(|&s| s),
@@ -335,7 +486,8 @@ mod tests {
         let panel = Panel::new(128, 128, 128);
         let mirror = Mirror::new(15);
         let t0 = Instant::now();
-        let mut rot = Rotate::new(Duration::from_secs(30), t0, 7);
+        let mut rot = Rotate::seeded(t0, 7);
+        mirror.set_rotate_secs(30);
         let mut selected = mirror.selected();
         let mut saver = make(name_at(selected), &panel, 30);
 
@@ -399,11 +551,22 @@ mod tests {
         let panel = Panel::new(128, 128, 128);
         let mirror = Mirror::new(15);
         let t0 = Instant::now();
-        let mut rot = Rotate::new(Duration::from_secs(5), t0, 42);
+        let mut rot = Rotate::seeded(t0, 42);
+        mirror.set_rotate_secs(5);
         let mut selected = mirror.selected();
         let mut saver = make(name_at(selected), &panel, 30);
         let first = saver.name();
 
+        // Frame zero adopts the interval and starts the clock — see `due`.
+        assert!(!switch(
+            &mut saver,
+            &mut selected,
+            &mut rot,
+            t0,
+            &mirror,
+            &panel,
+            30
+        ));
         assert!(!switch(
             &mut saver,
             &mut selected,
