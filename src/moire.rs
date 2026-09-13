@@ -73,24 +73,25 @@ const RADIAL: u8 = 2;
 /// picture.
 const SPLAY: f32 = 0.09;
 
-/// One grating. Angle, offset and centre are derived from `t` each frame rather
-/// than integrated, so a pod up for a week cannot accumulate float drift into
-/// the geometry.
+/// One grating. Every moving quantity is a RATE IN TURNS PER FRAME held in u64
+/// fixed point, and the phase is `rate * frame_counter` — see `phase`. Nothing
+/// is integrated and nothing is measured in seconds, so the geometry at hour
+/// one and at year ten is computed the same way, to the same precision.
 struct Family {
     kind: u8,
     inv_d: f32,
     ang0: f32,
-    spin: f32,
+    spin_inc: u64,
     off0: f32,
-    off_rate: f32,
+    off_inc: u64,
     /// Lissajous wander of the centre, for the kinds that have one. A pinned
     /// centre makes a concentric family look like a printed target.
     cx0: f32,
     cy0: f32,
     ax: f32,
     ay: f32,
-    fx: f32,
-    fy: f32,
+    fx_inc: u64,
+    fy_inc: u64,
     ph: f32,
     spokes: f32,
 }
@@ -105,12 +106,46 @@ fn turns(v: f32) -> u32 {
     ((v - v.floor()) * 4_294_967_296.0) as u64 as u32
 }
 
+/// A rate in turns per second, as turns per frame in u64 fixed point where 2^64
+/// is one whole turn.
+fn rate(turns_per_sec: f64, fps: u32) -> u64 {
+    let per_frame = (turns_per_sec / f64::from(fps)).rem_euclid(1.0);
+    // Two halves because `2f64.powi(64) as u64` saturates; the shift wraps the
+    // top bit off, which is the modulo we want anyway.
+    ((per_frame * 9_223_372_036_854_775_808.0) as u64) << 1
+}
+
+/// Phase after `n` frames at `rate` turns per frame, as a fraction of a turn.
+///
+/// The clock is an integer frame count and the u64 multiply wraps, so the wrap
+/// IS the reduction modulo one turn: the result is exact for every `n` a pod can
+/// reach. An f32 (or f64) clock in seconds cannot do this — once the value
+/// passes the point where its ulp exceeds the per-frame increment the animation
+/// speeds up, and past 2^23 s it stops entirely. Here the increment never
+/// changes size, whatever `n` is, so there is no such point.
+#[inline]
+fn phase(rate: u64, n: u64) -> f32 {
+    // 24 bits of a turn: 6e-8, against a smallest per-frame step of 3e-4.
+    (rate.wrapping_mul(n) >> 40) as f32 / (1u64 << 24) as f32
+}
+
 impl Family {
     #[inline]
-    fn centre(&self, t: f32) -> (f32, f32) {
+    fn ang(&self, n: u64) -> f32 {
+        self.ang0 + std::f32::consts::TAU * phase(self.spin_inc, n)
+    }
+
+    #[inline]
+    fn off(&self, n: u64) -> f32 {
+        self.off0 + phase(self.off_inc, n)
+    }
+
+    #[inline]
+    fn centre(&self, n: u64) -> (f32, f32) {
+        const TAU: f32 = std::f32::consts::TAU;
         (
-            self.cx0 + self.ax * (self.fx * t + self.ph).sin(),
-            self.cy0 + self.ay * (self.fy * t).sin(),
+            self.cx0 + self.ax * (TAU * phase(self.fx_inc, n) + self.ph).sin(),
+            self.cy0 + self.ay * (TAU * phase(self.fy_inc, n)).sin(),
         )
     }
 }
@@ -132,14 +167,22 @@ pub struct Moire {
     /// across the dot pitch, and that sparkle drowns the fringe it is meant to
     /// be showing.
     lvl_of: [u16; 5],
-    t: f32,
-    dt: f32,
+    /// Frames since start, the only clock. u64 at 15 fps overflows in 39
+    /// billion years; an f32 in seconds froze after 24 days.
+    frames: u64,
 }
 
 impl Moire {
     pub fn new(panel: &Panel, fps: u32) -> Self {
-        let cell_w = env_num(&["MOIRE_CELL_W"], 8, 4, 64) as usize;
-        let cell_h = env_num(&["MOIRE_CELL_H"], 32, 8, 128) as usize;
+        // The floors are a CPU limit, not taste. Ink accumulates into a
+        // 2x4-per-cell dot buffer, so halving either cell dimension doubles the
+        // dots and more than doubles the cost. Measured on the Pi against the
+        // pod's 500m limit: the default 8x32 is ~255m, the old floors were
+        // 740m (`MOIRE_CELL_H=8`) and 595m (`MOIRE_CELL_W=4`) — both would have
+        // been throttled into a stutter by a documented in-range value. 8x24 is
+        // ~330m, and everything coarser is cheaper still.
+        let cell_w = env_num(&["MOIRE_CELL_W"], 8, 8, 64) as usize;
+        let cell_h = env_num(&["MOIRE_CELL_H"], 32, 24, 128) as usize;
         let spacing = env_num(&["MOIRE_SPACING"], 64, 6, 400) as f32;
         let duty = env_num(&["MOIRE_DUTY"], 22, 2, 90) as f32 / 100.0;
         // Millidegrees per SECOND. 0.4 deg/s: two counter-rotating gratings
@@ -181,15 +224,24 @@ impl Moire {
                 kind,
                 inv_d: 1.0 / d,
                 ang0: 0.35 + f * SPLAY,
-                spin: spin_rad * sgn * (1.0 + 0.3 * f),
+                spin_inc: rate(
+                    f64::from(spin_rad * sgn * (1.0 + 0.3 * f)) / f64::from(std::f32::consts::TAU),
+                    fps,
+                ),
                 off0: f * 0.37,
-                off_rate: drift * sgn / d,
+                off_inc: rate(f64::from(drift * sgn / d), fps),
                 cx0: w * 0.5,
                 cy0: h * 0.5,
                 ax: w * 0.17,
                 ay: h * 0.21,
-                fx: 0.031 + 0.011 * f,
-                fy: 0.023 + 0.013 * f,
+                fx_inc: rate(
+                    f64::from(0.031 + 0.011 * f) / f64::from(std::f32::consts::TAU),
+                    fps,
+                ),
+                fy_inc: rate(
+                    f64::from(0.023 + 0.013 * f) / f64::from(std::f32::consts::TAU),
+                    fps,
+                ),
                 ph: f * 1.7,
                 spokes: 48.0 + 12.0 * f,
             });
@@ -210,8 +262,7 @@ impl Moire {
             sub_h: cell_h as f32 / 4.0,
             duty,
             lvl_of,
-            t: 0.0,
-            dt: 1.0 / fps as f32,
+            frames: 0,
         }
     }
 
@@ -219,7 +270,7 @@ impl Moire {
     /// family per frame — never per dot — which is also what lets the straight
     /// case reduce to two adds and a floor.
     fn stamp(&mut self) {
-        let (dw, dh, duty, t) = (self.dw, self.dh, self.duty, self.t);
+        let (dw, dh, duty, n) = (self.dw, self.dh, self.duty, self.frames);
         let duty_u32 = turns(duty);
         let (sw, sh) = (self.sub_w, self.sub_h);
 
@@ -230,9 +281,9 @@ impl Moire {
         let mut ns = 0usize;
         let (mut p0, mut sx, mut sy) = ([0u32; 4], [0u32; 4], [0u32; 4]);
         for f in self.families.iter().filter(|f| f.kind == STRAIGHT) {
-            let (sa, ca) = (f.ang0 + f.spin * t).sin_cos();
+            let (sa, ca) = f.ang(n).sin_cos();
             let (dpx, dpy) = (sw * ca * f.inv_d, sh * sa * f.inv_d);
-            p0[ns] = turns(0.5 * dpx + 0.5 * dpy + f.off0 + f.off_rate * t);
+            p0[ns] = turns(0.5 * dpx + 0.5 * dpy + f.off(n));
             sx[ns] = turns(dpx);
             sy[ns] = turns(dpy);
             ns += 1;
@@ -263,8 +314,8 @@ impl Moire {
         // loops. `MOIRE_KINDS=r` costs roughly five straight families; that is
         // why the default has none.
         for f in self.families.iter().filter(|f| f.kind != STRAIGHT) {
-            let off = f.off0 + f.off_rate * t;
-            let (cx, cy) = f.centre(t);
+            let off = f.off(n);
+            let (cx, cy) = f.centre(n);
             if f.kind == CONCENTRIC {
                 for j in 0..dh {
                     let dy = (j as f32 + 0.5) * sh - cy;
@@ -294,7 +345,7 @@ impl Moire {
 
 impl Saver for Moire {
     fn render(&mut self, s: &mut Surface<'_>) {
-        self.t += self.dt;
+        self.frames = self.frames.wrapping_add(1);
         self.stamp();
         let (grid, acc, dw, lvl_of) = (&mut self.grid, &self.acc[..], self.dw, self.lvl_of);
         grid.fill(|cx, cy| {
@@ -471,12 +522,12 @@ mod tests {
             flat.families[0].kind,
             flat.families[0].inv_d,
             flat.families[0].ang0,
-            flat.families[0].spin,
+            flat.families[0].spin_inc,
             flat.families[0].off0,
-            flat.families[0].off_rate,
+            flat.families[0].off_inc,
         );
         for f in flat.families.iter_mut() {
-            (f.kind, f.inv_d, f.ang0, f.spin, f.off0, f.off_rate) = g;
+            (f.kind, f.inv_d, f.ang0, f.spin_inc, f.off0, f.off_inc) = g;
         }
         for _ in 0..30 {
             saver::frame(&mut flat, &mut buf, &p);
@@ -517,5 +568,77 @@ mod tests {
             "after a second only {moved} of {} cells moved",
             snap.len()
         );
+    }
+
+    /// T6. The clock runs at one rate whatever the uptime. The shipped clock
+    /// was `t: f32` in seconds: past 2^20 s (12 days) its ulp exceeded the
+    /// 1/15 s increment so every add rounded up to a whole ulp and the
+    /// animation ran 1.9x fast, and past 2^23 s (24 days) the increment
+    /// rounded to nothing and the picture froze for good. A pod here runs for
+    /// weeks, so both were reachable.
+    #[test]
+    fn the_clock_runs_at_one_rate_at_any_uptime() {
+        let p = panel();
+        let mut buf = vec![0u32; p.buf_len()];
+        let mut base = 0.0f32;
+        for (i, days) in [0u64, 13, 30, 365, 10_000].into_iter().enumerate() {
+            let mut m = Moire::new(&p, 15);
+            m.frames = days * 86_400 * 15;
+            // The centre wander, ~0.005 turns/s: the slowest phase in the
+            // saver, so a second of it cannot wrap and the advance is
+            // unambiguous.
+            let inc = m.families[0].fx_inc;
+            let before = phase(inc, m.frames);
+            saver::frame(&mut m, &mut buf, &p);
+            let snap: Vec<Cell> = m.grid.cells().to_vec();
+            for _ in 0..15 {
+                saver::frame(&mut m, &mut buf, &p);
+            }
+            let adv = (phase(inc, m.frames) - before).rem_euclid(1.0);
+            if i == 0 {
+                base = adv;
+                assert!(base > 0.0, "the clock does not advance at all");
+            }
+            assert!(
+                (adv - base).abs() < 0.01 * base,
+                "day {days}: a second advanced the phase by {adv}, not {base}"
+            );
+            let moved = m
+                .grid
+                .cells()
+                .iter()
+                .zip(snap.iter())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert!(
+                moved * 4 > snap.len(),
+                "day {days}: only {moved} of {} cells moved in a second",
+                snap.len()
+            );
+        }
+    }
+
+    /// T7. What T4 cannot see: the families are kept apart in BOTH spacing and
+    /// angle, and the beat survives either one being flattened. The beat period
+    /// is `d / sin(dang)` at equal spacing and about `d^2 / dd` at equal angle,
+    /// so a single grating separation still draws fringes and T4 stays green
+    /// when one of them is deleted. This pins both.
+    #[test]
+    fn every_pair_of_families_differs_in_both_spacing_and_angle() {
+        let p = panel();
+        let m = Moire::new(&p, 15);
+        assert!(m.families.len() >= 2, "one grating cannot beat with itself");
+        for (i, a) in m.families.iter().enumerate() {
+            for (j, b) in m.families.iter().enumerate().skip(i + 1) {
+                assert!(
+                    (a.inv_d - b.inv_d).abs() > 0.01 * a.inv_d,
+                    "families {i} and {j} share a spacing: no beat at equal angle"
+                );
+                assert!(
+                    (a.ang0 - b.ang0).abs() > 0.01 * SPLAY,
+                    "families {i} and {j} share an angle: no beat at equal spacing"
+                );
+            }
+        }
     }
 }

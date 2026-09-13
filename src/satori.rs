@@ -140,10 +140,29 @@ pub struct Satori {
 
 impl Satori {
     pub fn new(panel: &Panel, fps: u32) -> Self {
-        let cell_w = env_num(&["SATORI_CELL_W"], 16, 4, 64) as usize;
-        let cell_h = env_num(&["SATORI_CELL_H"], 16, 4, 64) as usize;
-        let fields = env_num(&["SATORI_FIELDS"], 9, 2, 32) as usize;
-        let mut rng = env_num(&["SATORI_SEED"], 0x5A70_1234, 1, u32::MAX as i64) as u32;
+        Self::build(
+            panel,
+            fps,
+            env_num(&["SATORI_CELL_W"], 16, 4, 64) as usize,
+            env_num(&["SATORI_CELL_H"], 16, 4, 64) as usize,
+            env_num(&["SATORI_FIELDS"], 9, 2, 32) as usize,
+            env_num(&["SATORI_SEED"], 0x5A70_1234, 1, u32::MAX as i64) as u32,
+        )
+    }
+
+    /// The geometry and the seed come in as arguments so the tests can vary
+    /// them without `set_var`: cargo runs tests in parallel threads and the
+    /// environment is process-wide, so one test's geometry was landing in
+    /// another's saver.
+    fn build(
+        panel: &Panel,
+        fps: u32,
+        cell_w: usize,
+        cell_h: usize,
+        fields: usize,
+        seed: u32,
+    ) -> Self {
+        let mut rng = seed;
         // Everything below is expressed in seconds and converted here, so a
         // 15 fps panel and a 30 fps dump move at the same speed.
         let per = |k: &str, def: i64, hi: i64| {
@@ -296,13 +315,15 @@ impl Saver for Satori {
 }
 
 /// Where a node's line actually falls: its wish, clamped so neither child drops
-/// below `MIN`. A parent that glided may have squeezed this range since the wish
-/// was set, which is why the clamp lives here and not at the writer.
-fn split_at(a: usize, b: usize, want: usize) -> usize {
-    if b - a < 2 * MIN {
-        return (a + b) / 2;
-    }
-    want.clamp(a + MIN, b - MIN)
+/// below `MIN` — or `None` when the range has no room for two of them. The
+/// clamp lives here rather than at the writer because a parent that glided may
+/// have squeezed this range since the wish was set.
+///
+/// `None` is the whole point: the old form returned the midpoint of a squeezed
+/// range, which is a `MIN` that anything narrower than `2 * MIN` ignores, and
+/// it measured 2-cell fields against a stated floor of 11.
+fn split_at(a: usize, b: usize, want: usize) -> Option<usize> {
+    (b - a >= 2 * MIN).then(|| want.clamp(a + MIN, b - MIN))
 }
 
 type Rect = (usize, usize, usize, usize);
@@ -314,11 +335,18 @@ fn paint(nodes: &[Node], n: usize, r: Rect, cols: usize, region: &mut [u8], tex:
         stamp(nd.leaf, r, cols, region, tex);
         return;
     }
+    let (lo, hi) = if nd.axis == 0 { (x0, x1) } else { (y0, y1) };
+    let Some(p) = split_at(lo, hi, nd.pos as usize) else {
+        // Squeezed below two fields' worth: the whole range goes to one child
+        // rather than being cut into stripes. The other field is gone until the
+        // glide gives the range back, which is the honest reading of MIN — a
+        // field is either at least MIN across or it is not on the panel.
+        paint(nodes, nd.kids[0] as usize, r, cols, region, tex);
+        return;
+    };
     let (a, b) = if nd.axis == 0 {
-        let p = split_at(x0, x1, nd.pos as usize);
         ((x0, y0, p, y1), (p, y0, x1, y1))
     } else {
-        let p = split_at(y0, y1, nd.pos as usize);
         ((x0, y0, x1, p), (x0, p, x1, y1))
     };
     paint(nodes, nd.kids[0] as usize, a, cols, region, tex);
@@ -439,14 +467,10 @@ mod tests {
         Panel::new(1920, 1080, 1920)
     }
 
-    fn saver_at(cell: i64) -> Satori {
-        std::env::set_var("SATORI_CELL_W", cell.to_string());
-        std::env::set_var("SATORI_CELL_H", cell.to_string());
-        let p = panel();
-        let s = Satori::new(&p, 15);
-        std::env::remove_var("SATORI_CELL_W");
-        std::env::remove_var("SATORI_CELL_H");
-        s
+    /// Explicit geometry, never `set_var`: the tests run in parallel threads
+    /// of one process, so an env var set by one is read by every other.
+    fn saver_at(cell: usize) -> Satori {
+        Satori::build(&panel(), 15, cell, cell, 9, 0x5A70_1234)
     }
 
     #[test]
@@ -508,13 +532,9 @@ mod tests {
     /// what proves it never allocates is that none of them ever resizes.
     #[test]
     fn render_never_allocates() {
-        std::env::set_var("SATORI_CELL_W", "16");
-        std::env::set_var("SATORI_CELL_H", "16");
         // Small, but still wide enough in cells for `compose` to split at all.
         let p = Panel::new(640, 400, 640);
-        let mut c = Satori::new(&p, 15);
-        std::env::remove_var("SATORI_CELL_W");
-        std::env::remove_var("SATORI_CELL_H");
+        let mut c = Satori::build(&p, 15, 16, 16, 9, 0x5A70_1234);
         let mut buf = vec![0u32; p.buf_len()];
         let sizes = |c: &Satori| {
             (
@@ -576,5 +596,93 @@ mod tests {
             }
         }
         assert!(glides > 0, "no split line was ever in motion");
+    }
+
+    /// Every leaf rectangle the tree currently describes.
+    fn leaves(nodes: &[Node], n: usize, r: Rect, out: &mut Vec<Rect>) {
+        let nd = nodes[n];
+        let (x0, y0, x1, y1) = r;
+        if nd.kids[0] == 0 {
+            out.push(r);
+            return;
+        }
+        let (lo, hi) = if nd.axis == 0 { (x0, x1) } else { (y0, y1) };
+        let Some(p) = split_at(lo, hi, nd.pos as usize) else {
+            leaves(nodes, nd.kids[0] as usize, r, out);
+            return;
+        };
+        let (a, b) = if nd.axis == 0 {
+            ((x0, y0, p, y1), (p, y0, x1, y1))
+        } else {
+            ((x0, y0, x1, p), (x0, p, x1, y1))
+        };
+        leaves(nodes, nd.kids[0] as usize, a, out);
+        leaves(nodes, nd.kids[1] as usize, b, out);
+    }
+
+    /// `MIN` is an invariant, not a comment. It used to be a comment: when a
+    /// gliding parent squeezed a node's range below `2 * MIN` the clamp
+    /// inverted and `split_at` fell back to the midpoint, so fields collapsed —
+    /// 2 cells against a stated floor of 11, over these same seeds. A range
+    /// with no room for two fields now holds one.
+    #[test]
+    fn no_field_ever_falls_below_min() {
+        let p = panel();
+        let mut buf = vec![0u32; p.buf_len()];
+        let mut worst = usize::MAX;
+        let mut rects = Vec::new();
+        for seed in [
+            1u32,
+            7,
+            99,
+            0x5A70_1234,
+            0xDEAD_BEEF,
+            12_345,
+            777,
+            31_337,
+            424_242,
+            0x0BAD_F00D,
+        ] {
+            let mut c = Satori::build(&p, 15, 16, 16, 9, seed);
+            let (cols, rows) = (c.grid.cols(), c.grid.rows());
+            for n in 0..20_000 {
+                saver::frame(&mut c, &mut buf, &p);
+                if n % 15 != 0 {
+                    continue;
+                }
+                rects.clear();
+                leaves(&c.nodes, 0, (0, 0, cols, rows), &mut rects);
+                for (x0, y0, x1, y1) in rects.iter().copied() {
+                    worst = worst.min((x1 - x0).min(y1 - y0));
+                }
+            }
+        }
+        assert!(
+            worst >= MIN,
+            "smallest field was {worst} cells against a floor of {MIN}"
+        );
+    }
+
+    /// The layout has to keep recomposing. Every moving part of it — the drift
+    /// that retargets a split, the glide that walks it a cell at a time, and
+    /// `split_at` honouring the wish at all — can be deleted by pinning every
+    /// split to the midpoint, and the rest of this file stays green: the field
+    /// map is still consistent with the tree, it just never changes again.
+    #[test]
+    fn the_split_lines_actually_move_the_fields() {
+        let p = panel();
+        let mut c = saver_at(16);
+        let mut buf = vec![0u32; p.buf_len()];
+        saver::frame(&mut c, &mut buf, &p);
+        let first = c.region.clone();
+        let mut moved = 0;
+        for _ in 0..3_000 {
+            saver::frame(&mut c, &mut buf, &p);
+            moved += usize::from(c.region != first);
+        }
+        assert!(
+            moved > 0,
+            "3000 frames and no cell ever changed field: the layout is frozen"
+        );
     }
 }
