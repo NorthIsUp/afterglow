@@ -115,13 +115,26 @@ Set it and the mirror page grows an **actual size** button that sizes the canvas
 to the same physical rectangle as the panel, so a saver on the web page is the
 size it is on the wall.
 
-That needs one thing CSS cannot supply: how big the viewer's own monitor is.
-`width: 200mm` is 200mm only when the browser's CSS inch is a real inch, which on
-a scaled or HiDPI display it is not. So the first click asks the viewer to hold a
-credit card against the screen and drag a bar to match it — an ID-1 card
-(ISO/IEC 7810) is 85.60mm to a tenth of a millimetre, and it is the one ruler
-everybody already owns. The resulting px-per-mm is kept in `localStorage`, per
-viewer and per device; it never reaches the server.
+**It is on by default.** CSS cannot supply the other half of the sum — how big
+the viewer's own monitor is — because `width: 200mm` is 200mm only when the
+browser's CSS inch is a real inch, which on a scaled or HiDPI display it is not.
+Uncalibrated, the page uses the nominal 96 CSS px to the inch, which is within a
+few per cent on an unscaled display and can be well out on a scaled one. The
+button says `actual size (uncalibrated)` when that is what it is doing, because a
+viewer holding the page up against the real panel deserves to know the number is
+a guess before concluding the maths is wrong.
+
+**calibrate** makes it exact, and can be reopened at any time to re-adjust:
+hold a credit card against the screen and drag the bar to match it. An ID-1 card
+(ISO/IEC 7810) is 85.60mm to a tenth of a millimetre and is the one ruler
+everybody already owns. The canvas resizes live under the slider — you are
+matching the panel, not committing blind — and the readout shows the implied dpi.
+**reset** drops back to the nominal inch by removing the stored value rather than
+overwriting it with today's guess, so a future browser with a better answer is
+not permanently overridden.
+
+The px-per-mm lives in `localStorage`, per viewer and per device; it never
+reaches the server.
 
 At actual size the canvas deliberately ignores the fit-to-window limits — the
 point is a fixed physical size, so a panel bigger than the browser window

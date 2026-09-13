@@ -89,6 +89,14 @@
     width: 20rem;
     accent-color: #3a6;
   }
+  #calrow {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  #calnow {
+    opacity: 0.7;
+  }
   #pick button[aria-pressed="true"] {
     color: #7cf65d;
     border-color: #3a6;
@@ -98,7 +106,8 @@
 <div id="pick"></div>
 <div id="status">connecting…</div>
 <div id="life">
-  <button id="lifetoggle" hidden>actual size</button>
+  <button id="lifetoggle" hidden>fit window</button>
+  <button id="calopen" hidden>calibrate</button>
   <div id="cal" hidden>
     <p>
       Hold a credit card against the screen and drag until the bar matches its
@@ -106,7 +115,11 @@
     </p>
     <div id="card"></div>
     <input id="slider" type="range" min="1.0" max="12.0" step="0.01" />
-    <button id="caldone">done</button>
+    <div id="calrow">
+      <button id="caldone">done</button>
+      <button id="calreset">reset</button>
+      <span id="calnow"></span>
+    </div>
   </div>
 </div>
 <script>
@@ -213,13 +226,24 @@
   const CARD_MM = 85.6;
   const PXMM = "mirror.pxPerMm";
 
-  function pxPerMm() {
+  // 96 CSS px to the inch is what the spec nominally says, and it is the only
+  // guess available before the viewer has measured anything. It is within a few
+  // per cent on an unscaled display and can be well out on a scaled or HiDPI
+  // one — which is the whole reason `calibrate` exists. Being approximately
+  // right by default beats being exactly right only for people who click.
+  const NOMINAL_PX_MM = 96 / 25.4;
+
+  function calibrated() {
     try {
       const v = parseFloat(localStorage.getItem(PXMM));
       return v > 0 ? v : 0;
     } catch {
       return 0;
     }
+  }
+
+  function pxPerMm() {
+    return calibrated() || NOMINAL_PX_MM;
   }
 
   function setPxPerMm(v) {
@@ -233,11 +257,17 @@
   // The panel is `panel_mm` wide and `panel_mm / ar` tall, `ar` already being
   // the shape the glass shows rather than the framebuffer's. Sized in CSS px
   // off the viewer's own measurement.
-  let actual = false;
+  // ON by default. The panel is 190x59mm, which at any plausible px-per-mm is a
+  // few hundred CSS px — small enough that defaulting to it cannot produce a
+  // page that overflows someone's window.
+  let actual = true;
 
   function applyActualSize() {
+    applyActualSizeWith(pxPerMm());
+  }
+
+  function applyActualSizeWith(k) {
     const mm = meta && meta.panel_mm;
-    const k = pxPerMm();
     if (!actual || !mm || !k) {
       canvas.style.width = "";
       canvas.style.height = "";
@@ -258,36 +288,59 @@
     canvas.style.height = h + "px";
     fitScaling();
     const over = w > innerWidth || h > innerHeight - 48;
+    // Say WHICH number is in use: an uncalibrated page is showing the browser's
+    // nominal inch, which is a guess, and a viewer comparing it to the real
+    // panel deserves to know that before concluding the maths is wrong.
     document.getElementById("lifetoggle").textContent = over
-      ? "actual size (too big for this window)"
-      : "actual size ✓";
+      ? "actual size — too big for this window"
+      : calibrated()
+        ? "actual size ✓"
+        : "actual size (uncalibrated)";
   }
 
   function initActualSize(m) {
     const t = document.getElementById("lifetoggle");
+    const c = document.getElementById("calopen");
     // No measurement on the server means nothing here can be honest about
-    // millimetres, so the control does not appear at all.
-    t.hidden = !m.panel_mm;
+    // millimetres, so neither control appears at all.
+    t.hidden = c.hidden = !m.panel_mm;
     if (!m.panel_mm) return;
     const cal = document.getElementById("cal");
     const slider = document.getElementById("slider");
     const card = document.getElementById("card");
-    const draw = () => (card.style.width = CARD_MM * slider.value + "px");
+    const now = document.getElementById("calnow");
+    const draw = () => {
+      card.style.width = CARD_MM * slider.value + "px";
+      const k = parseFloat(slider.value);
+      now.textContent = `${(k * 25.4).toFixed(0)} dpi · panel ${(meta.panel_mm * k) | 0}px wide`;
+    };
 
+    t.setAttribute("aria-pressed", String(actual));
     t.onclick = () => {
-      if (!pxPerMm()) {
-        // First use: measure before there is anything to apply.
-        cal.hidden = false;
-        slider.value = pxPerMm() || 3.78; // 96dpi nominal, a starting point
-        draw();
-        return;
-      }
       actual = !actual;
       t.setAttribute("aria-pressed", String(actual));
-      if (!actual) t.textContent = "actual size";
+      if (!actual) t.textContent = "fit window";
       applyActualSize();
     };
+    c.onclick = () => {
+      cal.hidden = !cal.hidden;
+      slider.value = pxPerMm();
+      draw();
+    };
     slider.oninput = draw;
+    document.getElementById("calreset").onclick = () => {
+      // Back to the browser's nominal inch. Removing the key rather than
+      // storing the nominal value, so a later browser with a better answer is
+      // not permanently overridden by today's guess.
+      try {
+        localStorage.removeItem(PXMM);
+      } catch {
+        /* nothing stored, nothing to remove */
+      }
+      slider.value = NOMINAL_PX_MM;
+      draw();
+      applyActualSize();
+    };
     document.getElementById("caldone").onclick = () => {
       setPxPerMm(parseFloat(slider.value));
       cal.hidden = true;
@@ -295,6 +348,20 @@
       t.setAttribute("aria-pressed", "true");
       applyActualSize();
     };
+    // A live preview while dragging: the canvas resizes under the slider, so
+    // the viewer sees the panel grow toward its real size rather than having to
+    // commit and then judge.
+    slider.addEventListener("input", () => {
+      if (actual) applyActualSizeWith(parseFloat(slider.value));
+    });
+  }
+
+  // Width of the largest cell count this scene can report, so both counters
+  // below are padded to the same fixed width.
+  let padTo = 1;
+
+  function pad(v) {
+    return String(v).padStart(padTo, "0");
   }
 
   function fitScaling() {
@@ -328,6 +395,7 @@
       (canvas.width * m.pixel_aspect) / (canvas.height * 100),
     );
     ctx.imageSmoothingEnabled = false;
+    padTo = String(m.cols * m.rows).length;
     initActualSize(m);
     applyActualSize();
     fitScaling();
@@ -446,10 +514,14 @@
       // Once per chunk, not once per record: this is a layout-invalidating
       // innerHTML write, and at 30fps the inner loop runs it for every frame
       // that arrived in the same read.
+      // Zero-padded to the widest value each field can take — cols*rows — so
+      // the line keeps a fixed width. Unpadded, every frame reflows the text
+      // and the whole status row twitches sideways 30 times a second, which
+      // reads as the page being broken rather than as the numbers changing.
       if (n >= 0)
         status.innerHTML =
           `<b>${meta.saver}</b> · ${meta.cols}x${meta.rows} cells · ` +
-          `${n} changed · ${Math.round(cells / Math.max(frames, 1))} avg`;
+          `${pad(n)} changed · ${pad(Math.round(cells / Math.max(frames, 1)))} avg`;
       // The common case: the chunk ended on a record boundary, so the whole
       // buffer is free again without moving a byte.
       if (off === len) off = len = 0;
