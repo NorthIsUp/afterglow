@@ -834,7 +834,7 @@ env changes in it, so the new binary always runs against the old env block first
 |              |                                                                                                                                                                    |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Namespace    | screensaver                                                                                                                                                        |
-| Image        | `busybox:1.36`, `ghcr.io/northisup/screensaver@sha256:52f2d8565f7902ebc93265e4bb45840c4e875308fabd5524fdd8ee4b6fde6a33`, `nginxinc/nginx-unprivileged:1.27-alpine` |
+| Image        | `busybox:1.36`, `ghcr.io/northisup/screensaver@sha256:2a9fdb1240bb10c197c961939a9026214dff45b6e5e0d9a035ab6582966e8d3d`, `nginxinc/nginx-unprivileged:1.27-alpine` |
 | Ports        | `screensaver 8080`, `ts-auth 8085`                                                                                                                                 |
 | Storage      | —                                                                                                                                                                  |
 | Memory limit | `screensaver 128Mi`, `ts-auth 64Mi`                                                                                                                                |
