@@ -24,6 +24,13 @@
 //!   integral; the sway is added at draw time from a phase. A petal whose sway
 //!   was accumulated into its position performs a random walk and wanders off
 //!   the panel.
+//! * **A crown is grown until it is not a mirror.** The first fork throws its
+//!   limbs symmetrically about the trunk and none of them near the vertical, so
+//!   a fair share of the shape rolls came up as two matched lobes with a hole
+//!   between them — a tree the eye reads as one sprite flipped. `plant` grows
+//!   the skeleton DRY, judges it with `splits_evenly`, and only draws one that
+//!   passes; rerolling is what keeps the variety that tuning the angles away
+//!   would have cost.
 //! * **Sub-cell motion is free.** A petal's braille pattern is chosen from its
 //!   fractional position inside the cell, so it moves in 6x4 px steps through a
 //!   12x16 px cell without any extra cost.
@@ -335,6 +342,10 @@ struct Raster {
     /// first one's height comes out uniformly dark.
     tips: Vec<(i32, i32)>,
     shape: Shape,
+    /// Swallow every `px` while a tree is being grown only to be measured. A
+    /// crown is judged by where its tips landed, which costs a recursion and
+    /// no pixels — see `plant`.
+    dry: bool,
 }
 
 /// How one tree grows. Every field is drawn from a bounded range in `plant`,
@@ -367,6 +378,7 @@ impl Raster {
             bits: vec![0; cols * rows],
             col: vec![0; cols * rows],
             tips: Vec::new(),
+            dry: false,
             shape: Shape {
                 spread0: 70,
                 spread0_var: 120,
@@ -385,6 +397,9 @@ impl Raster {
     /// blossom and the reflection after everything.
     #[inline]
     fn px(&mut self, sx: i32, sy: i32, c: u16) {
+        if self.dry {
+            return;
+        }
         let (cx, cy) = (sx.div_euclid(2), sy.div_euclid(4));
         if cx < 0 || cy < 0 || cx >= self.cols || cy >= self.rows {
             return;
@@ -478,7 +493,101 @@ fn tri(rng: &mut u32, r: i32) -> i32 {
         - r
 }
 
-/// Grow one tree from `(x, y)` and hang its blossom on it.
+/// Bins the crown's width is cut into to look for a split. Nine is enough that
+/// one bin is a plausible gap — about a ninth of the crown — and few enough
+/// that a bin still holds a countable number of tips.
+const SPLIT_BINS: usize = 9;
+
+/// Side of the coarse cell the crown's mass is measured in, in sub-columns
+/// (and twice that in sub-rows, which are half the height). Two cells across:
+/// the width of one blossom stamp, so two tips inside one of these paint
+/// essentially the same patch of crown.
+const SPLIT_Q: i32 = 4;
+
+/// Narrowest bin, in coarse cells, the split test will believe. A gap thinner
+/// than the blossom stamp is filled in by the stamp and never reaches the eye;
+/// measuring it would reject trees that look perfectly whole.
+const SPLIT_BIN_MIN: i32 = 2;
+
+/// How much bigger one side of a gap has to be for the gap to be allowed, as a
+/// fraction: five halves, where the eye applies about two to the finished
+/// panel. The measure below is the SKELETON's, and blossom spreads past the
+/// tips that carry it, which flatters the smaller lobe — at a flat two, seeds
+/// were still rendering as mirrored pairs when the frames were looked at.
+const SPLIT_DOM_NUM: usize = 5;
+const SPLIT_DOM_DEN: usize = 2;
+
+/// Crowns grown and thrown away before `plant` takes what it is given. Each
+/// attempt draws nothing and costs one recursion; the odds of nine in a row
+/// splitting evenly are small enough that the fall-through is a formality, and
+/// a loop that cannot end is worse than a tree that reads as a mirror.
+const SPLIT_TRIES: usize = 9;
+
+/// Does this crown read as one sprite mirrored — a hole down the middle with
+/// about as much blossom either side of it?
+///
+/// A hole in a crown is welcome; a real cherry is full of them. What makes this
+/// one wrong is that the two sides BALANCE, so the gap stops reading as a tree
+/// that grew round something and starts reading as a seam. The rule is
+/// therefore about mass, not about position: a gap is fine as long as one side
+/// carries at least twice the blossom of the other.
+///
+/// The tips stand in for the blossom because `plant` stamps every dot on a
+/// UNIFORMLY random tip: where the tips are is where the mass is. What the
+/// tips do NOT have is the stamp's spread, so they are measured as area rather
+/// than as a count, at a grain no finer than the stamp itself — see `SPLIT_Q`,
+/// `SPLIT_BIN_MIN` and `SPLIT_DOM_NUM`, each of which is that correction.
+fn splits_evenly(tips: &[(i32, i32)]) -> bool {
+    // Tips quantised to a coarse cell and deduplicated, which turns a tip
+    // COUNT into a crown AREA. Blossom stamped on two tips in the same place
+    // covers the same cells twice and the eye sees it once, so counting tips
+    // raw reports a dense lobe as bigger than it looks.
+    let mut mass: Vec<(i32, i32)> = tips
+        .iter()
+        .map(|&(tx, ty)| (tx.div_euclid(SPLIT_Q), ty.div_euclid(SPLIT_Q * 2)))
+        .collect();
+    mass.sort_unstable();
+    mass.dedup();
+    // Too small a crown to read as two lobes at all: a sapling is a smudge,
+    // and a smudge cannot be symmetrical.
+    if mass.len() < 12 {
+        return false;
+    }
+    let (mut x0, mut x1) = (i32::MAX, i32::MIN);
+    for &(qx, _) in &mass {
+        x0 = x0.min(qx);
+        x1 = x1.max(qx);
+    }
+    let span = x1 - x0 + 1;
+    if span < SPLIT_BIN_MIN * SPLIT_BINS as i32 {
+        return false;
+    }
+    let mut hist = [0usize; SPLIT_BINS];
+    for &(qx, _) in &mass {
+        let b = ((qx - x0) * SPLIT_BINS as i32 / span).clamp(0, SPLIT_BINS as i32 - 1);
+        hist[b as usize] += 1;
+    }
+    // Any interior bin holding under a third of an even share is a gap. The
+    // outermost bins are excluded: the thin edge of a crown is not a seam.
+    for b in 1..SPLIT_BINS - 1 {
+        if hist[b] * SPLIT_BINS * 3 >= mass.len() {
+            continue;
+        }
+        let left: usize = hist[..b].iter().sum();
+        let right: usize = hist[b + 1..].iter().sum();
+        // An empty side is not a split — that is a crown leaning off one
+        // shoulder, which is exactly the tree this is trying to get.
+        if left.max(right) * SPLIT_DOM_DEN < SPLIT_DOM_NUM * left.min(right) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Grow one tree's wood and the tip list its blossom hangs from: the shape
+/// roll, the trunk, the branch recursion and the bare-limb cut. Everything that
+/// decides WHERE the blossom goes and nothing that puts it there, so `plant`
+/// can run this dry, measure the crown, and run it again for real.
 ///
 /// The bounds on every drawn parameter are the point of this function. They
 /// were chosen against the fixed tree the saver used to draw, which is the one
@@ -488,17 +597,7 @@ fn tri(rng: &mut u32, r: i32) -> i32 {
 /// narrowing it past ~12 grows the tree straight off the top of the panel.
 /// `kids0` never goes below 3 because two limbs off the trunk is a Y, not a
 /// crown. `spread0` below ~55 gives a poplar and above ~230 a hedge.
-#[allow(clippy::too_many_arguments)]
-fn plant(
-    r: &mut Raster,
-    rng: &mut u32,
-    x: i32,
-    y: i32,
-    len: i32,
-    lean: i32,
-    thick: i32,
-    bloom: usize,
-) {
+fn grow(r: &mut Raster, rng: &mut u32, x: i32, y: i32, len: i32, lean: i32, thick: i32) {
     r.shape = Shape {
         spread0: 55 + (next_rand(rng) % 30) as i32,
         spread0_var: 95 + (next_rand(rng) % 55) as i32,
@@ -538,6 +637,46 @@ fn plant(
         let at = next_rand(rng) as usize % (n - cut).max(1);
         r.tips.drain(at..(at + cut).min(n));
     }
+}
+
+/// Grow one tree from `(x, y)` and hang its blossom on it.
+///
+/// The crown is grown until it is not a mirror. The first fork throws its limbs
+/// symmetrically about the trunk and none of them near the vertical, so a fair
+/// share of the shape rolls come up as two matched lobes with a hole between
+/// them straddling the trunk — a shape the eye reads as one sprite flipped
+/// rather than as a tree. Rolling again is the cheapest fix that keeps the
+/// variety: the structure is grown dry, judged by `splits_evenly`, and only
+/// redrawn for real once it passes.
+///
+/// Replaying from the accepted attempt's `rng` state regrows EXACTLY the tree
+/// that was measured, because everything `grow` draws comes out of `rng` and
+/// nothing else. Rejected attempts leave no trace but the rng they burned, and
+/// even that is rewound.
+#[allow(clippy::too_many_arguments)]
+fn plant(
+    r: &mut Raster,
+    rng: &mut u32,
+    x: i32,
+    y: i32,
+    len: i32,
+    lean: i32,
+    thick: i32,
+    bloom: usize,
+) {
+    // The rng state the kept attempt started from, so it can be regrown.
+    let mut accepted = *rng;
+    for _ in 0..SPLIT_TRIES {
+        accepted = *rng;
+        r.dry = true;
+        grow(r, rng, x, y, len, lean, thick);
+        r.dry = false;
+        if !splits_evenly(&r.tips) {
+            break;
+        }
+    }
+    *rng = accepted;
+    grow(r, rng, x, y, len, lean, thick);
 
     // Stamped around the branch tips rather than into a free-floating ellipse,
     // so the crown sits on the structure that holds it up.
@@ -1750,6 +1889,79 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Every tree `plant` hands back is one the split test passes. The photo
+    /// that started this showed the failure: two matched lobes with a hole down
+    /// the middle straddling the trunk, which the eye reads as one sprite
+    /// flipped rather than as a tree. The first fork throws its limbs
+    /// symmetrically about the trunk and none of them near the vertical, so the
+    /// shape rolls landed there about one crown in six.
+    ///
+    /// Swept rather than pinned to `SEEDS` for that reason: eight trees cannot
+    /// say anything about a shape that came up one time in six, and the
+    /// parameters are the ranges `build` draws its trunk from.
+    #[test]
+    fn no_tree_is_planted_split_down_the_middle() {
+        // A 1920x1080 panel at the default 12x16 cell, at the lowest and the
+        // highest horizon any setting asks for.
+        let (cols, rows) = (160usize, 67usize);
+        for seed in 1..200u32 {
+            for pct in [Setting::Mountain.horizon_pct(), Setting::Pond.horizon_pct()] {
+                let ground_y = rows as i64 * pct / 100;
+                let mut rng = seed.wrapping_mul(0x9E37_79B9) ^ pct as u32;
+                let mut r = Raster::new(cols, rows);
+                let x = (cols as i32 * (26 + (next_rand(&mut rng) % 17) as i32) / 100) * 2;
+                let y = ground_y as i32 * 4;
+                let top = ground_y as i32 * (55 + (next_rand(&mut rng) % 20) as i32) / 100;
+                let len = (((ground_y as i32 - top) * 4) * ASPECT_DEN / ASPECT_NUM).max(8);
+                let lean = 8 + (next_rand(&mut rng) % 19) as i32;
+                let thick = 6;
+                plant(
+                    &mut r,
+                    &mut rng,
+                    x,
+                    y,
+                    len,
+                    lean,
+                    thick,
+                    cols * rows * 3 / 4,
+                );
+                assert!(
+                    !splits_evenly(&r.tips),
+                    "seed {seed}/horizon {pct}: the crown is a mirrored pair of lobes"
+                );
+            }
+        }
+    }
+
+    /// `splits_evenly` faults BALANCE, not gaps. A crown full of holes is a
+    /// cherry; the one arrangement it rejects is the hole with as much tree on
+    /// one side of it as the other.
+    #[test]
+    fn the_split_test_faults_balance_not_holes() {
+        /// A solid lobe `w` by `h` coarse cells, its left edge `q` cells in.
+        fn lobe(q: i32, w: i32, h: i32) -> Vec<(i32, i32)> {
+            (0..w)
+                .flat_map(move |x| (0..h).map(move |y| ((q + x) * SPLIT_Q, y * SPLIT_Q * 2)))
+                .collect()
+        }
+        assert!(
+            splits_evenly(&[lobe(0, 6, 4), lobe(20, 6, 4)].concat()),
+            "two matched lobes with a hole between them is the whole fault"
+        );
+        assert!(
+            !splits_evenly(&[lobe(0, 6, 6), lobe(20, 3, 3)].concat()),
+            "a crown four times the size of what hangs off the other side is a tree, not a mirror"
+        );
+        assert!(
+            !splits_evenly(&lobe(0, 26, 4)),
+            "a crown with no hole in it cannot be split by one"
+        );
+        assert!(
+            !splits_evenly(&[lobe(0, 2, 2), lobe(20, 2, 2)].concat()),
+            "a sapling is a smudge, and a smudge cannot be symmetrical"
+        );
     }
 
     /// No two seeds draw the same scene. Without this, "randomly generated" can
