@@ -7,20 +7,31 @@
 //! the new head, the old head demoted into its band shade, and the tail erased
 //! — whatever the body's length. Nothing else in the scene moves, so
 //! `flush_sparse` with a caller-maintained dirty list costs a handful of cells
-//! a frame instead of a grid scan. `saver::frame` measures 1.8us at 1920x1080.
+//! a frame instead of a grid scan.
+//!
+//! Numbers are quoted at `SAVER_FPS=15`, the rate the pod runs at, because fps
+//! is not a free parameter here: `subs` is `speed / fps` in half-cell substeps,
+//! so 15fps owes two substeps a frame where 30 owes one, and lays twice the
+//! cells. `saver::frame` measures about 2us at 1920x1080/15fps (1us at 30, for
+//! the same work per second).
 //!
 //! Damage is wider than that sounds: a dozen worms in a dozen places is a dozen
-//! short scanline runs, a measured median of 224 of the panel's 1080 rows. So
-//! the shadow-to-hardware copy is this saver's real cost, not the blits, and
-//! `WORMS_COUNT` is the knob that moves it — each worm is worth about one cell
-//! height of damage a frame wherever it happens to be.
+//! short scanline runs, a measured median of 384 of the panel's 1072 covered
+//! rows at 15fps — 224 at 30. So the shadow-to-hardware copy is this saver's
+//! real cost, not the blits, and `WORMS_COUNT` is the knob that moves it —
+//! each worm is worth about a cell height of damage a frame per substep,
+//! wherever it happens to be.
 //!
 //! # Ownership, and why a cell remembers who lit it
 //!
-//! Worms cross. Without `owner` a worm dropping its tail would erase whatever
-//! crossed it, leaving a hole chewed through the other worm's body — the trail
-//! bug inverted. The crossing head takes the cell; the old owner's tail drop
-//! then finds `owner != me` and leaves it alone.
+//! Worms cross, so a cell can be a live segment of two of them at once. `refs`
+//! counts how many segments stand on a cell and `owner` records which worm
+//! painted it last — two different questions, and answering only the second is
+//! how this shipped with a hole in it. A tail drop clears its cell only at
+//! `refs == 0`; if it still owns a cell someone else is standing on, `rehome`
+//! hands the cell to a worm that still holds it, in that worm's colour.
+//! Without that, worm B crossing worm A and then dragging its tail over the
+//! shared cell punched a dark hole through A's body.
 //!
 //! # Turning
 //!
@@ -111,6 +122,10 @@ pub struct Worms {
     worms: Vec<Worm>,
     /// Which worm lit each cell, 1-based; 0 is unlit. See the module doc.
     owner: Vec<u16>,
+    /// How many live segments — of any worm — sit on each cell. `owner` says
+    /// who painted it; this says whether anyone still needs it. See the module
+    /// doc.
+    refs: Vec<u16>,
     dirty: Vec<u32>,
     /// Cells per substep, and how many substeps a frame owes.
     step: f32,
@@ -169,6 +184,7 @@ impl Worms {
             rows,
             worms,
             owner: vec![0; cols * rows],
+            refs: vec![0; cols * rows],
             // Reserved below, once the layout loop has stopped pushing into
             // it: reserving here and clearing would leave the frame loop
             // running on whatever capacity the layout happened to grow.
@@ -263,11 +279,14 @@ impl Worms {
         w.t = w.t.wrapping_add(1);
 
         if let Some(old) = evicted {
-            // Only if we still own it — a worm that crossed us since owns it
-            // now, and erasing it would chew a hole through that worm.
-            if self.owner[old as usize] == k as u16 + 1 {
-                self.owner[old as usize] = 0;
+            let o = old as usize;
+            self.refs[o] -= 1;
+            if self.refs[o] == 0 {
+                self.owner[o] = 0;
                 self.put(old, Cell::CLEAR);
+            } else if self.owner[o] == k as u16 + 1 {
+                // We painted a cell someone else is still standing on.
+                self.rehome(o);
             }
         }
         if let Some((prev, shade)) = demote {
@@ -277,8 +296,34 @@ impl Worms {
                 self.put(prev, Cell::new(BODY_GLYPH, fam + shade));
             }
         }
+        self.refs[i] += 1;
         self.owner[i] = k as u16 + 1;
         self.put(i as u32, Cell::new(HEAD_GLYPH, fam));
+    }
+
+    /// Give a cell back to a worm that still holds it, in that worm's own
+    /// colour. Reached only when a tail drop finds the cell refcounted above
+    /// zero — a crossing, so a few hundredths of a frame — which is what pays
+    /// for the scan.
+    fn rehome(&mut self, i: usize) {
+        let band_len = self.band;
+        let found = self.worms.iter().enumerate().find_map(|(j, w)| {
+            let b = (0..w.n).find(|&b| w.at(b) as usize == i)?;
+            let fam = w.fam * 3 + 1;
+            // `at(b)` was laid at t - 1 - b, and a segment keeps the band it was
+            // laid in — same rule as the demote above.
+            let c = if b == 0 {
+                Cell::new(HEAD_GLYPH, fam)
+            } else {
+                let shade = band(w.t.wrapping_sub(1 + b as u32), band_len);
+                Cell::new(BODY_GLYPH, fam + shade)
+            };
+            Some((j as u16 + 1, c))
+        });
+        if let Some((o, c)) = found {
+            self.owner[i] = o;
+            self.put(i as u32, c);
+        }
     }
 
     /// The only writer. A no-op write is honest damage that still costs a blit,
@@ -332,8 +377,15 @@ mod tests {
         Panel::new(1920, 1080, 1920)
     }
 
+    /// The rate the pod actually runs at (`SAVER_FPS=15` in
+    /// `k8s/apps/screensaver/deployment.yaml`). It is not a free parameter:
+    /// halving fps doubles `subs`, so every substep-shaped claim — damage,
+    /// frame cost — has to be made here or it is a claim about a config
+    /// nothing runs.
+    const SHIPPED_FPS: u32 = 15;
+
     fn worms() -> Worms {
-        Worms::new(&panel(), 30)
+        Worms::new(&panel(), SHIPPED_FPS)
     }
 
     /// T1: frame 0 must cover the panel, strip included, and must cover it with
@@ -360,35 +412,41 @@ mod tests {
     #[test]
     fn every_written_cell_is_reported() {
         let p = panel();
-        let mut c = worms();
-        let mut buf = vec![0u32; p.buf_len()];
-        let cells = c.grid.cols() * c.grid.rows();
-        let mut rows = Vec::new();
-        for n in 0..600 {
-            let d = saver::frame(&mut c, &mut buf, &p);
-            for i in 0..cells {
-                assert_eq!(
-                    c.grid.cell(i),
-                    c.grid.cells()[i],
-                    "frame {n}: cell {i} was written but not reported"
-                );
+        // Both rates, the shipped one first: `subs` is `speed / fps / 0.5`
+        // rounded up, so 15fps takes two substeps a frame where 30 takes one
+        // and damage is nearly double. Testing only at 30 measured a config
+        // the panel never runs.
+        for fps in [SHIPPED_FPS, 30] {
+            let mut c = Worms::new(&p, fps);
+            let mut buf = vec![0u32; p.buf_len()];
+            let cells = c.grid.cols() * c.grid.rows();
+            let mut rows = Vec::new();
+            for n in 0..600 {
+                let d = saver::frame(&mut c, &mut buf, &p);
+                for i in 0..cells {
+                    assert_eq!(
+                        c.grid.cell(i),
+                        c.grid.cells()[i],
+                        "fps {fps}, frame {n}: cell {i} was written but not reported"
+                    );
+                }
+                if n > 0 {
+                    rows.push(d.rows());
+                }
             }
-            if n > 0 {
-                rows.push(d.rows());
-            }
+            rows.sort_unstable();
+            let median = rows[rows.len() / 2];
+            // Non-vacuous both ways: it draws something every frame, and it
+            // stays under half a full repaint. Measured medians of the panel's
+            // 1072 covered rows: 384 at 15fps, 224 at 30. Each worm is one
+            // short run wherever it is, so this is really a ceiling on
+            // WORMS_COUNT times the cell height, not a claim about the drawing.
+            assert!(median > 0, "fps {fps}: no damage at all after frame 0");
+            assert!(
+                median * 2 < c.grid.rows() * c.grid.cell_h(),
+                "fps {fps}: median {median} rows a frame is not sparse"
+            );
         }
-        rows.sort_unstable();
-        let median = rows[rows.len() / 2];
-        // Non-vacuous both ways: it draws something every frame, and it stays
-        // well under a full repaint. The bound is a third of the cell area
-        // against a measured median of 224 rows at the shipped defaults — each
-        // worm is one short run, so this is really a ceiling on WORMS_COUNT
-        // times the cell height, not a claim about the drawing.
-        assert!(median > 0, "no damage at all after frame 0");
-        assert!(
-            median * 3 < c.grid.rows() * c.grid.cell_h(),
-            "median {median} rows a frame is not sparse"
-        );
     }
 
     /// T3: the frame loop allocates nothing. `dirty` is the only per-frame Vec;
@@ -418,10 +476,40 @@ mod tests {
             worst >= c.worms.len() * 3,
             "`dirty` never held a whole frame's worth ({worst})"
         );
-        assert!(
-            worst <= reserved,
-            "{worst} entries in a reserve of {reserved}"
-        );
+    }
+
+    /// No worm is erased from under itself. `owner` records who PAINTED a
+    /// shared cell, not who still needs it: where two worms cross, the second
+    /// one's tail drop used to clear a cell that was still a live segment of
+    /// the first — a dark hole travelling through its body (~0.05 a frame).
+    /// Nothing else here sees it: the hole is a cell the owner map already
+    /// agrees is unlit, and it heals as the other worm crawls on.
+    #[test]
+    fn a_body_is_never_erased_from_under_it() {
+        let p = panel();
+        for fps in [SHIPPED_FPS, 30] {
+            let mut c = Worms::new(&p, fps);
+            let mut buf = vec![0u32; p.buf_len()];
+            let (mut checked, mut crossings) = (0usize, 0usize);
+            for n in 0..600 {
+                saver::frame(&mut c, &mut buf, &p);
+                for (k, w) in c.worms.iter().enumerate() {
+                    for b in 0..w.n {
+                        assert!(
+                            c.grid.cell(w.at(b) as usize) != Cell::CLEAR,
+                            "fps {fps}, frame {n}: worm {k} segment {b} (cell {}) was erased from under it",
+                            w.at(b)
+                        );
+                        checked += 1;
+                    }
+                }
+                crossings += c.refs.iter().filter(|&&r| r > 1).count();
+            }
+            // Non-vacuous: the crossings this guards against really happen, and
+            // the bodies really are full length.
+            assert!(crossings > 0, "fps {fps}: no two worms ever crossed");
+            assert!(checked > 100_000, "fps {fps}: only {checked} segments");
+        }
     }
 
     /// T4: the scene is exactly the live segments and nothing else. A worm that

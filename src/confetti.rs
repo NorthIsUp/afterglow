@@ -17,6 +17,14 @@
 //! pins that, because a transfer that loses a unit drains the pile in a way
 //! that looks exactly like the drain below.
 //!
+//! The height map is only half of it: it has to REACH the grid, and every
+//! write that is not `draw_pile` has to agree with it. `draw_pile` repaints a
+//! column only when its height moved, so a piece erase that put CLEAR back
+//! inside the heap left a black hole there until it did — 294 of them at
+//! `CONFETTI_DEPOSIT=64`, one lasting 2889 frames. `beneath` is what an erase
+//! puts back instead, read against `drawn` rather than the live `h` so it
+//! always lands inside the range `draw_pile` is about to repaint.
+//!
 //! When the heap fills the panel the spawner stops and grains erode off random
 //! column tops until it is half empty, then it fills again. A cap would freeze
 //! the picture; a reset would blink.
@@ -291,7 +299,8 @@ impl Confetti {
                 // what this piece covered.
                 let at = self.pieces[i].at;
                 if at != u32::MAX {
-                    put(&mut self.grid, &mut self.dirty, at as usize, Cell::CLEAR);
+                    let under = self.beneath(at as usize);
+                    put(&mut self.grid, &mut self.dirty, at as usize, under);
                 }
                 self.pieces.swap_remove(i);
                 continue;
@@ -346,6 +355,36 @@ impl Confetti {
         }
     }
 
+    /// What row `r` of column `c` shows with no piece on it, at column height
+    /// `height`. The one place the height map turns into a cell.
+    #[inline]
+    fn pile_cell(&self, height: u32, r: usize, c: usize) -> Cell {
+        let (full, rem) = ((height / self.grains) as usize, height % self.grains);
+        let col = self.pile_col[r * self.cols + c] as u16;
+        if r < full {
+            Cell::new(font::SOLID, col)
+        } else if r == full && rem * 2 >= self.grains {
+            // Half a cell of grain reads as a half block, which is what keeps
+            // the crest of the heap from stepping in whole cells.
+            Cell::new(font::LOWER, col)
+        } else {
+            Cell::CLEAR
+        }
+    }
+
+    /// What a piece is covering, by grid index — against `drawn`, the height
+    /// the grid was last painted from, NOT the live `h`. `draw_pile` repaints
+    /// exactly the rows between `drawn` and `h`, so a write made from `drawn`
+    /// is either already right or inside the range about to be repainted.
+    /// Reading `h` here instead leaves a wrong cell behind whenever the landing
+    /// that triggered the erase, or the topple after it, moved the column
+    /// past what that range covers.
+    #[inline]
+    fn beneath(&self, i: usize) -> Cell {
+        let c = i % self.cols;
+        self.pile_cell(self.drawn[c], self.rows - 1 - i / self.cols, c)
+    }
+
     /// Repaint the cells of every column whose height moved.
     fn draw_pile(&mut self) {
         for c in 0..self.cols {
@@ -355,18 +394,8 @@ impl Confetti {
             }
             let lo = (now.min(was) / self.grains) as usize;
             let hi = ((now.max(was) / self.grains) as usize).min(self.rows - 1);
-            let full = (now / self.grains) as usize;
-            let rem = now % self.grains;
             for r in lo..=hi {
-                let cell = if r < full {
-                    Cell::new(font::SOLID, self.pile_col[r * self.cols + c] as u16)
-                } else if r == full && rem * 2 >= self.grains {
-                    // Half a cell of grain reads as a half block, which is what
-                    // keeps the crest of the heap from stepping in whole cells.
-                    Cell::new(font::LOWER, self.pile_col[r * self.cols + c] as u16)
-                } else {
-                    Cell::CLEAR
-                };
+                let cell = self.pile_cell(now, r, c);
                 let i = (self.rows - 1 - r) * self.cols + c;
                 put(&mut self.grid, &mut self.dirty, i, cell);
             }
@@ -413,7 +442,11 @@ impl Saver for Confetti {
         for i in 0..self.pieces.len() {
             let at = self.pieces[i].at;
             if at != u32::MAX {
-                put(&mut self.grid, &mut self.dirty, at as usize, Cell::CLEAR);
+                // Put back what the piece covered, not black: inside the heap,
+                // CLEAR is a hole `draw_pile` will not repaint until that
+                // column's height happens to move.
+                let under = self.beneath(at as usize);
+                put(&mut self.grid, &mut self.dirty, at as usize, under);
             }
         }
 
@@ -469,6 +502,13 @@ mod tests {
     /// remainder strip is exactly what frame 0 is asked to prove it covers.
     fn panel() -> Panel {
         Panel::new(1920, 1070, 1920)
+    }
+
+    /// A lean in grain units per column as a rise/run percentage — what
+    /// `CONFETTI_SLOPE` is set in. A grain is `cell_h / grains` pixels tall and
+    /// a column is `cell_w` wide.
+    fn slope_pct(c: &Confetti, lean: u32) -> u32 {
+        lean * 100 * c.cell_h as u32 / (c.cell_w as u32 * c.grains)
     }
 
     /// The steepest lean anywhere in the height map, in grain units per column.
@@ -572,6 +612,68 @@ mod tests {
         assert!(worst > 300, "`dirty` never held a real frame ({worst})");
     }
 
+    /// The pile is the saver, so the HEIGHT MAP has to reach the GRID: every
+    /// cell the map says is buried is drawn as heap, unless a piece covers it
+    /// this frame. Everything else here exercises the map and never looks at
+    /// the panel — with `draw_pile` deleted outright the other six stayed
+    /// green, and the picture was confetti falling onto a bare black floor.
+    ///
+    /// The same census catches the erase holes: an erase that put CLEAR inside
+    /// the heap left a black cell there until that column's height moved.
+    #[test]
+    fn the_height_map_reaches_the_grid() {
+        let p = small();
+        // The shipped deposit, and the top of the documented range (1..=64),
+        // where the holes were worst: 294 of them at 1920x1080, the
+        // longest-lived lasting 2889 frames — over three minutes at 15fps.
+        for deposit in [12u32, 64] {
+            let mut c = Confetti::new(&p, 15);
+            c.deposit = deposit;
+            let mut buf = vec![0u32; p.buf_len()];
+            let mut covered = vec![false; c.cols * c.rows];
+            let mut checked = 0usize;
+            for n in 0..2000 {
+                saver::frame(&mut c, &mut buf, &p);
+                covered.fill(false);
+                for piece in &c.pieces {
+                    if piece.at != u32::MAX {
+                        covered[piece.at as usize] = true;
+                    }
+                }
+                for col in 0..c.cols {
+                    // The crest cell too, where `h` says half a cell or more of
+                    // grain: a piece erase that blanked it leaves a notch in
+                    // the skyline the same way a buried one leaves a hole.
+                    let full = (c.h[col] / c.grains) as usize;
+                    let crest = (c.h[col] % c.grains) * 2 >= c.grains && full < c.rows;
+                    for r in 0..full + crest as usize {
+                        let i = (c.rows - 1 - r) * c.cols + col;
+                        if covered[i] {
+                            continue;
+                        }
+                        let want = if r < full { font::SOLID } else { font::LOWER };
+                        let cell = c.grid.cell(i);
+                        // Glyph and lit-ness, not the exact speckle: which
+                        // colour a buried cell wears is bookkeeping, whether
+                        // it is drawn at all is the saver.
+                        assert!(
+                            cell.glyph() == want as usize
+                                && (1..=COLOURS as usize).contains(&cell.colour()),
+                            "deposit {deposit}, frame {n}: column {col} is {} grains deep \
+                             but row {r} is not heap (glyph {}, colour {})",
+                            c.h[col],
+                            cell.glyph(),
+                            cell.colour()
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+            // Non-vacuous: a heap that never formed would assert nothing.
+            assert!(checked > 100_000, "only {checked} buried cells checked");
+        }
+    }
+
     /// What this saver IS. Settled, no pair of neighbouring columns may lean
     /// steeper than the angle of repose — and the heap must actually LEAN,
     /// because a flat smear satisfies the limit trivially.
@@ -602,16 +704,16 @@ mod tests {
         for k in 0..4000 {
             c.topple(k & 1 == 1);
         }
-        let steepest = steepest(&c);
+        // Pinned to the NUMBER, not to `max_drop` — `max_drop` is derived from
+        // `CONFETTI_SLOPE`, so comparing against it passes for any slope at
+        // all: 200 (a near-vertical wall) and 5 (a flat smear) were both green
+        // before this. Measured on the height map, where the physics is: the
+        // heap renders at half-cell resolution, so a 48% slope draws as 6px of
+        // a 12px column and no per-adjacent-column PIXEL rule can express it.
+        let pct = slope_pct(&c, steepest(&c));
         assert!(
-            steepest <= c.max_drop,
-            "a settled pile leans at {steepest} units/column, limit is {}",
-            c.max_drop
-        );
-        assert!(
-            steepest * 2 > c.max_drop,
-            "the heap is a smear, not a pile: steepest lean {steepest} of {}",
-            c.max_drop
+            (44..=52).contains(&pct),
+            "a settled pile leans at {pct}%, the angle of repose is 48%"
         );
         let (hi, lo) = (*c.h.iter().max().unwrap(), *c.h.iter().min().unwrap());
         assert!(
