@@ -177,24 +177,21 @@
   function applyMeta(m) {
     meta = m;
     buildPicker(m);
-    // The PANEL, not the cell grid. `rows = panel_h / cell_h` truncates, so for
-    // matrix at 1920x1080 the grid is 1920x1056 — a 1.818 rectangle standing in
-    // for a 1.778 panel, which the fit below then stretched every block 2.3%
-    // vertically to fill. The strip under the last row is left black, which is
-    // exactly what Grid paints there on frame 0.
+    // The PANEL, not the cell grid — see Grid::new on why they differ.
     //
-    // Fall back to the grid for a /meta without the fields — an old pod behind
-    // a new page keeps today's slightly-wrong shape instead of a 0x0 canvas.
-    canvas.width = m.panel_w || m.cols * m.cell_w;
-    canvas.height = m.panel_h || m.rows * m.cell_h;
-    // The PANEL's shape, not the framebuffer's. With SAVER_PIXEL_ASPECT set,
-    // the renderer draws things `aspect` per-cent too tall on purpose, because
-    // the monitor squashes them back. The page has no such monitor, so it has
-    // to do the squashing itself or it shows the pre-distorted picture rather
-    // than the one on the wall. Only the displayed shape changes; the pixels
-    // are the framebuffer's, untouched.
-    const aspect = (m.pixel_aspect || 100) / 100;
-    canvas.style.setProperty("--ar", (canvas.width * aspect) / canvas.height);
+    // No fallback for a /meta missing these: this page is include_str!'d into
+    // the binary that serves /meta, so a page holding this code is always
+    // talking to a pod that sends them.
+    canvas.width = m.panel_w;
+    canvas.height = m.panel_h;
+    // The PANEL's shape, not the framebuffer's. With SAVER_PIXEL_ASPECT set the
+    // renderer draws everything `aspect` per-cent too tall on purpose, because
+    // the monitor squashes it back; the page has no monitor, so it squashes
+    // here. Displayed shape only — the pixels are the framebuffer's.
+    canvas.style.setProperty(
+      "--ar",
+      (canvas.width * m.pixel_aspect) / (canvas.height * 100),
+    );
     ctx.imageSmoothingEnabled = false;
     fitScaling();
     ctx.fillStyle = "#000";

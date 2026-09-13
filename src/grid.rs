@@ -112,6 +112,13 @@ impl Grid {
     /// The right/bottom remainder belongs to no cell, so `flush` paints it
     /// black on frame 0 — see `paint_margins`.
     ///
+    /// THE GRID IS NOT THE PANEL, and anything sizing a picture must use the
+    /// panel. At 1920x1080 a 32px cell leaves a 24px strip below the last row,
+    /// so `rows * cell_h` is a 1.818 rectangle standing in for a 1.778 one. The
+    /// web mirror sized its canvas that way and stretched every block 2.3%
+    /// vertically to fill; `Mirror::describe` takes both rectangles because of
+    /// this.
+    ///
     /// `cell_h` is the height a SQUARE pixel would need; `SAVER_PIXEL_ASPECT`
     /// stretches it to what this panel needs. A saver that keeps its own copy
     /// must take it back from `cell_h()`, not from the value it passed in.

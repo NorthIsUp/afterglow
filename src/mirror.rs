@@ -173,15 +173,9 @@ impl Mirror {
     /// Record what the viewers need to draw a frame: geometry, the palette and
     /// the glyph table. Called once per successful modeset.
     ///
-    /// The panel ships alongside the grid because they are not the same
-    /// rectangle: `rows = panel.h / cell_h` truncates, so at 1920x1080 a 32px
-    /// cell leaves a 24px strip below the last row belonging to no cell.
-    /// `Grid::flush` paints that strip black on frame 0; a page sized to
-    /// `rows * cell_h` does not know it exists and draws the panel at the wrong
-    /// aspect (1.818 vs 1.778 for matrix), stretching every cell to fit.
-    ///
-    /// Grid and panel rather than six scalars because clippy's
-    /// `too_many_arguments` bites at eight, and these are what the caller holds.
+    /// Both rectangles, because they are not the same one: `Grid::new` discards
+    /// the remainder rows, and the page must size its canvas to the PANEL or it
+    /// draws at the wrong aspect. `Grid::new` is where that story lives.
     pub fn describe(&self, saver: &str, g: &Grid, panel: &Panel, pal: &[u32]) {
         // Bump the epoch FIRST and bake that number into the JSON, so the page
         // can hand it back on `/stream` and be refused if the scene has moved
@@ -205,9 +199,9 @@ impl Mirror {
              \"panel_w\":{pw},\"panel_h\":{ph},\"pixel_aspect\":{pa},\
              \"cols\":{cols},\"rows\":{rows},\
              \"cell_w\":{cw},\"cell_h\":{ch},\
-             \"glyph_w\":{},\"glyph_h\":{},\"palette\":[",
-            font::GLYPH_W,
-            font::GLYPH_H,
+             \"glyph_w\":{gw},\"glyph_h\":{gh},\"palette\":[",
+            gw = font::GLYPH_W,
+            gh = font::GLYPH_H,
             pw = panel.w,
             ph = panel.h,
             pa = crate::grid::pixel_aspect(),
@@ -818,10 +812,9 @@ mod tests {
         assert!(head.contains("\r\n\r\n84\r\n"), "{head}");
     }
 
-    /// `/stat` is the reason the overrun counter is worth having: it must read
-    /// LIVE. `/meta` is a String cached at modeset time, so the same numbers
-    /// baked in there would report their value as of the last modeset forever
-    /// — this drives a modeset between two reads to prove `/stat` is not that.
+    /// `/stat` must read LIVE — see the route in `handle` for why it is not in
+    /// `/meta`. A modeset runs between the two reads, so an implementation that
+    /// served these out of the cached `/meta`, or reset them on modeset, fails.
     #[test]
     fn stat_reports_counters_live_and_not_as_of_the_last_modeset() {
         let m = Mirror::new(15);
@@ -855,11 +848,15 @@ mod tests {
             "{body}"
         );
 
-        // Three late frames and a viewer, with no further modeset.
+        // Three late frames and a viewer, then ANOTHER modeset between the two
+        // reads. A /stat served out of the cached /meta would report the state
+        // as of this line forever; a /stat that reset on modeset would report
+        // zero. Both are real implementations somebody would write.
         m.overran();
         m.overran();
         m.overran();
         m.viewers.fetch_add(1, Ordering::Relaxed);
+        scene(&m, "city", 4, 4, 8, 16);
         let body = get("/stat");
         assert!(
             body.ends_with(r#"{"overruns":3,"viewers":1,"fps":15}"#),
