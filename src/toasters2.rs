@@ -544,14 +544,19 @@ mod tests {
 
     /// The flock's mix, which is counted and not rolled: a per-object coin flip
     /// put ONE slice in a sixteen-object sky at this seed, and since nothing
-    /// re-rolls `kind` it stayed that way for the life of the process.
+    /// re-rolls `kind` it stayed that way for the life of the process. Checked
+    /// at pine's aspect too: the taller cell halves `rows` and so halves the
+    /// flock, and a mix that only holds at one flock size is what emptied
+    /// `toasters3`' sky of toasters.
     #[test]
-    fn a_quarter_of_the_flock_is_toast() {
-        let t = Toasters2::new(&panel(), 30);
-        let toast = t.objs.iter().filter(|o| o.kind != 0).count();
-        let n = t.objs.len();
-        assert_eq!(toast * 100 / n, 25, "{toast} slices in {n}");
-        assert!(t.objs.iter().any(|o| o.kind == 0), "and some toasters");
+    fn a_quarter_of_the_flock_is_toast_at_every_aspect() {
+        for a in [100, 180] {
+            let t = crate::grid::with_test_aspect(a, || Toasters2::new(&panel(), 30));
+            let (n, toast) = (t.objs.len(), t.objs.iter().filter(|o| o.kind != 0).count());
+            assert_eq!(toast, n / 4, "aspect {a}: {toast} slices in {n}");
+            assert!(n >= 4, "aspect {a}: a flock of {n} cannot hold a mix");
+            assert!(n - toast > 0, "aspect {a}: a sky of toast and no toasters");
+        }
     }
 
     /// The flock is a SPARSE scene drawn through a dense flush, so the density

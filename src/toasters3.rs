@@ -208,8 +208,14 @@ impl Toasters3 {
             tick: 0,
             rng: 0x2468_ace0,
         };
-        for _ in 0..count {
-            let kind = if next_rand(&mut t.rng) % 100 < toast_pct {
+        // The first `toasts` objects are food, the rest machines — counted, as
+        // `toasters2` counts, not rolled per object. `SAVER_PIXEL_ASPECT=180`
+        // halves `rows` and so halves `count` to four, and at this seed a 25%
+        // coin flip came up toast all four times: pine's panel lost every
+        // toaster, permanently, because nothing re-rolls `kind`.
+        let toasts = (count * toast_pct as usize) / 100;
+        for i in 0..count {
+            let kind = if i < toasts {
                 1 + (next_rand(&mut t.rng) % TOAST_CELLS.len() as u32) as u8
             } else {
                 0
@@ -550,6 +556,21 @@ mod tests {
                 font::BRAILLE.contains(&(*g as u16)),
                 "glyph {g} is not a braille pattern"
             );
+        }
+    }
+
+    /// The flock's mix, at the aspect the panel actually runs at. The taller
+    /// cell halves `rows` and so halves `count`, and a per-object coin flip
+    /// over a flock of four came up toast four times at this seed: pine's
+    /// screen was slices and nothing else. Counted, the mix holds at any count.
+    #[test]
+    fn a_quarter_of_the_flock_is_toast_at_every_aspect() {
+        for a in [100, 180] {
+            let t = crate::grid::with_test_aspect(a, || Toasters3::new(&panel(), 30));
+            let (n, toast) = (t.objs.len(), t.objs.iter().filter(|o| o.kind != 0).count());
+            assert_eq!(toast, n / 4, "aspect {a}: {toast} slices in {n}");
+            assert!(n >= 4, "aspect {a}: a flock of {n} cannot hold a mix");
+            assert!(n - toast > 0, "aspect {a}: a sky of toast and no toasters");
         }
     }
 

@@ -263,8 +263,13 @@ impl Toasters {
             tick: 0,
             rng: 0x1357_9bdf,
         };
-        for _ in 0..count {
-            let kind = if next_rand(&mut t.rng) % 100 < toast_pct {
+        // Counted, not rolled per object: a coin flip leaves the ratio to the
+        // seed, and since nothing re-rolls `kind` that seed's sky keeps its
+        // miscount for the life of the process. The smaller the flock the
+        // worse it lands, and `SAVER_PIXEL_ASPECT=180` halves the flock.
+        let toasts = (count * toast_pct as usize) / 100;
+        for i in 0..count {
+            let kind = if i < toasts {
                 1 + (next_rand(&mut t.rng) % TOAST_CELLS.len() as u32) as u8
             } else {
                 0
@@ -397,6 +402,24 @@ mod tests {
 
     fn panel() -> Panel {
         Panel::new(640, 480, 640)
+    }
+
+    /// The flock's mix, at the aspect the panel runs at as well as the default:
+    /// the taller cell halves `rows` and so halves the flock, and a per-object
+    /// coin flip over a small flock lands wherever the seed puts it — which
+    /// emptied `toasters3`' sky of toasters entirely.
+    #[test]
+    fn a_quarter_of_the_flock_is_toast_at_every_aspect() {
+        // The live panel, not this module's 640x480: the flock has to be big
+        // enough to HAVE a mix before its ratio means anything.
+        let p = Panel::new(1920, 1080, 1920);
+        for a in [100, 180] {
+            let t = crate::grid::with_test_aspect(a, || Toasters::new(&p, 30));
+            let (n, toast) = (t.objs.len(), t.objs.iter().filter(|o| o.kind != 0).count());
+            assert_eq!(toast, n / 4, "aspect {a}: {toast} slices in {n}");
+            assert!(n >= 4, "aspect {a}: a flock of {n} cannot hold a mix");
+            assert!(n - toast > 0, "aspect {a}: a sky of toast and no toasters");
+        }
     }
 
     /// The 2.5:1 diagonal is a PIXEL slope, so unlike the sprite it does not
