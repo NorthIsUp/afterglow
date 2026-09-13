@@ -223,12 +223,24 @@
     ctl = new AbortController();
     const res = await fetch("/meta", { cache: "no-store", signal: ctl.signal });
     if (!res.ok) throw new Error("no display yet (" + res.status + ")");
-    applyMeta(await res.json());
+    const m = await res.json();
+    applyMeta(m);
 
-    const stream = await fetch("/stream", {
+    // Hand back the epoch /meta was built for. /select can land between these
+    // two fetches, and then the cells belong to a saver whose geometry, palette
+    // and glyph table are not the ones just applied — which drew the other
+    // saver's frames as grey blocks against the old grid, with nothing to
+    // recover it. The server refuses the mismatch instead.
+    const stream = await fetch("/stream?epoch=" + m.epoch, {
       cache: "no-store",
       signal: ctl.signal,
     });
+    // 409 is that refusal. Re-read /meta at once rather than after the 2s
+    // reconnect backoff, which would black the panel out on every switch.
+    if (stream.status === 409) {
+      switching = true;
+      throw new Error("scene changed");
+    }
     if (!stream.ok) throw new Error("stream " + stream.status);
     const reader = stream.body.getReader();
     // Records straddle chunk boundaries, so hold a buffer and consume only

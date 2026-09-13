@@ -149,9 +149,25 @@ impl Mirror {
         ch: usize,
         pal: &[u32],
     ) {
+        // Bump the epoch FIRST and bake that number into the JSON, so the page
+        // can hand it back on `/stream` and be refused if the scene has moved
+        // on. The pairing cannot tear because this is the only writer of either
+        // and the compare happens under the same `frame` lock: a viewer either
+        // gets meta and cells from one epoch, or gets nothing. Before this, two
+        // quick clicks gave the page saver A's geometry, palette and glyph
+        // table with saver B's cells, and it drew garbage until clicked again.
+        let epoch = {
+            let mut f = self.frame.lock().unwrap();
+            f.epoch += 1;
+            f.gen += 1;
+            f.cells.clear();
+            f.epoch
+        };
+        self.ready.notify_all();
+
         let mut json = String::with_capacity(8 << 10);
         json.push_str(&format!(
-            "{{\"saver\":\"{saver}\",\"savers\":[{savers}],\
+            "{{\"saver\":\"{saver}\",\"savers\":[{savers}],\"epoch\":{epoch},\
              \"cols\":{cols},\"rows\":{rows},\
              \"cell_w\":{cw},\"cell_h\":{ch},\
              \"glyph_w\":{},\"glyph_h\":{},\"palette\":[",
@@ -179,13 +195,6 @@ impl Mirror {
         }
         json.push_str("]}");
         *self.meta.lock().unwrap() = json;
-
-        let mut f = self.frame.lock().unwrap();
-        f.epoch += 1;
-        f.gen += 1;
-        f.cells.clear();
-        drop(f);
-        self.ready.notify_all();
     }
 }
 
@@ -274,7 +283,7 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
                 send(&mut s, "200 OK", "application/json", meta.as_bytes())
             }
         }
-        (_, "/stream") => stream(mirror, s),
+        (_, "/stream") => stream(mirror, s, &query),
         _ => send(&mut s, "404 Not Found", "text/plain", b"not found"),
     }
 }
@@ -337,7 +346,19 @@ fn send(s: &mut TcpStream, status: &str, ctype: &str, body: &[u8]) -> std::io::R
 /// One viewer: wait for a frame, diff it against what this viewer last saw,
 /// write the changed cells. The diff and the write are both on THIS thread —
 /// the render thread's only involvement is the memcpy in `publish`.
-fn stream(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
+fn stream(mirror: &Mirror, mut s: TcpStream, query: &str) -> std::io::Result<()> {
+    // The epoch the page read from `/meta`, checked under the same lock
+    // `describe` bumps it under, before a viewer slot or a single frame is
+    // committed. That is the whole fix for the half-switched panel: cells are
+    // only meaningful against the geometry, palette and glyph table of their
+    // own epoch, and `/meta` + `/stream` are two round trips with a `/select`
+    // able to land between them. Absent (a curl, an old page) means unchecked.
+    let want = param(query, "epoch").and_then(|v| v.parse::<u64>().ok());
+    let epoch = mirror.frame.lock().unwrap().epoch;
+    if want.is_some_and(|w| w != epoch) {
+        return send(&mut s, "409 Conflict", "text/plain", b"stale epoch");
+    }
+
     if mirror.viewers.fetch_add(1, Ordering::Relaxed) >= MAX_VIEWERS {
         mirror.viewers.fetch_sub(1, Ordering::Relaxed);
         return send(
@@ -365,7 +386,6 @@ fn stream(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
     let mut cur: Vec<Cell> = Vec::new();
     let mut out: Vec<u8> = Vec::new();
     let mut last_gen = 0u64;
-    let epoch = mirror.frame.lock().unwrap().epoch;
 
     loop {
         {
@@ -584,6 +604,91 @@ mod tests {
             assert!(body.starts_with("HTTP/1.1 405 "), "{bad}: {body}");
         }
         assert_eq!(m.viewers.load(Ordering::Relaxed), 0, "a slot was taken");
+    }
+
+    /// A `/select` landing between the page's `/meta` and `/stream` fetches
+    /// used to hand the viewer one saver's geometry, palette and glyph table
+    /// with another saver's cells, and nothing recovered it. The epoch in
+    /// `/meta` is what pairs them, so a stream opened against a stale one must
+    /// be refused rather than served — driven deterministically here, because
+    /// the real thing is two clicks a few milliseconds apart.
+    #[test]
+    fn a_stream_for_a_scene_that_has_been_replaced_is_refused() {
+        let m = Mirror::new();
+        m.describe("matrix", 2, 2, 8, 16, &[0, 0xFF]);
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        {
+            let m = Arc::clone(&m);
+            std::thread::spawn(move || {
+                for s in l.incoming().flatten() {
+                    let m = Arc::clone(&m);
+                    std::thread::spawn(move || handle(&m, s));
+                }
+            });
+        }
+        let req = |line: &str| {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.write_all(format!("{line} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+                .unwrap();
+            s
+        };
+        // Bounded rather than read-to-end: a stale /stream that is wrongly
+        // SERVED never closes, so an unbounded read would hang this test
+        // forever instead of failing it. Timing out with no 409 in hand is the
+        // failure, and it arrives in seconds.
+        let text = |line: &str| {
+            let mut s = req(line);
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut out = Vec::new();
+            let mut buf = [0u8; 512];
+            while let Ok(n) = s.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                out.extend_from_slice(&buf[..n]);
+                if out.len() > 4096 {
+                    break;
+                }
+            }
+            String::from_utf8_lossy(&out).to_string()
+        };
+
+        // What the page does: read /meta, then open /stream with its epoch.
+        let meta = text("GET /meta");
+        assert!(meta.contains("\"epoch\":1"), "{meta}");
+
+        // The user clicks another saver and the panel modesets — the exact
+        // window the page's two fetches straddle.
+        m.describe("dvd", 4, 4, 8, 16, &[0, 0xFF]);
+        let after = text("GET /meta");
+        assert!(after.contains("\"epoch\":2"), "{after}");
+
+        // The stale epoch is refused outright, and takes no viewer slot.
+        let stale = text("GET /stream?epoch=1");
+        assert!(stale.starts_with("HTTP/1.1 409 "), "{stale}");
+        assert_eq!(m.viewers.load(Ordering::Relaxed), 0, "a slot was taken");
+
+        // The epoch the page would now read is served, and keyframes as usual.
+        let mut s = req("GET /stream?epoch=2");
+        while m.viewers.load(Ordering::Relaxed) == 0 {
+            std::thread::yield_now();
+        }
+        m.publish(&[Cell::new(1, 1); 16]);
+        let mut got = Vec::new();
+        let mut buf = [0u8; 512];
+        let head = loop {
+            let n = s.read(&mut buf).unwrap();
+            assert!(n > 0, "stream closed early: {got:?}");
+            got.extend_from_slice(&buf[..n]);
+            let head = String::from_utf8_lossy(&got).to_string();
+            if head.contains("\r\n\r\n") && head.len() > 200 || got.len() > 4096 {
+                break head;
+            }
+        };
+        assert!(head.starts_with("HTTP/1.1 200 "), "{head}");
+        // 4 + 16 cells * 8 = 132 bytes = 0x84.
+        assert!(head.contains("\r\n\r\n84\r\n"), "{head}");
     }
 
     /// The display never waits on a viewer: a held lock drops the frame.
