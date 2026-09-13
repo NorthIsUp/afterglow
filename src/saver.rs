@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn a_manual_pick_restarts_the_interval() {
         let panel = Panel::new(128, 128, 128);
-        let mirror = Mirror::new();
+        let mirror = Mirror::new(15);
         let t0 = Instant::now();
         let mut rot = Rotate::new(Duration::from_secs(30), t0, 7);
         let mut selected = mirror.selected();
@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn switch_rotates_the_panel_and_the_mirror_together() {
         let panel = Panel::new(128, 128, 128);
-        let mirror = Mirror::new();
+        let mirror = Mirror::new(15);
         let t0 = Instant::now();
         let mut rot = Rotate::new(Duration::from_secs(5), t0, 42);
         let mut selected = mirror.selected();

@@ -195,11 +195,14 @@
     buildAtlases(m);
   }
 
-  function draw(view) {
+  // `base` is the record's offset inside the shared receive buffer: the
+  // caller hands over one long-lived DataView rather than slicing a new one
+  // per record.
+  function draw(view, base) {
     const { cols, cell_w: cw, cell_h: ch, glyph_w: gw, glyph_h: gh } = meta;
-    const n = view.getUint32(0, true);
+    const n = view.getUint32(base, true);
     for (let k = 0; k < n; k++) {
-      const o = 4 + k * 8;
+      const o = base + 4 + k * 8;
       const i = view.getUint32(o, true);
       const cell = view.getUint32(o + 4, true);
       const glyph = cell & 0xffff,
@@ -252,8 +255,16 @@
     if (!stream.ok) throw new Error("stream " + stream.status);
     const reader = stream.body.getReader();
     // Records straddle chunk boundaries, so hold a buffer and consume only
-    // whole ones.
-    let buf = new Uint8Array(0);
+    // whole ones. Grow-only, with a read offset: the obvious
+    // allocate-and-copy-everything per chunk is O(n^2) in chunks per frame,
+    // and on `blocks` (37k changed cells a frame, 4.4 MB/s) that measured ~3
+    // MB/frame of garbage and showed up as GC spikes. Here a chunk is one
+    // `set` into spare room, and consumed bytes are reclaimed by resetting the
+    // offset — a compaction only happens when a record really did straddle.
+    let buf = new Uint8Array(1 << 16);
+    let view = new DataView(buf.buffer);
+    let len = 0, // bytes written
+      off = 0; // bytes already drawn
     for (;;) {
       const { value, done } = await reader.read();
       // The server ends the stream when the epoch moves, which SAVER_ROTATE_SECS
@@ -265,21 +276,42 @@
         switching = true;
         throw new Error("stream ended");
       }
-      const next = new Uint8Array(buf.length + value.length);
-      next.set(buf);
-      next.set(value, buf.length);
-      buf = next;
+      if (len + value.length > buf.length) {
+        // Drop what has been drawn, and only then consider growing. A full
+        // keyframe on `blocks` is ~1 MB, so the buffer does settle larger than
+        // its initial size — it just stops churning once it has.
+        buf.copyWithin(0, off, len);
+        len -= off;
+        off = 0;
+        if (len + value.length > buf.length) {
+          let cap = buf.length;
+          while (cap < len + value.length) cap *= 2;
+          const grown = new Uint8Array(cap);
+          grown.set(buf.subarray(0, len));
+          buf = grown;
+          view = new DataView(buf.buffer);
+        }
+      }
+      buf.set(value, len);
+      len += value.length;
+      let n = -1;
       for (;;) {
-        if (buf.length < 4) break;
-        const view = new DataView(buf.buffer, buf.byteOffset, buf.length);
-        const need = 4 + view.getUint32(0, true) * 8;
-        if (buf.length < need) break;
-        const n = draw(new DataView(buf.buffer, buf.byteOffset, need));
-        buf = buf.subarray(need);
+        if (len - off < 4) break;
+        const need = 4 + view.getUint32(off, true) * 8;
+        if (len - off < need) break;
+        n = draw(view, off);
+        off += need;
+      }
+      // Once per chunk, not once per record: this is a layout-invalidating
+      // innerHTML write, and at 30fps the inner loop runs it for every frame
+      // that arrived in the same read.
+      if (n >= 0)
         status.innerHTML =
           `<b>${meta.saver}</b> · ${meta.cols}x${meta.rows} cells · ` +
           `${n} changed · ${Math.round(cells / Math.max(frames, 1))} avg`;
-      }
+      // The common case: the chunk ended on a record boundary, so the whole
+      // buffer is free again without moving a byte.
+      if (off === len) off = len = 0;
     }
   }
 

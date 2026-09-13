@@ -184,7 +184,7 @@ fn main() {
     // loop, so the mirror answers (with a 503 from /meta) on a node whose
     // monitor is absent — which is exactly when someone is asking why. A dump
     // drives it too, which is how it is testable with no card at all.
-    let mirror = mirror::Mirror::new();
+    let mirror = mirror::Mirror::new(cfg.fps);
     // The env var is the startup default; after that the web UI owns the choice,
     // and both loops build their saver from this selection rather than reading
     // cfg.saver again. An unrecognised name is refused here and leaves the

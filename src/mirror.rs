@@ -9,20 +9,21 @@
 //! Mirroring the cells rather than the pixels is not a compression trick; it is
 //! sending the thing the renderer actually has.
 //!
-//! Measured at 1920x1080, cell defaults, `SAVER_FPS=15` (what ships):
+//! Measured on the Pi at 1920x1080, cell defaults, `SAVER_FPS=15` (what
+//! ships), 2026-09-13:
 //!
 //! | saver  | grid    | cells  | cells changed/frame | damaged scanlines/frame |
 //! | ------ | ------- | ------ | ------------------- | ----------------------- |
-//! | matrix | 120x33  |   3960 |   792 (20.0%)       | 1056 (every grid row)   |
-//! | ascii  | 120x67  |   8040 |  2546 (31.7%)       | 1056                    |
-//! | blocks | 480x270 | 129600 | 11022  (8.5%)       | ~620                    |
+//! | matrix | 120x33  |   3960 |   810 (20.5%)       | 1056 (every grid row)   |
+//! | ascii  | 120x67  |   8040 |  3033 (37.7%)       | 1056                    |
+//! | blocks | 480x270 | 129600 | 37064 (28.6%)       | ~620                    |
 //!
 //! Matrix is the only one whose rate depends on fps — its fall is per-frame —
-//! so at the 30fps default it halves to 414.
+//! so at the 30fps default it roughly halves.
 //!
 //! The right-hand column is why a pixel-shaped answer loses: matrix dirties
 //! every scanline every frame, so "ship the damaged rows" ships 1920*1056*4 =
-//! 8.1 MB per frame. The same frame is 792 changed cells = 6.4 KB. Re-encoding
+//! 8.1 MB per frame. The same frame is 810 changed cells = 6.5 KB. Re-encoding
 //! it as JPEG/PNG instead costs the Pi tens of milliseconds a frame, on a pod
 //! whose whole render budget is 113m of one core.
 //!
@@ -68,7 +69,8 @@ const KEEPALIVE: Duration = Duration::from_secs(10);
 
 const PAGE: &str = include_str!("mirror.html");
 
-/// Cell state that cannot occur: 66 glyphs ship, so `u16::MAX` forces the first
+/// Cell state that cannot occur: `font::GLYPHS` is nowhere near `u16::MAX`
+/// entries, so a `prev` filled with this forces the first
 /// diff against it to emit every cell — that is how a connect gets a keyframe
 /// without a second code path.
 const NEVER: Cell = Cell::new(u16::MAX, u16::MAX);
@@ -86,6 +88,14 @@ struct Frame {
 
 pub struct Mirror {
     viewers: AtomicUsize,
+    /// Frames that took longer than the frame budget. A count, not a log: at
+    /// 30fps a line per late frame is its own outage. Read through `/stat`,
+    /// which is why that route exists instead of a field in the cached
+    /// `/meta`.
+    overruns: AtomicUsize,
+    /// The configured frame budget, reported by `/stat` so an overrun count
+    /// reads as a rate rather than a bare number.
+    fps: u32,
     /// Index into `saver::NAMES` the render loop should be drawing. An atomic
     /// rather than a lock because the render loop reads it every frame and must
     /// never wait on a browser; `POST /select` is the only writer.
@@ -97,14 +107,27 @@ pub struct Mirror {
 }
 
 impl Mirror {
-    pub fn new() -> Arc<Self> {
+    pub fn new(fps: u32) -> Arc<Self> {
         Arc::new(Self {
             viewers: AtomicUsize::new(0),
+            overruns: AtomicUsize::new(0),
+            fps,
             selected: AtomicUsize::new(0),
             frame: Mutex::new(Frame::default()),
             ready: Condvar::new(),
             meta: Mutex::new(String::new()),
         })
+    }
+
+    /// The render loop missed its frame budget. One relaxed increment, on a
+    /// branch only reached when the frame is already over budget.
+    pub fn overran(&self) {
+        self.overruns.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Frames that missed the budget since start.
+    pub fn overruns(&self) -> usize {
+        self.overruns.load(Ordering::Relaxed)
     }
 
     /// Index into `saver::NAMES` the render loop should be drawing.
@@ -301,6 +324,15 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
                 send(&mut s, "200 OK", "application/json", meta.as_bytes())
             }
         }
+        // Live counters, deliberately NOT folded into /meta: that is a String
+        // cached at modeset time, so a counter baked into it would report its
+        // value as of the last modeset forever.
+        (_, "/stat") => send(
+            &mut s,
+            "200 OK",
+            "application/json",
+            stat_json(mirror).as_bytes(),
+        ),
         (_, "/stream") => stream(mirror, s, &query),
         _ => send(&mut s, "404 Not Found", "text/plain", b"not found"),
     }
@@ -341,6 +373,15 @@ fn param(query: &str, key: &str) -> Option<String> {
             .filter(|(k, _)| *k == key)
             .map(|(_, v)| v.to_string())
     })
+}
+
+fn stat_json(mirror: &Mirror) -> String {
+    format!(
+        "{{\"overruns\":{},\"viewers\":{},\"fps\":{}}}",
+        mirror.overruns(),
+        mirror.viewers.load(Ordering::Relaxed),
+        mirror.fps,
+    )
 }
 
 fn selected_json(mirror: &Mirror) -> String {
@@ -486,7 +527,7 @@ mod tests {
     /// where the cell divides evenly cannot tell the two apart.
     #[test]
     fn meta_reports_the_panel_not_the_cell_grid() {
-        let m = Mirror::new();
+        let m = Mirror::new(15);
         let panel = Panel::new(1920, 1080, 1920);
         let g = Grid::new(&panel, 16, 32);
         m.describe("matrix", &g, &panel, &[0, 0xFF]);
@@ -520,7 +561,7 @@ mod tests {
     /// the whole no-viewer-no-cost claim, and it is one line that could rot.
     #[test]
     fn no_viewer_means_no_publish() {
-        let m = Mirror::new();
+        let m = Mirror::new(15);
         m.publish(&[Cell::new(1, 2)]);
         assert_eq!(m.frame.lock().unwrap().gen, 0);
 
@@ -536,7 +577,7 @@ mod tests {
     /// the only place any of that is exercised before it reaches a node.
     #[test]
     fn a_viewer_gets_a_keyframe_then_deltas() {
-        let m = Mirror::new();
+        let m = Mirror::new(15);
         scene(&m, "test", 2, 2, 8, 16);
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
@@ -603,7 +644,7 @@ mod tests {
     /// because the method check and the query parsing are both on that path.
     #[test]
     fn select_switches_the_saver_and_refuses_a_name_that_is_not_one() {
-        let m = Mirror::new();
+        let m = Mirror::new(15);
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         {
@@ -666,7 +707,7 @@ mod tests {
     /// the real thing is two clicks a few milliseconds apart.
     #[test]
     fn a_stream_for_a_scene_that_has_been_replaced_is_refused() {
-        let m = Mirror::new();
+        let m = Mirror::new(15);
         scene(&m, "matrix", 2, 2, 8, 16);
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
@@ -743,10 +784,68 @@ mod tests {
         assert!(head.contains("\r\n\r\n84\r\n"), "{head}");
     }
 
+    /// `/stat` is the reason the overrun counter is worth having: it must read
+    /// LIVE. `/meta` is a String cached at modeset time, so the same numbers
+    /// baked in there would report their value as of the last modeset forever
+    /// — this drives a modeset between two reads to prove `/stat` is not that.
+    #[test]
+    fn stat_reports_counters_live_and_not_as_of_the_last_modeset() {
+        let m = Mirror::new(15);
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        {
+            let m = Arc::clone(&m);
+            std::thread::spawn(move || {
+                for s in l.incoming().flatten() {
+                    let m = Arc::clone(&m);
+                    std::thread::spawn(move || handle(&m, s));
+                }
+            });
+        }
+        let get = |path: &str| {
+            let mut s = TcpStream::connect(addr).unwrap();
+            s.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+                .unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).unwrap();
+            out
+        };
+
+        // The modeset that caches /meta happens BEFORE the counters move.
+        scene(&m, "matrix", 2, 2, 8, 16);
+        let body = get("/stat");
+        assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+        assert!(body.contains("application/json"), "{body}");
+        assert!(
+            body.ends_with(r#"{"overruns":0,"viewers":0,"fps":15}"#),
+            "{body}"
+        );
+
+        // Three late frames and a viewer, with no further modeset.
+        m.overran();
+        m.overran();
+        m.overran();
+        m.viewers.fetch_add(1, Ordering::Relaxed);
+        let body = get("/stat");
+        assert!(
+            body.ends_with(r#"{"overruns":3,"viewers":1,"fps":15}"#),
+            "{body}"
+        );
+
+        // And the fps really is the configured one, not a constant that happens
+        // to match: a second mirror with a different budget says so.
+        let m30 = Mirror::new(30);
+        assert!(
+            stat_json(&m30).contains("\"fps\":30"),
+            "{}",
+            stat_json(&m30)
+        );
+    }
+
     /// The display never waits on a viewer: a held lock drops the frame.
     #[test]
     fn a_busy_lock_drops_the_frame_instead_of_blocking() {
-        let m = Mirror::new();
+        let m = Mirror::new(15);
         m.viewers.fetch_add(1, Ordering::Relaxed);
         let held = m.frame.lock().unwrap();
         let gen = held.gen;

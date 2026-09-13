@@ -463,6 +463,14 @@ survive nginx re-chunking them on the way through the gate. `GET /meta` is the
 geometry, palette and glyph table; `GET /` is the page. `SAVER_HTTP=off`
 removes all of it.
 
+`GET /stat` is the live counters — `{"overruns":N,"viewers":N,"fps":N}`.
+`overruns` is frames that ran past the frame budget, which is what a raised
+`SAVER_FPS` against the pod's 500m CFS quota shows up as: the render loop is
+stopped mid-period and runs a burst, and the burst is visible stutter on the
+panel. It is a separate route on purpose — `/meta` is a string cached at
+modeset, so a counter baked in there would report its value as of the last
+modeset forever.
+
 ## Looking at a saver without a monitor
 
 `SAVER_DUMP` renders to PPM files and exits, on any machine, with no display:

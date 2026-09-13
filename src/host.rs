@@ -28,6 +28,19 @@ impl AsFd for Card {
 impl BasicDevice for Card {}
 impl ControlDevice for Card {}
 
+/// Sleep out what is left of the frame budget, or count the overrun. A
+/// separate function only because the card-bound render loop around it cannot
+/// be run in CI, and this is the branch that has to be right before anyone
+/// raises `SAVER_FPS` against the pod's 500m CFS quota.
+fn pace(mirror: &Mirror, frame_dur: Duration, t0: Instant) {
+    match frame_dur.checked_sub(t0.elapsed()) {
+        Some(rem) => std::thread::sleep(rem),
+        // The panel missed its rate. COUNTED, not logged: a log line per frame
+        // at 30fps is its own outage. Read it from /stat.
+        None => mirror.overran(),
+    }
+}
+
 /// Open the card, modeset the connector's preferred mode, and run until stopped.
 /// Returns Ok(()) when asked to stop, Err on any setup failure so the caller can
 /// idle and retry rather than crash-looping.
@@ -164,9 +177,7 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
                 dirty_unsupported = true;
             }
         }
-        if let Some(rem) = frame_dur.checked_sub(t0.elapsed()) {
-            std::thread::sleep(rem);
-        }
+        pace(mirror, frame_dur, t0);
     }
 
     // Blank, then hand the CRTC back so fbcon returns instead of a frozen frame.
@@ -187,4 +198,33 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
     let _ = card.destroy_framebuffer(fb);
     let _ = card.destroy_dumb_buffer(db);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The whole point of the counter: a frame that ran past its budget is
+    /// counted, and one that did not is not. CI has no card, so the render loop
+    /// itself never runs here — this branch is the testable half of it.
+    #[test]
+    fn a_late_frame_is_counted_and_an_early_one_is_not() {
+        let m = Mirror::new(15);
+        let budget = Duration::from_millis(20);
+
+        // Frame that took longer than the budget: nothing left to sleep.
+        let late = Instant::now() - Duration::from_millis(50);
+        pace(&m, budget, late);
+        assert_eq!(m.overruns(), 1);
+        pace(&m, budget, late);
+        assert_eq!(m.overruns(), 2);
+
+        // Frame that finished inside the budget: sleeps out the remainder and
+        // counts nothing. The elapsed check is what fails if the arms are
+        // swapped — a swapped `pace` returns instantly here.
+        let t0 = Instant::now();
+        pace(&m, budget, t0);
+        assert_eq!(m.overruns(), 2);
+        assert!(t0.elapsed() >= budget, "did not sleep: {:?}", t0.elapsed());
+    }
 }
