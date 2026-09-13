@@ -169,7 +169,7 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
         // ENOSYS/EINVAL; note it once and stop asking rather than logging per
         // frame at 30fps. A frame where nothing moved dirties nothing.
         if !dirty_unsupported && !damage.is_empty() {
-            let n = damage.rects(panel.w as u16, &mut rects);
+            let n = damage.rects(&mut rects);
             if let Err(e) = card.dirty_framebuffer(fb, &rects[..n]) {
                 eprintln!(
                     "[screensaver] dirty_framebuffer unsupported ({e}); assuming direct scanout"

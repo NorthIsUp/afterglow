@@ -193,10 +193,7 @@ impl Life {
             yp: (0..rows).map(|y| ((y + 1) % rows) * cols).collect(),
             // Seeded off the clock, the same trick sakura grows its tree from,
             // so a restart is not the same board again.
-            rng: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
-                .unwrap_or(0x5EED_11FE),
+            rng: crate::saver_seed(&["LIFE_SEED"], 0x5EED_11FE),
             fps: fps.max(1),
             gps,
             acc: 0,
@@ -361,6 +358,7 @@ impl Saver for Life {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::saver;
 
     /// 1080 is not a multiple of 8 at every cell size, but it is at 8 — so the
@@ -532,10 +530,13 @@ mod tests {
                 let row = y * stride..y * stride + p.w;
                 if buf[row.clone()] != prev[row] {
                     assert!(
-                        d.runs()
-                            .iter()
-                            .any(|&(a, b)| (a as usize..b as usize).contains(&y)),
-                        "frame {n}: scanline {y} changed but was not reported"
+                        dump::row_reported(
+                            &prev[y * stride..][..p.w],
+                            &buf[y * stride..][..p.w],
+                            y,
+                            &d
+                        ),
+                        "frame {n}: scanline {y} changed outside every reported rect"
                     );
                 }
             }

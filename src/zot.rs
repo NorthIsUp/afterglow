@@ -248,9 +248,7 @@ impl Zot {
             halo: vec![0; cols * rows],
             branches: Vec::with_capacity(MAX_BRANCHES),
             // Off the clock, so a restart does not replay the same storm.
-            rng: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0x20_7E_5A_10, |d| d.subsec_nanos() ^ d.as_secs() as u32),
+            rng: crate::saver_seed(&["ZOT_SEED"], 0x20_7E_5A_10),
             age: 0,
             life: 1,
             glow_life: 1,
@@ -544,6 +542,7 @@ impl Saver for Zot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::saver;
 
     /// 1080 is not a multiple of 16, so the bottom 8 scanlines belong to no
@@ -601,10 +600,13 @@ mod tests {
                     let row = y * stride..y * stride + p.w;
                     if buf[row.clone()] != prev[row] {
                         assert!(
-                            d.runs()
-                                .iter()
-                                .any(|&(a, b)| (a as usize..b as usize).contains(&y)),
-                            "frame {n}: scanline {y} changed but was not reported"
+                            dump::row_reported(
+                                &prev[y * stride..][..p.w],
+                                &buf[y * stride..][..p.w],
+                                y,
+                                &d
+                            ),
+                            "frame {n}: scanline {y} changed outside every reported rect"
                         );
                         moved += 1;
                     }

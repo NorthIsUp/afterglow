@@ -124,6 +124,32 @@ pub fn env_num(keys: &[&str], default: i64, lo: i64, hi: i64) -> i64 {
     default
 }
 
+/// A saver's RNG seed: `<SAVER>_SEED` if set, otherwise one rolled from the
+/// clock and the pid so a pod restart shows a new scene.
+///
+/// The knob is not a convenience. A clock-seeded saver cannot be dumped and
+/// compared frame-for-frame against another build, and that comparison is how
+/// every rendering change in this tree is shown to be a no-op — four savers
+/// shipped without one and were simply unverifiable. `sakura` had it right
+/// first; this is that code, shared.
+///
+/// The clock alone is a poor seed (two pods starting in the same second draw
+/// the same scene), so the pid mixes in, and the pair is stirred rather than
+/// used raw.
+pub fn saver_seed(keys: &[&str], fallback: u32) -> u32 {
+    let pinned = env_num(keys, 0, 0, u32::MAX as i64) as u32;
+    if pinned != 0 {
+        return pinned;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
+        .unwrap_or(fallback);
+    let mut seed = nanos ^ std::process::id().wrapping_mul(0x9E37_79B9);
+    next_rand(&mut seed);
+    seed.max(1)
+}
+
 /// splitmix32, not the LCG fire and matrix use. Those draw one number per cell,
 /// where the LCG's correlation between successive outputs is invisible; a saver
 /// that draws a PAIR from consecutive outputs gets a visible diagonal clump out

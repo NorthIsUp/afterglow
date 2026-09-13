@@ -357,6 +357,7 @@ impl Saver for Strings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::saver;
     use crate::testalloc::count as allocs;
 
@@ -419,10 +420,13 @@ mod tests {
                 let row = y * stride..y * stride + p.w;
                 if buf[row.clone()] != prev[row] {
                     assert!(
-                        d.runs()
-                            .iter()
-                            .any(|&(a, b)| (a as usize..b as usize).contains(&y)),
-                        "frame {n}: scanline {y} changed but was not reported"
+                        dump::row_reported(
+                            &prev[y * stride..][..p.w],
+                            &buf[y * stride..][..p.w],
+                            y,
+                            &d
+                        ),
+                        "frame {n}: scanline {y} changed outside every reported rect"
                     );
                 }
             }

@@ -300,6 +300,7 @@ impl Saver for Dvd {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::saver;
 
     /// 1070, not the 1080 the panel actually is: 1080 divides by the default
@@ -372,10 +373,8 @@ mod tests {
                 }
                 changed += 1;
                 assert!(
-                    d.runs()
-                        .iter()
-                        .any(|&(a, b)| y as u16 >= a && (y as u16) < b),
-                    "frame {n}: scanline {y} changed but was not reported"
+                    dump::row_reported(&prev[y * p.w..][..p.w], &buf[y * p.w..][..p.w], y, &d),
+                    "frame {n}: scanline {y} changed outside every reported rect"
                 );
             }
             moved += usize::from(changed > 0);

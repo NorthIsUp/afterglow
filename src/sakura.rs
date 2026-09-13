@@ -1810,6 +1810,7 @@ impl Saver for Sakura {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::saver;
 
     /// Seeds the scene tests sweep. Random generation only fails on SOME draws,
@@ -1906,7 +1907,7 @@ mod tests {
             saver::frame(&mut s, &mut buf, &p);
 
             let n = cells(&s);
-            let mut rows = Vec::new();
+            let mut px = Vec::new();
             let mut moved = 0;
             for f in 1..700 {
                 prev.copy_from_slice(&buf);
@@ -1925,14 +1926,12 @@ mod tests {
                     }
                     changed += 1;
                     assert!(
-                        d.runs()
-                            .iter()
-                            .any(|&(a, b)| y as u16 >= a && (y as u16) < b),
-                        "{setting:?} frame {f}: scanline {y} changed but was not reported"
+                        dump::row_reported(&prev[y * p.w..][..p.w], &buf[y * p.w..][..p.w], y, &d),
+                        "{setting:?} frame {f}: scanline {y} changed outside every reported rect"
                     );
                 }
                 moved += usize::from(changed > 0);
-                rows.push(d.rows());
+                px.push(d.px());
             }
             assert!(
                 moved > 650,
@@ -1940,15 +1939,17 @@ mod tests {
             );
 
             // The point of the saver: a repaint regression is what this
-            // catches. Petals are scattered down the whole panel, so
-            // scanline-granular damage is inherently coarse — the bound is
-            // what was MEASURED with a margin, not an aspiration.
-            rows.sort_unstable();
-            let median = rows[rows.len() / 2];
+            // catches. In PIXELS, not scanlines — petals are scattered down
+            // the whole panel, so they touch most SCANLINES while the rects
+            // that carry them cover a fraction of the panel, and a scanline
+            // count stopped bounding the copy when damage grew an x extent.
+            // The bound is what was MEASURED with a margin, not an aspiration.
+            px.sort_unstable();
+            let median = px[px.len() / 2];
+            let panel = p.w * p.h;
             assert!(
-                median < p.h * 3 / 4,
-                "{setting:?}: median damage {median} of {} scanlines: the scene is not static",
-                p.h
+                median * 4 < panel,
+                "{setting:?}: median damage {median}px of {panel}: the scene is not static"
             );
         }
     }

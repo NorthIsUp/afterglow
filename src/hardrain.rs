@@ -698,6 +698,7 @@ impl Saver for HardRain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::rain::Rain;
     use crate::saver;
 
@@ -747,10 +748,8 @@ mod tests {
                         continue;
                     }
                     assert!(
-                        d.runs()
-                            .iter()
-                            .any(|&(a, b)| y as u16 >= a && (y as u16) < b),
-                        "{w}x{h} frame {n}: scanline {y} changed but was not reported"
+                        dump::row_reported(&prev[y * p.w..][..p.w], &buf[y * p.w..][..p.w], y, &d),
+                        "{w}x{h} frame {n}: scanline {y} changed outside every reported rect"
                     );
                 }
                 rows.push(d.rows());

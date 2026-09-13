@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::mirror::Mirror;
 use crate::saver;
-use crate::surface::{Damage, Panel};
+use crate::surface::{Damage, Panel, MAX_RUNS};
 use crate::{env_num, Config};
 
 /// Binary PPM (P6). No dependency, and every image viewer and ffmpeg reads it.
@@ -29,27 +29,47 @@ fn write_ppm(dir: &str, n: usize, buf: &[u32], p: &Panel) -> Result<(), String> 
     std::fs::write(&path, &out).map_err(|e| format!("write {path}: {e}"))
 }
 
-/// Any scanline whose visible pixels changed but which no run covers is an
-/// UNDER-REPORT: on simpledrm that region would show a stale frame forever.
-fn verify(prev: &[u32], cur: &[u32], d: &Damage, p: &Panel, n: usize) -> Result<(), String> {
+/// Any PIXEL that changed but which no rect covers is an UNDER-REPORT: on
+/// simpledrm that region shows a stale frame forever. Per pixel, not per
+/// scanline — since damage carries an x extent, a rect that is too narrow
+/// freezes a vertical band and a row-granular check would wave it through.
+///
+/// The row compare comes first so an unchanged row costs one memcmp; only rows
+/// that actually moved pay the per-pixel walk. Every saver's damage test calls
+/// this rather than carrying its own copy.
+pub fn verify(prev: &[u32], cur: &[u32], d: &Damage, p: &Panel, n: usize) -> Result<(), String> {
     let stride = cur.len() / p.h;
     for y in 0..p.h {
         let a = &prev[y * stride..][..p.w];
         let b = &cur[y * stride..][..p.w];
-        if a == b {
-            continue;
-        }
-        let covered = d.runs().iter().any(|&(y0, y1)| {
-            let y = y as u16;
-            y >= y0 && y < y1
-        });
-        if !covered {
+        if a != b && !row_reported(a, b, y, d) {
             return Err(format!(
-                "[dump] frame {n}: scanline {y} changed but not reported"
+                "[dump] frame {n}: scanline {y} changed outside every reported rect: {:?}",
+                d.runs()
             ));
         }
     }
     Ok(())
+}
+
+/// Every pixel of scanline `y` that differs between `a` and `b` is inside some
+/// reported rect. The rects covering this scanline are gathered once, so the
+/// per-pixel work is a compare against the one or two that can match rather
+/// than a scan of all sixteen — this runs over every changed row of every
+/// frame, in every saver's damage test.
+pub fn row_reported(a: &[u32], b: &[u32], y: usize, d: &Damage) -> bool {
+    let mut on = [(0usize, 0usize); MAX_RUNS];
+    let mut n = 0;
+    for r in d.runs() {
+        if y >= usize::from(r.y0) && y < usize::from(r.y1) {
+            on[n] = (usize::from(r.x0), usize::from(r.x1));
+            n += 1;
+        }
+    }
+    a.iter()
+        .zip(b)
+        .enumerate()
+        .all(|(x, (p, q))| p == q || on[..n].iter().any(|&(x0, x1)| x >= x0 && x < x1))
 }
 
 pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> {
@@ -110,9 +130,10 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
         verify(&check, &buf, &damage, &panel, n)?;
         writeln!(
             log,
-            "frame {n} runs={} rows={} {:?}",
+            "frame {n} runs={} rows={} px={} {:?}",
             damage.runs().len(),
             damage.rows(),
+            damage.px(),
             damage.runs()
         )
         .map_err(|e| format!("write {log_path}: {e}"))?;

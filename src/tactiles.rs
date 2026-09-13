@@ -217,10 +217,7 @@ impl Tactiles {
         }
 
         // A restart must not always open on the same frame of the same pattern.
-        let mut rng = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
-            .unwrap_or(0x7AC7_11E5);
+        let mut rng = crate::saver_seed(&["TACTILES_SEED"], 0x7AC7_11E5);
         let mut phase = [0.0f32; 3];
         for p in phase.iter_mut() {
             *p = (next_rand(&mut rng) % 6283) as f32 / 1000.0;
@@ -312,6 +309,7 @@ impl Saver for Tactiles {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::saver;
 
     use crate::testalloc::count;
@@ -376,10 +374,13 @@ mod tests {
                 let row = y * stride..y * stride + p.w;
                 if buf[row.clone()] != prev[row] {
                     assert!(
-                        d.runs()
-                            .iter()
-                            .any(|&(a, b)| (a as usize..b as usize).contains(&y)),
-                        "frame {n}: scanline {y} changed but was not reported"
+                        dump::row_reported(
+                            &prev[y * stride..][..p.w],
+                            &buf[y * stride..][..p.w],
+                            y,
+                            &d
+                        ),
+                        "frame {n}: scanline {y} changed outside every reported rect"
                     );
                 }
             }

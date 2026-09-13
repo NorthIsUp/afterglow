@@ -385,6 +385,7 @@ impl Saver for Moire {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::saver;
 
     /// 1080 / 16 = 67.5: the 8-line bottom remainder belongs to no cell and is
@@ -429,11 +430,16 @@ mod tests {
             for y in 0..p.h {
                 let row = y * stride..y * stride + p.w;
                 if before[row.clone()] != buf[row] {
-                    let hit = d
-                        .runs()
-                        .iter()
-                        .any(|&(a, b)| y as u16 >= a && (y as u16) < b);
-                    assert!(hit, "frame {n}: scanline {y} changed but was not reported");
+                    let hit = dump::row_reported(
+                        &before[y * p.w..][..p.w],
+                        &buf[y * p.w..][..p.w],
+                        y,
+                        &d,
+                    );
+                    assert!(
+                        hit,
+                        "frame {n}: scanline {y} changed outside every reported rect"
+                    );
                 }
             }
         }

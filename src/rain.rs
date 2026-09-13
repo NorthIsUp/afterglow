@@ -526,6 +526,7 @@ impl Saver for Rain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::saver;
 
     /// 1080 is not a multiple of 16: 67 rows and an 8-line strip below them
@@ -606,10 +607,8 @@ mod tests {
                     continue;
                 }
                 assert!(
-                    d.runs()
-                        .iter()
-                        .any(|&(a, b)| y as u16 >= a && (y as u16) < b),
-                    "frame {n}: scanline {y} changed but was not reported"
+                    dump::row_reported(&prev[y * p.w..][..p.w], &buf[y * p.w..][..p.w], y, &d),
+                    "frame {n}: scanline {y} changed outside every reported rect"
                 );
             }
             for i in 0..cells {

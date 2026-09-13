@@ -488,6 +488,7 @@ fn compose(cols: usize, rows: usize, fields: usize, rng: &mut u32) -> (Vec<Node>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::saver;
 
     /// 1080 is not a multiple of 32, so the bottom 24 scanlines belong to no
@@ -538,10 +539,8 @@ mod tests {
                 if buf[a..b] != prev[a..b] {
                     dirty_rows += 1;
                     assert!(
-                        d.runs()
-                            .iter()
-                            .any(|&(y0, y1)| y >= y0 as usize && y < y1 as usize),
-                        "frame {n}: scanline {y} changed but was not reported"
+                        dump::row_reported(&prev[y * p.w..][..p.w], &buf[y * p.w..][..p.w], y, &d),
+                        "frame {n}: scanline {y} changed outside every reported rect"
                     );
                 }
             }

@@ -744,6 +744,7 @@ impl Saver for Confetti {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::saver;
     use crate::surface::Damage;
 
@@ -836,10 +837,8 @@ mod tests {
                 continue;
             }
             assert!(
-                d.runs()
-                    .iter()
-                    .any(|&(a, b)| y >= a as usize && y < b as usize),
-                "frame {n}: scanline {y} changed but was not reported"
+                dump::row_reported(&before[y * p.w..][..p.w], &after[y * p.w..][..p.w], y, d),
+                "frame {n}: scanline {y} changed outside every reported rect"
             );
         }
     }

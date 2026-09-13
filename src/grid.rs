@@ -246,6 +246,7 @@ pub const fn bake<const N: usize>(rgb: &[[u8; 3]; N]) -> [u32; N] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::surface::Run;
 
     #[test]
     fn cell_packs_both_fields() {
@@ -302,7 +303,11 @@ mod tests {
             let d = s.finish();
 
             let case = format!("{w}x{h} cell {cw}x{ch}");
-            assert_eq!(d.runs(), [(0, h as u16)], "{case}: frame 0 damage");
+            assert_eq!(
+                d.runs(),
+                [Run::new(0, 0, w as u16, h as u16)],
+                "{case}: frame 0 damage"
+            );
             assert_eq!(d.rows(), h, "{case}: frame 0 rows");
             assert!(
                 !buf.contains(&JUNK),
@@ -328,7 +333,7 @@ mod tests {
         g.fill(|_, _| Cell::new(font::SOLID, 0));
         let mut s = Surface::new(&mut buf, &panel);
         g.flush_sparse(&mut s, &[0x11], &[]);
-        assert_eq!(s.finish().runs(), [(0, 1080)]);
+        assert_eq!(s.finish().runs(), [Run::new(0, 0, 1920, 1080)]);
         assert!(!buf.contains(&JUNK));
     }
 

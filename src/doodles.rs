@@ -258,10 +258,7 @@ impl Doodles {
             subh: (rows * 4) as f32,
             // Seeded off the clock so a restart does not replay one doodle
             // forever. Same trick sakura grows its tree from.
-            rng: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
-                .unwrap_or(0xD00D_1E55),
+            rng: crate::saver_seed(&["DOODLES_SEED"], 0xD00D_1E55),
         };
         for k in 0..pens {
             let seed = me.rng ^ (k as u32).wrapping_mul(0x9E37_79B9);
@@ -420,6 +417,7 @@ impl Saver for Doodles {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::saver;
     use crate::testalloc::count as allocs;
 
@@ -476,10 +474,13 @@ mod tests {
                 let row = y * stride..y * stride + p.w;
                 if buf[row.clone()] != prev[row] {
                     assert!(
-                        d.runs()
-                            .iter()
-                            .any(|&(a, b)| (a as usize..b as usize).contains(&y)),
-                        "frame {n}: scanline {y} changed but was not reported"
+                        dump::row_reported(
+                            &prev[y * stride..][..p.w],
+                            &buf[y * stride..][..p.w],
+                            y,
+                            &d
+                        ),
+                        "frame {n}: scanline {y} changed outside every reported rect"
                     );
                 }
             }

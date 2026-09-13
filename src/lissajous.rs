@@ -304,6 +304,7 @@ impl Saver for Lissajous {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dump;
     use crate::saver;
 
     /// 1080 is not a multiple of 16: 67 rows cover 1072 and the bottom 8
@@ -362,10 +363,8 @@ mod tests {
                 let row = y * stride..y * stride + p.w;
                 if buf[row.clone()] != prev[row] {
                     assert!(
-                        d.runs()
-                            .iter()
-                            .any(|&(a, b)| (a as usize..b as usize).contains(&y)),
-                        "frame {n}: scanline {y} changed but was not reported"
+                        dump::row_reported(&prev[y * p.w..][..p.w], &buf[y * p.w..][..p.w], y, &d),
+                        "frame {n}: scanline {y} changed outside every reported rect"
                     );
                 }
             }
