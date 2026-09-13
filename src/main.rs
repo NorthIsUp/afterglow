@@ -75,17 +75,22 @@
 
 mod city;
 mod dump;
+mod dvd;
 mod fire;
 mod font;
 mod grid;
 mod host;
+mod lissajous;
 mod matrix;
 mod mirror;
+mod sakura;
+mod satori;
 mod saver;
 mod surface;
 mod toasters;
 mod toasters2;
 mod toasters3;
+mod warp;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

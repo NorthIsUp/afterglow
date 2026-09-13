@@ -1,14 +1,19 @@
 //! The one thing a screensaver is, and the one per-frame call around it.
 
 use crate::city::City;
+use crate::dvd::Dvd;
 use crate::fire::Fire;
 use crate::grid::Grid;
+use crate::lissajous::Lissajous;
 use crate::matrix::Matrix;
 use crate::mirror::Mirror;
+use crate::sakura::Sakura;
+use crate::satori::Satori;
 use crate::surface::{Damage, Panel, Surface};
 use crate::toasters::Toasters;
 use crate::toasters2::Toasters2;
 use crate::toasters3::Toasters3;
+use crate::warp::Warp;
 
 /// A screensaver. One frame, one call. Dispatch happens here and NOWHERE below
 /// it: no `&dyn Palette`, no `fn cell(&self, x, y) -> Cell`, no `&mut dyn FnMut`
@@ -56,6 +61,11 @@ const SAVERS: &[(&str, Build)] = &[
     ("toasters", |p, fps| Box::new(Toasters::new(p, fps))),
     ("toasters2", |p, fps| Box::new(Toasters2::new(p, fps))),
     ("toasters3", |p, fps| Box::new(Toasters3::new(p, fps))),
+    ("dvd", |p, fps| Box::new(Dvd::new(p, fps))),
+    ("lissajous", |p, fps| Box::new(Lissajous::new(p, fps))),
+    ("satori", |p, fps| Box::new(Satori::new(p, fps))),
+    ("warp", |p, fps| Box::new(Warp::new(p, fps))),
+    ("sakura", |p, fps| Box::new(Sakura::new(p, fps))),
     ("city", |p, fps| Box::new(City::new(p, fps))),
 ];
 
