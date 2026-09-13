@@ -26,6 +26,7 @@ falls back to `ascii` — a headless pod must never crash-loop on a typo.
 | `blocks`   | The same fire drawn as chunky pixels — a solid glyph per cell.                                                                      | `FIRE_SCALE` (px, 1..16, default 4)                                                                                                                                                                                          |
 | `matrix`   | Digital rain.                                                                                                                       | `MATRIX_CELL_W` (8..64, default 16), `MATRIX_CELL_H` (8..128, default 32)                                                                                                                                                    |
 | `toasters` | Flying toasters, after After Dark's.                                                                                                | `TOASTER_DENSITY` (per 1000 cells, 1..60, default 4), `TOASTER_SPEED` (px/sec, 8..2000, default 170), `TOASTER_TOAST_PCT` (0..100, default 25), `TOASTER_FLAP_FPS` (1..120, default 15), `TOASTER_CELL_W` / `TOASTER_CELL_H` |
+| `city`     | The After Dark night skyline — lit windows on a black silhouette, scattered lights in the sky, everything twinkling in place.       | `CITY_WINDOW_PCT` (0..100, default 88), `CITY_TWINKLE` (window flips per second, default 40), `CITY_SKY_TWINKLE` (sky re-shades per second, default 12), `CITY_CELL_W` / `CITY_CELL_H` (12, 16)                              |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
 `DRM_DEVICE` (default `/dev/dri/card0`), `RETRY_SECONDS`.
@@ -55,6 +56,67 @@ usual imitation, and all three are in `image/src/matrix.rs`:
   two random floats per column, so several drops share a column at different
   speeds and no column is ever idle. Discrete drops with black gaps are the
   giveaway most implementations ship.
+
+### About the city saver
+
+`image/src/city.rs` is the After Dark night skyline, and its palette and layout
+are sampled off a reference frame rather than invented. Five things are the
+whole look:
+
+- **Sky and windows are different colour families, not one ramp dimmed.** Sky
+  lights are neutral grey with a one-stop blue shift (`g == r`, dimmest
+  `#686878`); windows are cyan-white and hotter (`g > r`, hottest `#D8F8F8`).
+  Paint both from one grey ramp and the skyline stops reading as lit rooms.
+- **The silhouette is made of windows, not of an outline.** A building is a
+  rectangle of window slots and nothing draws an edge. Buildings share one
+  baseline and overlap, so a nearer one punches its own rectangle through the
+  one behind.
+- **Every building is lit in its own style**, assigned once and stable for the
+  life of the scene: column pitch, a dark service floor every fourth storey,
+  curtain-wall strips instead of a grid, or simply mostly dark. Without that,
+  two buildings that touch are one wall of lights with no edge in it — the
+  silhouette is there but nothing inside it says where one ends and the next
+  begins.
+- **The roofline is four height classes, not one spread**: low blocks,
+  mid-rise, towers, and a spire on one draw in sixteen, with the taller classes
+  drawn narrower. Towers standing clear of the crowd are what makes the shape
+  read as a skyline — the first cut of this saver used one narrow uniform range
+  and rendered a flat band with no towers in it.
+- **Density per tenth of the frame, top to bottom, is 0/29/40/31/22/20/43/63/47/0.**
+  Both edges are empty; the sky thins toward the top; street level is darker
+  than the floors above it. Those numbers are a guide, not ground truth — they
+  come off one compressed screenshot whose anti-aliasing halos count as lit
+  pixels — so where they and the art disagree the art wins. The rendered frame
+  measures 0/26/42/29/28/33/49/62/45/0: within three points everywhere except
+  bands 4, 5 and 6, which run +6/+13/+6 because the towers reach up into them.
+  That drift is what a skyline with real towers in it costs. The tests assert
+  the ordering and a loose envelope, never the figures.
+
+The twinkle is deliberately slow — 40 window flips and 12 sky re-shades per
+second, against the 2,488 window slots a 1920x1080 panel generates, so a given
+window turns over about once a minute and the scene reads as a calm shimmer
+rather than a busy one. Both are rates in flips per second, not divisors. A
+window is RE-DRAWN at its own building's odds rather than toggled: a toggle has
+a fixed point at half lit, so a city generated at 88% would quietly fade to 50%
+over a few minutes. Re-drawing is memoryless in one step, so the stationary
+distribution is exactly the generating one — no drift, not merely slow drift,
+and `the_scene_is_still_and_does_not_drain` holds every band to within two
+points over 300,000 frames.
+
+It is also by a wide margin the cheapest saver here, and by construction rather
+than by luck. The scene is built once and lives in the grid between frames; a
+frame rewrites only the cell or two that twinkle and hands `Grid::flush_sparse`
+their indices, so there is no per-cell scan, no rebuild and no allocation in the
+render path. Measured over the 299 frames after frame 0 at 1920x1080: median 16
+damaged scanlines in one run, mean 22.7, worst 48, and 29 frames that changed
+nothing at all — against toasters' median 672 and ascii/matrix's 1056, the whole
+grid every frame.
+
+The invariant under those numbers is in `Grid::flush_sparse`: `cur` and `prev`
+are identical after every flush, so a cell written but left out of `dirty` is a
+test failure. That is checked against the grid's two buffers and NOT against the
+framebuffer — an unreported write is never blitted, so the framebuffer never
+changes and a framebuffer diff cannot see it.
 
 ### About the toasters saver
 
@@ -132,7 +194,7 @@ nowhere else.
 
 **Layout** (`image/src/`): `surface.rs` (the mapped frame + damage), `grid.rs`
 and `font.rs` (character grid + the one glyph blitter), `fire.rs`, `matrix.rs`
-and `toasters.rs` (the savers), `saver.rs` (the trait and the name → saver
+`toasters.rs` and `city.rs` (the savers), `saver.rs` (the trait and the name → saver
 dispatch), `host.rs` (DRM), `dump.rs` (headless PPM rendering). Adding a saver
 is a module plus one row in `saver::SAVERS`.
 

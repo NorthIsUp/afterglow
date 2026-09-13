@@ -164,6 +164,9 @@ pub const GLYPHS: [[u8; GLYPH_H]; 144] = [
 pub const BLANK: u16 = 0;
 /// Every pixel lit — a whole cell of one colour.
 pub const SOLID: u16 = 1;
+/// A small centred square, U+25AA. One lit lamp with dark margin all
+/// round, so a run of adjacent cells reads as separate lights.
+pub const BLOCK: u16 = 54;
 
 /// Fire's intensity ramp, " .:-=+*#%@", cool to hot.
 #[rustfmt::skip]

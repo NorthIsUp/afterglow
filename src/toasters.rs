@@ -48,11 +48,11 @@
 //! renderer (the one-model flock this replaced measures 608 the same way). That
 //! is still well under `ascii` and `matrix`, which repaint 100% every frame.
 
-use crate::env_num;
 use crate::font;
 use crate::grid::{Cell, Grid};
 use crate::saver::Saver;
 use crate::surface::{Panel, Surface};
+use crate::{env_num, next_rand};
 
 mod art;
 
@@ -156,20 +156,6 @@ pub struct Toasters {
     flap_div: u32,
     tick: u32,
     rng: u32,
-}
-
-/// splitmix32, not the LCG the other savers use. Fire and matrix draw one
-/// number per cell, where the LCG's correlation between successive outputs is
-/// invisible; this draws an (x, y) PAIR from consecutive outputs, and there the
-/// correlation is a flock that clumps along a diagonal band and leaves a third
-/// of the panel empty. That was visible in a dump, which is why this is here.
-#[inline]
-fn next_rand(rng: &mut u32) -> u32 {
-    *rng = rng.wrapping_add(0x9E37_79B9);
-    let mut z = *rng;
-    z = (z ^ (z >> 16)).wrapping_mul(0x85EB_CA6B);
-    z = (z ^ (z >> 13)).wrapping_mul(0xC2B2_AE35);
-    (z ^ (z >> 16)) >> 1
 }
 
 /// Clear or paint one sprite-sized rectangle of `scene`, clipped to the grid.

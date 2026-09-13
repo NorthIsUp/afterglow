@@ -31,7 +31,7 @@
 //! * `surface` — the mapped frame and the damage contract. Read that first.
 //! * `mirror` — the web mirror: the same cells the panel shows, over HTTP.
 //! * `grid` / `font` — the character grid and the one glyph blitter.
-//! * `fire` / `matrix` / `toasters` — the savers. `saver` is the trait and the name -> saver
+//! * `fire` / `matrix` / `toasters` / `city` — the savers. `saver` is the trait and the name -> saver
 //!   dispatch; adding one is a module plus a row in `saver::SAVERS`.
 //! * `host` — DRM: modeset, mapping, dirty, teardown.
 //! * `dump` — the same frame code rendered to PPM on a machine with no display,
@@ -40,7 +40,8 @@
 //! # Environment
 //!
 //! * `DRM_DEVICE`     — card to open (default `/dev/dri/card0`)
-//! * `SAVER`          — `ascii` (default), `blocks`, `matrix` or `toasters`. The
+//! * `SAVER`          — `ascii` (default), `blocks`, `matrix`, `toasters` or
+//!   `city`. The
 //!   startup choice only: `POST /select?saver=<name>` on the web mirror
 //!   switches it live, and a restart goes back to this.
 //! * `SAVER_FPS`      — target frames/sec, 1..=120 (default 30)
@@ -53,6 +54,10 @@
 //! * `TOASTER_TOAST_PCT` — percent of the flock that is toast (default 25)
 //! * `TOASTER_SPEED`  — horizontal px per SECOND, 8..=2000 (default 170)
 //! * `TOASTER_FLAP_FPS` — wing frames per second, 1..=120 (default 15)
+//! * `CITY_CELL_W` / `CITY_CELL_H` — city: cell in px (12, 16)
+//! * `CITY_WINDOW_PCT` — percent of a building's windows lit (default 51)
+//! * `CITY_TWINKLE`  — windows switching per SECOND (default 150)
+//! * `CITY_SKY_TWINKLE` — sky lights re-shaded per second (default 45)
 //! * `RETRY_SECONDS`  — wait between attempts when no display is present (default 30)
 //! * `SAVER_HTTP`     — address the web mirror listens on (default
 //!   `127.0.0.1:8080`, which is the `tailscale-auth` sidecar's default upstream;
@@ -66,6 +71,7 @@
 //! is bumped in a separate commit, so a new binary always runs against the old
 //! env block first.
 
+mod city;
 mod dump;
 mod fire;
 mod font;
@@ -98,6 +104,19 @@ pub fn env_num(keys: &[&str], default: i64, lo: i64, hi: i64) -> i64 {
         };
     }
     default
+}
+
+/// splitmix32, not the LCG fire and matrix use. Those draw one number per cell,
+/// where the LCG's correlation between successive outputs is invisible; a saver
+/// that draws a PAIR from consecutive outputs gets a visible diagonal clump out
+/// of it. Toasters found that in a dump, which is why this exists.
+#[inline]
+pub fn next_rand(rng: &mut u32) -> u32 {
+    *rng = rng.wrapping_add(0x9E37_79B9);
+    let mut z = *rng;
+    z = (z ^ (z >> 16)).wrapping_mul(0x85EB_CA6B);
+    z = (z ^ (z >> 13)).wrapping_mul(0xC2B2_AE35);
+    (z ^ (z >> 16)) >> 1
 }
 
 /// As `env_num`, for the values that are names rather than numbers.

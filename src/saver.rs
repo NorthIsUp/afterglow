@@ -1,5 +1,6 @@
 //! The one thing a screensaver is, and the one per-frame call around it.
 
+use crate::city::City;
 use crate::fire::Fire;
 use crate::grid::Grid;
 use crate::matrix::Matrix;
@@ -51,6 +52,7 @@ const SAVERS: &[(&str, Build)] = &[
     ("blocks", |p, _| Box::new(Fire::blocks(p))),
     ("matrix", |p, fps| Box::new(Matrix::new(p, fps))),
     ("toasters", |p, fps| Box::new(Toasters::new(p, fps))),
+    ("city", |p, fps| Box::new(City::new(p, fps))),
 ];
 
 /// The name at an index the render loop is holding. Panics on an index no

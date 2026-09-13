@@ -202,6 +202,11 @@ def main() -> None:
         for cp in range(0x20, 0x7F)
     ]
 
+    # Already interned by the matrix set; named here because "a lit lamp" is a
+    # different intent from "slot 44 of the film's glyph order", and city wants
+    # the shape, not the order.
+    block = add(font.rows(0x25AA, mirror=False)[0], "U+25AA small square")
+
     with contextlib.ExitStack() as stack:
         w: TextIO = (
             sys.stdout if out == "-" else stack.enter_context(open(out, "w", encoding="utf-8"))
@@ -237,6 +242,9 @@ def main() -> None:
         p(f"pub const BLANK: u16 = {blank};")
         p("/// Every pixel lit — a whole cell of one colour.")
         p(f"pub const SOLID: u16 = {solid};")
+        p("/// A small centred square, U+25AA. One lit lamp with dark margin all")
+        p("/// round, so a run of adjacent cells reads as separate lights.")
+        p(f"pub const BLOCK: u16 = {block};")
         p()
         p('/// Fire\'s intensity ramp, " .:-=+*#%@", cool to hot.')
         p("#[rustfmt::skip]")

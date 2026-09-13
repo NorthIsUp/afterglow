@@ -128,33 +128,76 @@ impl Grid {
         }
     }
 
+    /// One cell of next frame, for a saver that keeps a persistent scene and
+    /// touches only what moved. Pairs with `flush_sparse`; mixing it with
+    /// `fill` is pointless, not unsound — `fill` overwrites every cell.
+    #[inline]
+    pub fn set(&mut self, i: usize, c: Cell) {
+        self.cur[i] = c;
+    }
+
+    /// The cell `set` last wrote. `cells()` is the DRAWN frame and lags this by
+    /// a flush, which is the difference that matters to a saver reading its own
+    /// scene back on frame 0.
+    #[inline]
+    pub fn cell(&self, i: usize) -> Cell {
+        self.cur[i]
+    }
+
+    /// Blit one cell and report its rows. The only code in the program that
+    /// writes pixels.
+    #[inline]
+    fn blit(&self, s: &mut Surface<'_>, pal: &[u32], i: usize) {
+        let c = self.cur[i];
+        let bits = &font::GLYPHS[c.glyph()];
+        let fg = pal[c.colour()];
+        let (cx, cy) = (i % self.cols, i / self.cols);
+        for (row, &sr) in s
+            .cell_rows(cx * self.cell_w, cy * self.cell_h, self.cell_w, self.cell_h)
+            .zip(self.rowmap.iter())
+        {
+            // & 15 is free and lets the bounds check fold away.
+            let line = bits[(sr & (font::GLYPH_H as u8 - 1)) as usize];
+            for (out, &m) in row.iter_mut().zip(self.mask.iter()) {
+                *out = if line & m != 0 { fg } else { BG };
+            }
+        }
+    }
+
     /// Blit every changed cell (every cell on frame 0), report exactly the rows
-    /// blitted, then swap `cur` into `prev`. The only code in the program that
-    /// writes pixels. Snapshotting is folded in: there is nothing to misorder.
+    /// blitted, then swap `cur` into `prev`. Snapshotting is folded in: there is
+    /// nothing to misorder.
     pub fn flush(&mut self, s: &mut Surface<'_>, pal: &[u32]) {
-        for cy in 0..self.rows {
-            for cx in 0..self.cols {
-                let i = cy * self.cols + cx;
-                let c = self.cur[i];
-                if !self.first && c == self.prev[i] {
-                    continue;
-                }
-                let bits = &font::GLYPHS[c.glyph()];
-                let fg = pal[c.colour()];
-                for (row, &sr) in s
-                    .cell_rows(cx * self.cell_w, cy * self.cell_h, self.cell_w, self.cell_h)
-                    .zip(self.rowmap.iter())
-                {
-                    // & 15 is free and lets the bounds check fold away.
-                    let line = bits[(sr & (font::GLYPH_H as u8 - 1)) as usize];
-                    for (out, &m) in row.iter_mut().zip(self.mask.iter()) {
-                        *out = if line & m != 0 { fg } else { BG };
-                    }
-                }
+        for i in 0..self.cur.len() {
+            if self.first || self.cur[i] != self.prev[i] {
+                self.blit(s, pal, i);
             }
         }
         self.first = false;
         std::mem::swap(&mut self.cur, &mut self.prev);
+    }
+
+    /// Blit exactly the cells named in `dirty` — every cell on frame 0, because
+    /// the buffer arrives zeroed. Nothing here is O(cells) after that frame, so
+    /// a saver whose scene is static can cost a handful of cells a frame.
+    ///
+    /// `prev` is kept in step with `cur` rather than swapped: the scene lives in
+    /// `cur` between frames, and a swap would hand the saver back the frame
+    /// before last. Duplicate indices are allowed and merely blit twice.
+    pub fn flush_sparse(&mut self, s: &mut Surface<'_>, pal: &[u32], dirty: &[u32]) {
+        if self.first {
+            for i in 0..self.cur.len() {
+                self.blit(s, pal, i);
+            }
+            self.prev.copy_from_slice(&self.cur);
+            self.first = false;
+            return;
+        }
+        for &i in dirty {
+            let i = i as usize;
+            self.blit(s, pal, i);
+            self.prev[i] = self.cur[i];
+        }
     }
 }
 
