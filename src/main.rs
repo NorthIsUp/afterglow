@@ -74,6 +74,7 @@
 //! env block first.
 
 mod city;
+mod confetti;
 mod dump;
 mod dvd;
 mod fire;

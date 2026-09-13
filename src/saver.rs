@@ -1,6 +1,7 @@
 //! The one thing a screensaver is, and the one per-frame call around it.
 
 use crate::city::City;
+use crate::confetti::Confetti;
 use crate::dvd::Dvd;
 use crate::fire::Fire;
 use crate::fractal::Fractal;
@@ -76,6 +77,7 @@ const SAVERS: &[(&str, Build)] = &[
     ("moire", |p, fps| Box::new(Moire::new(p, fps))),
     ("rain", |p, fps| Box::new(Rain::new(p, fps))),
     ("worms", |p, fps| Box::new(Worms::new(p, fps))),
+    ("confetti", |p, fps| Box::new(Confetti::new(p, fps))),
     ("city", |p, fps| Box::new(City::new(p, fps))),
 ];
 
