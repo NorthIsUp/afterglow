@@ -20,13 +20,14 @@ writes pixels straight into a DRM/KMS dumb buffer.
 Pick one with `SAVER` (older spelling: `FIRE_STYLE`). Anything unrecognised
 falls back to `ascii` — a headless pod must never crash-loop on a typo.
 
-| `SAVER`    | What                                                                                                                                | Knobs                                                                                                                                                                                                                        |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ascii`    | Doom fire as an ASCII ramp (`" .:-=+*#%@"`), one heat sample per character cell, coloured by the 37-step fire palette. The default. | `FIRE_CELL` (px, 8..64, default 16)                                                                                                                                                                                          |
-| `blocks`   | The same fire drawn as chunky pixels — a solid glyph per cell.                                                                      | `FIRE_SCALE` (px, 1..16, default 4)                                                                                                                                                                                          |
-| `matrix`   | Digital rain.                                                                                                                       | `MATRIX_CELL_W` (8..64, default 16), `MATRIX_CELL_H` (8..128, default 32)                                                                                                                                                    |
-| `toasters` | Flying toasters, after After Dark's.                                                                                                | `TOASTER_DENSITY` (per 1000 cells, 1..60, default 4), `TOASTER_SPEED` (px/sec, 8..2000, default 170), `TOASTER_TOAST_PCT` (0..100, default 25), `TOASTER_FLAP_FPS` (1..120, default 15), `TOASTER_CELL_W` / `TOASTER_CELL_H` |
-| `city`     | The After Dark night skyline — lit windows on a black silhouette, scattered lights in the sky, everything twinkling in place.       | `CITY_WINDOW_PCT` (0..100, default 88), `CITY_TWINKLE` (window flips per second, default 40), `CITY_SKY_TWINKLE` (sky re-shades per second, default 12), `CITY_CELL_W` / `CITY_CELL_H` (12, 16)                              |
+| `SAVER`     | What                                                                                                                                                                                              | Knobs                                                                                                                                                                                                                        |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ascii`     | Doom fire as an ASCII ramp (`" .:-=+*#%@"`), one heat sample per character cell, coloured by the 37-step fire palette. The default.                                                               | `FIRE_CELL` (px, 8..64, default 16)                                                                                                                                                                                          |
+| `blocks`    | The same fire drawn as chunky pixels — a solid glyph per cell.                                                                                                                                    | `FIRE_SCALE` (px, 1..16, default 4)                                                                                                                                                                                          |
+| `matrix`    | Digital rain.                                                                                                                                                                                     | `MATRIX_CELL_W` (8..64, default 16), `MATRIX_CELL_H` (8..128, default 32)                                                                                                                                                    |
+| `toasters`  | Flying toasters, after After Dark's.                                                                                                                                                              | `TOASTER_DENSITY` (per 1000 cells, 1..60, default 4), `TOASTER_SPEED` (px/sec, 8..2000, default 170), `TOASTER_TOAST_PCT` (0..100, default 25), `TOASTER_FLAP_FPS` (1..120, default 15), `TOASTER_CELL_W` / `TOASTER_CELL_H` |
+| `toasters3` | The same flock drawn with BRAILLE (U+2800..28FF): a 2x4 dot matrix per cell, so one 16x6-cell toaster is a 32x24 bitmap — real slot openings, a dial, a lever, barbed wings. One model, not four. | `TOASTER3_DENSITY` (per 1000 cells, 1..60, default 2), `TOASTER3_SPEED`, `TOASTER3_TOAST_PCT`, `TOASTER3_FLAP_FPS`, `TOASTER3_CELL_W` / `TOASTER3_CELL_H`                                                                    |
+| `city`      | The After Dark night skyline — lit windows on a black silhouette, scattered lights in the sky, everything twinkling in place.                                                                     | `CITY_WINDOW_PCT` (0..100, default 88), `CITY_TWINKLE` (window flips per second, default 40), `CITY_SKY_TWINKLE` (sky re-shades per second, default 12), `CITY_CELL_W` / `CITY_CELL_H` (12, 16)                              |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
 `DRM_DEVICE` (default `/dev/dri/card0`), `RETRY_SECONDS`.
@@ -159,6 +160,61 @@ Entry is the original's "reverse L": lanes down the top edge and in from the
 right, snapped to cell boundaries. Background is solid black and nothing paints
 over it, which is why an idle region costs no blits at all.
 
+### About the toasters3 saver
+
+`toasters3` is `toasters`' behaviour at eight times the shape resolution. The
+slope, the lockstep, the ping-pong beat, the 3:1 toast ratio and the sampled
+palette are the same values, shared where it matters: `toasters3/art.rs` imports
+`toasters::art`'s `PAL_RGB` and `ink`, so the two savers cannot drift to
+different colours.
+
+**Braille here is this repo's own bitmap, not Unifont's.** Unifont draws
+U+2800..28FF as a _reading_ font: a set dot is a 2x2 pip and an UNSET dot is a
+1x1 pip, so U+2800 is not blank and a fully-set U+28FF lights 16 of a cell's 128
+pixels. As sub-cell graphics that is a 12.5%-coverage ghost with a permanent pip
+grid under it, and the non-blank U+2800 would break the transparency the sprite
+stamp depends on. `tools/genfont.py` therefore generates the 256 cells as FILLED
+4x4 quadrants — the same 2x4 addressing, drawn solid. Pattern `0x00` interns
+onto `BLANK` and `0xFF` onto `SOLID`, so a dotless cell is transparent for free.
+Cost: the atlas goes from 144 glyphs (2304 B) to 398 (6368 B), `font.rs` from
+185 lines to 446. The glyph index is already `u16`, so nothing widened.
+
+**Detail is 8x; colour is 1x.** A `Cell` is one glyph and one palette index, so
+every dot inside a cell is the same colour. The art is drawn around that: colour
+regions are at least a cell (two dots) wide, and everything finer than a cell is
+drawn as NEGATIVE space — the slots, the lever track, the dial recess, the two
+chrome ribs, the crumb-tray seam and the gap between the feet are all unlit dots
+reading black against chrome. An interior detail drawn as a second _shade_ of
+chrome disappears at cell resolution; the same detail drawn as holes does not.
+The first draft of this sprite had a solid interior and rendered as a grey blob.
+
+**The art is a dot bitmap, not a row of braille characters.** Sprites in
+`toasters3/art.rs` are written as `#` and spaces, two characters across and four
+rows down per cell; `bake_braille` packs each block into its pattern byte at
+compile time. Braille characters would be the same data in a form nobody can
+edit, and would break the byte-indexed const parser — U+28xx is three bytes of
+UTF-8 where a column is one byte.
+
+**One model, not four.** `toasters` flies four silhouettes because a sky of one
+14x4 line-art shape is repetitive. A 32x24 bitmap already carries more
+information than all four of those, so this flies one toaster drawn properly
+rather than four drawn four times as expensively.
+
+Measured over 599 frames at 1920x1080, damaged scanlines per frame:
+
+| saver       | median | mean | max  |
+| ----------- | ------ | ---- | ---- |
+| `city`      | 16     | 22   | 48   |
+| `toasters3` | 288    | 304  | 672  |
+| `toasters`  | 672    | 626  | 960  |
+| `matrix`    | 1056   | 1056 | 1056 |
+
+`toasters3` is _cheaper_ than `toasters` despite the bigger sprite: the default
+density is 2 per 1000 cells rather than 4, because the original sized its flock
+by area under sprite (~22% of the screen) and this sprite is 96 cells where the
+classic is 56. Nine bigger objects at nine heights merge into fewer damage runs
+than fifteen smaller ones.
+
 ## Gotchas
 
 - **The mirror looks perfect while the panel is wrong** — the mirror publishes `saver.grid().cells()`, the frame we just _wrote_, not a read-back of the scanout. Anything that clobbers the panel downstream of that write (fbcon, another DRM client) is invisible to it, which is why it sat green for four days while the monitor showed console text. Fix: trust the mirror for "is the renderer running", never for "is this what the screen shows".
@@ -194,7 +250,7 @@ nowhere else.
 
 **Layout** (`image/src/`): `surface.rs` (the mapped frame + damage), `grid.rs`
 and `font.rs` (character grid + the one glyph blitter), `fire.rs`, `matrix.rs`
-`toasters.rs` and `city.rs` (the savers), `saver.rs` (the trait and the name → saver
+`toasters.rs`, `toasters3.rs` and `city.rs` (the savers), `saver.rs` (the trait and the name → saver
 dispatch), `host.rs` (DRM), `dump.rs` (headless PPM rendering). Adding a saver
 is a module plus one row in `saver::SAVERS`.
 
@@ -282,7 +338,9 @@ Glyphs are 8x16, one byte per row, from a vendored 6 KB subset of GNU Unifont's
 OFL 1.1 arm of Unifont's dual licence is elected explicitly (`tools/LICENSE.unifont`);
 the derived table is not called Unifont. Fire's ten ramp glyphs are this repo's
 own 8x8 bitmaps, row-doubled, which is why fire renders pixel-identically to the
-pre-refactor build. `ASCII` indexes U+0020..=U+007E by `c - 0x20`, which is what
+pre-refactor build, and the 256 braille cells are this repo's own filled 2x4
+quadrants rather than Unifont's reading pips — see the toasters3 section for
+why. `ASCII` indexes U+0020..=U+007E by `c - 0x20`, which is what
 lets a saver write its sprites as plain string literals; identical bitmaps are
 interned, so a character another set already pulled in costs no extra slot.
 

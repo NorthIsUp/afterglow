@@ -27,7 +27,7 @@ use crate::grid::{bake, Cell};
 /// Index 0 is the background. Nothing paints over it, which is why an idle
 /// region costs zero blits.
 #[rustfmt::skip]
-pub(super) const PAL_RGB: [[u8; 3]; 16] = [
+pub(crate) const PAL_RGB: [[u8; 3]; 16] = [
     [0x00, 0x00, 0x00], //  0        background
     [0x90, 0x90, 0x90], //  1 'C' chrome front panel, the sheet's largest family
     [0xF0, 0xF0, 0xF0], //  2 'W' white — the near wing
@@ -45,7 +45,7 @@ pub(super) const PAL_RGB: [[u8; 3]; 16] = [
     [0xD0, 0xB0, 0x30], // 14 'y' amber
     [0xF0, 0xD0, 0x50], // 15 'Y' deep gold
 ];
-pub(super) const PAL: [u32; 16] = bake(&PAL_RGB);
+pub(crate) const PAL: [u32; 16] = bake(&PAL_RGB);
 
 /// Ink key -> palette index. Every sprite carries a grid of these parallel to
 /// its art, because the art reuses characters across regions: the `/` in column
@@ -55,7 +55,7 @@ pub(super) const PAL: [u32; 16] = bake(&PAL_RGB);
 /// There is no fallback arm. This runs inside `bake_sprites`, in a const, so a
 /// key nobody defined is a build failure and not a stroke silently painted the
 /// background colour.
-pub(super) const fn ink(k: u8) -> u16 {
+pub(crate) const fn ink(k: u8) -> u16 {
     match k {
         b'C' => 1,
         b'W' => 2,

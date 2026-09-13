@@ -31,7 +31,7 @@
 //! * `surface` — the mapped frame and the damage contract. Read that first.
 //! * `mirror` — the web mirror: the same cells the panel shows, over HTTP.
 //! * `grid` / `font` — the character grid and the one glyph blitter.
-//! * `fire` / `matrix` / `toasters` / `city` — the savers. `saver` is the trait and the name -> saver
+//! * `fire` / `matrix` / `toasters` / `toasters3` / `city` — the savers. `saver` is the trait and the name -> saver
 //!   dispatch; adding one is a module plus a row in `saver::SAVERS`.
 //! * `host` — DRM: modeset, mapping, dirty, teardown.
 //! * `dump` — the same frame code rendered to PPM on a machine with no display,
@@ -40,8 +40,8 @@
 //! # Environment
 //!
 //! * `DRM_DEVICE`     — card to open (default `/dev/dri/card0`)
-//! * `SAVER`          — `ascii` (default), `blocks`, `matrix`, `toasters` or
-//!   `city`. The
+//! * `SAVER`          — `ascii` (default), `blocks`, `matrix`, `toasters`,
+//!   `toasters3` or `city`. The
 //!   startup choice only: `POST /select?saver=<name>` on the web mirror
 //!   switches it live, and a restart goes back to this.
 //! * `SAVER_FPS`      — target frames/sec, 1..=120 (default 30)
@@ -54,6 +54,8 @@
 //! * `TOASTER_TOAST_PCT` — percent of the flock that is toast (default 25)
 //! * `TOASTER_SPEED`  — horizontal px per SECOND, 8..=2000 (default 170)
 //! * `TOASTER_FLAP_FPS` — wing frames per second, 1..=120 (default 15)
+//! * `TOASTER3_*` — toasters3: the same knobs under a `TOASTER3_` prefix,
+//!   density defaulting to 2 because the sprite is nearly twice the cells
 //! * `CITY_CELL_W` / `CITY_CELL_H` — city: cell in px (12, 16)
 //! * `CITY_WINDOW_PCT` — percent of a building's windows lit (default 51)
 //! * `CITY_TWINKLE`  — windows switching per SECOND (default 150)
@@ -82,6 +84,7 @@ mod mirror;
 mod saver;
 mod surface;
 mod toasters;
+mod toasters3;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

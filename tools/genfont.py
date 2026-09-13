@@ -5,6 +5,14 @@ Run: tools/genfont.py tools/unifont-subset.hex -o src/font.rs
 
 Two sources, deliberately:
 
+* The 256 braille cells are this repo's own bitmaps too, and deliberately NOT
+  Unifont's. Unifont draws U+2800..28FF as a READING font: a set dot is a 2x2
+  pip and an UNSET dot is a 1x1 pip, so U+2800 is not blank and a full cell
+  U+28FF lights 16 of 128 pixels. As sub-cell graphics that is a 12.5%-coverage
+  ghost with a permanent pip grid under it. These are the same 2x4 addressing
+  drawn as FILLED 4x4 quadrants, which is the whole point of reaching for
+  braille here. Pattern 0x00 interns onto BLANK and 0xFF onto SOLID, so a
+  dotless cell is transparent for free.
 * The ten fire ramp glyphs are the 8x8 bitmaps that shipped in main.rs, ROW
   DOUBLED to 8x16. That makes the atlas one shape while leaving fire's output
   pixel-identical: the blit samples bits[py * 16 / cell_h], and flooring an
@@ -104,6 +112,22 @@ FIRE_8X8 = {
     "%": [0xC6, 0xCC, 0x18, 0x30, 0x66, 0xC6, 0x00, 0x00],
     "@": [0x3C, 0x42, 0x99, 0xA5, 0xA5, 0x9E, 0x40, 0x3C],
 }
+
+
+# Braille dot -> (column, row) in the 2x4 cell, by bit position. Dots 1..6 fill
+# the first three rows column-major, and 7/8 were bolted on underneath — which
+# is why bits 6 and 7 are the bottom row rather than bits 3 and 7.
+BRAILLE_DOTS = ((0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (0, 3), (1, 3))
+
+
+def braille_rows(pattern: int) -> list[int]:
+    """One U+28xx cell as 8x16, each dot a filled 4x4 quadrant."""
+    rows = [0x00] * 16
+    for bit, (col, row) in enumerate(BRAILLE_DOTS):
+        if pattern >> bit & 1:
+            for y in range(row * 4, row * 4 + 4):
+                rows[y] |= 0x0F << (4 - col * 4)
+    return rows
 
 
 @dataclass(frozen=True)  # no slots=True: README's `python3` is 3.9 on macOS
@@ -207,6 +231,11 @@ def main() -> None:
     # the shape, not the order.
     block = add(font.rows(0x25AA, mirror=False)[0], "U+25AA small square")
 
+    # U+2800..28FF, indexed by the pattern byte. A saver that wants sub-cell
+    # detail packs 2x4 dots into one of these instead of picking a character
+    # whose shape happens to be close.
+    braille = [add(braille_rows(n), f"braille U+{0x2800 + n:04X}") for n in range(256)]
+
     with contextlib.ExitStack() as stack:
         w: TextIO = (
             sys.stdout if out == "-" else stack.enter_context(open(out, "w", encoding="utf-8"))
@@ -220,7 +249,8 @@ def main() -> None:
         p(f"// Source: GNU Unifont .hex subset, sha256 {digest}")
         p("// Licensed under the SIL OFL 1.1 arm of Unifont's dual licence; see")
         p("// tools/LICENSE.unifont. Fire's ramp glyphs are this repo's own 8x8")
-        p("// bitmaps, row-doubled.")
+        p("// bitmaps, row-doubled, and the braille cells are this repo's own filled")
+        p("// 2x4 quadrants rather than Unifont's reading pips — see the module doc.")
         p("//")
         p("//! One byte per row, MSB = leftmost pixel. Katakana are stored MIRRORED —")
         p("//! the film's glyphs are drawn back to front — so nothing at runtime has")
@@ -256,6 +286,12 @@ def main() -> None:
         p("#[rustfmt::skip]")
         p(f"pub const ASCII: [u16; {len(ascii_set)}] = {ascii_set!r};")
         p()
+        p("/// U+2800..28FF as FILLED 2x4 quadrants, indexed by the braille pattern")
+        p("/// byte (dot 1 = bit 0). Sub-cell detail at eight bits a cell; the colour")
+        p("/// is still per cell, so dots are 8x finer than the palette regions.")
+        p("#[rustfmt::skip]")
+        p(f"pub const BRAILLE: [u16; {len(braille)}] = {braille!r};")
+        p()
         p("/// The film's Reloaded/Revolutions glyph order. Uniform-random selection")
         p("/// over these 57 slots is what the rain draws; the duplicate 0 slot is")
         p("/// faithful, not a bug.")
@@ -264,7 +300,8 @@ def main() -> None:
 
     print(
         f"{len(glyphs)} glyphs, {len(glyphs) * 16} bytes of table "
-        f"({len(matrix)} matrix slots, {len(ramp)} ramp slots, {len(ascii_set)} ascii)",
+        f"({len(matrix)} matrix slots, {len(ramp)} ramp slots, {len(ascii_set)} ascii, "
+        f"{len(braille)} braille)",
         file=sys.stderr,
     )
 

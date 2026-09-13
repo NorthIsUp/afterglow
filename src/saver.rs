@@ -7,6 +7,7 @@ use crate::matrix::Matrix;
 use crate::mirror::Mirror;
 use crate::surface::{Damage, Panel, Surface};
 use crate::toasters::Toasters;
+use crate::toasters3::Toasters3;
 
 /// A screensaver. One frame, one call. Dispatch happens here and NOWHERE below
 /// it: no `&dyn Palette`, no `fn cell(&self, x, y) -> Cell`, no `&mut dyn FnMut`
@@ -52,6 +53,7 @@ const SAVERS: &[(&str, Build)] = &[
     ("blocks", |p, _| Box::new(Fire::blocks(p))),
     ("matrix", |p, fps| Box::new(Matrix::new(p, fps))),
     ("toasters", |p, fps| Box::new(Toasters::new(p, fps))),
+    ("toasters3", |p, fps| Box::new(Toasters3::new(p, fps))),
     ("city", |p, fps| Box::new(City::new(p, fps))),
 ];
 

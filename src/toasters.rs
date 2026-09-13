@@ -54,7 +54,10 @@ use crate::saver::Saver;
 use crate::surface::{Panel, Surface};
 use crate::{env_num, next_rand};
 
-mod art;
+// `pub(crate)`: toasters3 draws the SAME machine at braille resolution and
+// addresses the same sampled palette. Two copies of these colours would be two
+// toasters that drift apart.
+pub(crate) mod art;
 
 use art::{MODELS, PAL, TOAST_CELLS, TOAST_H, TOAST_W};
 
