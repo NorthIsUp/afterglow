@@ -21,6 +21,13 @@
 //!   white wings — four regions, not one flat metal. See `PAL_RGB`, and the ink
 //!   grids that give each stroke of the art its own region.
 //!
+//! The one DEPARTURE from the original: it flew one toaster, and this flies
+//! four models of toaster — the classic two-slot, a wide four-slot, a narrow
+//! upright and a rounded one — so a full sky is not a dozen copies of one
+//! object. Each carries its own complete four-frame flap; the slope, the
+//! lockstep and the beat are untouched by it, and a model is chosen when an
+//! object spawns, never per frame. See `art::Model`.
+//!
 //! Toast is a quarter of the flock (the original ran about 3:1 toasters to
 //! toast). Four doneness sprites, each its own art rather than one sprite
 //! tinted — the original put them behind a darkness slider.
@@ -29,274 +36,32 @@
 //!
 //! The CELL BLIT is O(objects): each object erases the bounding box it last
 //! stamped and stamps a new one into `scene`, and nothing walks the grid per
-//! object. ~15 objects x 56 cells against 3960 cells is the win, and it is the
-//! part that scales with panel size.
+//! object. ~15 objects x 50..72 cells (the models differ in size; a slice is
+//! 12) against 3960 cells is the win, and it is the part that scales with
+//! panel size.
 //!
 //! The SHADOW-TO-HARDWARE copy is not sparse, and saying otherwise would be a
 //! lie a future reader acts on: damage is whole scanlines merged into at most
 //! MAX_RUNS runs, so a dozen sprites at a dozen different heights smear across
-//! ~60% of the panel per frame (measured: median 640 of 1056 scanlines). That
+//! ~60% of the panel per frame — median 640 of 1056 scanlines, measured over 12
+//! seeds x 600 frames, because a single seed measures one flock and not the
+//! renderer (the one-model flock this replaced measures 608 the same way). That
 //! is still well under `ascii` and `matrix`, which repaint 100% every frame.
 
 use crate::env_num;
 use crate::font;
-use crate::grid::{bake, Cell, Grid};
+use crate::grid::{Cell, Grid};
 use crate::saver::Saver;
 use crate::surface::{Panel, Surface};
 
-/// Sampled from the original's sprite sheet and quantised to colour families,
-/// which is how the one real surprise showed up: the toaster body is NOT
-/// chrome. It is an olive chassis with a chrome front panel and white wings,
-/// and painting the whole thing one silver is the colour equivalent of
-/// scrolling straight left.
-///
-/// The two olives are the depth cue. #707030 is the lit top face, #303010 the
-/// sides turned away from the light, and neither is ever painted against the
-/// background: the chassis FILL is where the art has blanks and blanks are
-/// transparent, so what a stroke has to be distinguishable from is the stroke
-/// beside it. Against the lit olive and the chrome panel, #303010 reads as a
-/// turned-away face. Flatten them into one olive and the three-quarter view
-/// goes with it, the same way a single wing colour would.
-///
-/// The sheet's 8.6% of near-black #101010 is the one family with no entry, and
-/// that is structural rather than perceptual: it is the outline that separated
-/// the sprite from the sheet's background, and here a cell lights only its
-/// glyph pixels, so the gaps between glyphs already draw it.
-///
-/// Index 0 is the background. Nothing paints over it, which is why an idle
-/// region costs zero blits.
-#[rustfmt::skip]
-const PAL_RGB: [[u8; 3]; 16] = [
-    [0x00, 0x00, 0x00], //  0        background
-    [0x90, 0x90, 0x90], //  1 'C' chrome front panel, the sheet's largest family
-    [0xF0, 0xF0, 0xF0], //  2 'W' white — the near wing
-    [0xD0, 0xD0, 0xD0], //  3 'c' light chrome — far wing, lever, panel highlight
-    [0x30, 0x30, 0x10], //  4 'O' dark olive — the chassis sides, turned away
-    [0x70, 0x70, 0x30], //  5 'o' lit olive — the top face
-    [0x70, 0x70, 0x70], //  6 's' shadow chrome — the panel's lower lip
-    [0xB0, 0xB0, 0xB0], //  7 'm' chrome midtone — the slot rims
-    [0xF0, 0xD0, 0x70], //  8 'G' golden crumb, the slice's largest family
-    [0xD0, 0x90, 0x30], //  9 'g' mid gold
-    [0x90, 0x70, 0x10], // 10 'b' brown crust
-    [0x70, 0x30, 0x10], // 11 'd' dark crust edge
-    [0xB0, 0x70, 0x10], // 12 'B' mid brown
-    [0xF0, 0xF0, 0x90], // 13 'P' pale highlight
-    [0xD0, 0xB0, 0x30], // 14 'y' amber
-    [0xF0, 0xD0, 0x50], // 15 'Y' deep gold
-];
-const PAL: [u32; 16] = bake(&PAL_RGB);
+mod art;
 
-/// Ink key -> palette index. Every sprite carries a grid of these parallel to
-/// its art, because the art reuses characters across regions: the `/` in column
-/// 0 is a white wing and the `/` in column 9 is the olive body's receding edge,
-/// and a character-to-colour map could not tell them apart.
-///
-/// There is no fallback arm. This runs inside `bake_sprites`, in a const, so a
-/// key nobody defined is a build failure and not a stroke silently painted the
-/// background colour.
-const fn ink(k: u8) -> u16 {
-    match k {
-        b'C' => 1,
-        b'W' => 2,
-        b'c' => 3,
-        b'O' => 4,
-        b'o' => 5,
-        b's' => 6,
-        b'm' => 7,
-        b'G' => 8,
-        b'g' => 9,
-        b'b' => 10,
-        b'd' => 11,
-        b'B' => 12,
-        b'P' => 13,
-        b'y' => 14,
-        b'Y' => 15,
-        _ => panic!("sprite ink uses a key the palette does not define"),
-    }
-}
-
-/// Resolve a sprite set's art and ink into cells, at COMPILE time — the same
-/// bargain `grid::bake` makes for a palette, for the same reason. The frame
-/// loop reads a `&'static [Cell]` out of the binary, so there is no allocation,
-/// no `Vec` of `Vec`s to chase, and no construction-time work at all.
-///
-/// Row width comes from `CELLS / H`, and every row of both grids has to match
-/// it: a ragged row, an ink grid that is not blank exactly where its art is, and
-/// an undefined ink key are all `error[E0080]` rather than a sprite that renders
-/// wrong. The one drift this cannot see is an ink row shifted within its own
-/// width — same length, no blanks moved — which is what the colour assertions
-/// in the tests are for.
-const fn bake_sprites<const H: usize, const N: usize, const CELLS: usize>(
-    art: &[[&str; H]; N],
-    ink_rows: &[[&str; H]; N],
-) -> [[Cell; CELLS]; N] {
-    let w = CELLS / H;
-    assert!(w * H == CELLS, "sprite cell count is not width x height");
-    let mut out = [[Cell::CLEAR; CELLS]; N];
-    let mut s = 0;
-    while s < N {
-        let mut r = 0;
-        while r < H {
-            let (a, k) = (art[s][r].as_bytes(), ink_rows[s][r].as_bytes());
-            assert!(a.len() == w, "art row is not the sprite's width");
-            assert!(k.len() == w, "ink row is not the sprite's width");
-            let mut c = 0;
-            while c < w {
-                if a[c] == b' ' {
-                    assert!(k[c] == b' ', "ink where the art is blank");
-                } else {
-                    assert!(k[c] != b' ', "art stroke with no ink");
-                    out[s][r * w + c] = Cell::new(font::ASCII[(a[c] - 0x20) as usize], ink(k[c]));
-                }
-                c += 1;
-            }
-            r += 1;
-        }
-        s += 1;
-    }
-    out
-}
-
-const TOASTER_W: usize = 14;
-const TOASTER_H: usize = 4;
-
-/// Four wing positions of one two-slot toaster in three-quarter view: the top
-/// face with its two slots recedes to the right, the near wing is the larger
-/// one on the left. Rows are `TOASTER_W` wide and every frame is the same size,
-/// so the stamp is a fixed rectangle and the flap never moves the body.
-#[rustfmt::skip]
-const TOASTER: [[&str; TOASTER_H]; 4] = [
-    // 0 — wings fully up
-    [
-        r"\    ____    /",
-        r"\\  /[][]/| //",
-        r" \\|=====|/// ",
-        r"   |__o__|    ",
-    ],
-    // 1 — mid upstroke
-    [
-        r"     ____     ",
-        r"\   /[][]/|  /",
-        r"\\_|=====|/_//",
-        r"   |__o__|    ",
-    ],
-    // 2 — level, fully extended
-    [
-        r"     ____     ",
-        r"    /[][]/|   ",
-        r"\__|=====|/__/",
-        r"   |__o__|    ",
-    ],
-    // 3 — wings fully down
-    [
-        r"     ____     ",
-        r"    /[][]/|   ",
-        r" //|=====|/\\ ",
-        r"// |__o__|  \\",
-    ],
-];
-
-/// The colour of every stroke above, cell for cell. Four regions, and they are
-/// what the palette buys: the wings are white (the near one) and light chrome
-/// (the far one, one stop down so the flap reads as depth), columns 3..=9 of
-/// each row are the body — olive edges around a chrome front panel that runs
-/// light-to-shadow left to right, between side edges in the turned-away olive —
-/// and the top face is the lit olive with chrome slot rims. A space here must line up with a space in the art; the glyph test
-/// checks it.
-#[rustfmt::skip]
-const TOASTER_INK: [[&str; TOASTER_H]; 4] = [
-    [
-        "W    oooo    c",
-        "WW  ommmmOO cc",
-        " WWOcCCCsOccc ",
-        "   OsscssO    ",
-    ],
-    [
-        "     oooo     ",
-        "W   ommmmOO  c",
-        "WWWOcCCCsOcccc",
-        "   OsscssO    ",
-    ],
-    [
-        "     oooo     ",
-        "    ommmmOO   ",
-        "WWWOcCCCsOcccc",
-        "   OsscssO    ",
-    ],
-    [
-        "     oooo     ",
-        "    ommmmOO   ",
-        " WWOcCCCsOccc ",
-        "WW OsscssO  cc",
-    ],
-];
+use art::{MODELS, PAL, TOAST_CELLS, TOAST_H, TOAST_W};
 
 /// Ping-pong over the four wing positions. Walking 0,1,2,3 and snapping back
 /// draws only the downstroke; this draws both halves of the beat, which is
 /// what the original's cycled frames looked like in motion.
 const FLAP: [u8; 6] = [0, 1, 2, 3, 2, 1];
-
-const TOAST_W: usize = 4;
-const TOAST_H: usize = 3;
-
-/// Four doneness levels, pale to scorched — the original shipped `toast0`
-/// through `toast3` as four separate 64x64 sprites behind a darkness slider,
-/// not one slice tinted, so the scorching is drawn as well as coloured.
-#[rustfmt::skip]
-const TOAST_SPRITE: [[&str; TOAST_H]; 4] = [
-    [
-        r" __ ",
-        r"|  |",
-        r"|__|",
-    ],
-    [
-        r" __ ",
-        r"|..|",
-        r"|__|",
-    ],
-    [
-        r" __ ",
-        r"|::|",
-        r"|##|",
-    ],
-    [
-        r" __ ",
-        r"|##|",
-        r"|##|",
-    ],
-];
-
-/// The doneness ramp, drawn in colour as well as in strokes: each level starts
-/// one stop further down the gold -> brown ladder than the last and darkens
-/// again from the crumb top to the crust edge, so all eight of the slice's
-/// sampled colours are on screen at once across the flock.
-#[rustfmt::skip]
-const TOAST_INK: [[&str; TOAST_H]; 4] = [
-    [
-        " PP ",
-        "G  G",
-        "yYYy",
-    ],
-    [
-        " GG ",
-        "GggG",
-        "gBBg",
-    ],
-    [
-        " gg ",
-        "gBBg",
-        "BbbB",
-    ],
-    [
-        " bb ",
-        "bddb",
-        "dddd",
-    ],
-];
-
-/// The art, resolved. `render` stamps out of these and nothing else.
-const TOASTER_CELLS: [[Cell; TOASTER_W * TOASTER_H]; 4] = bake_sprites(&TOASTER, &TOASTER_INK);
-const TOAST_CELLS: [[Cell; TOAST_W * TOAST_H]; 4] = bake_sprites(&TOAST_SPRITE, &TOAST_INK);
 
 /// The diagonal: 5 across for every 2 down, about 22 degrees below horizontal.
 ///
@@ -332,6 +97,10 @@ struct Obj {
     kind: u8,
     /// Offset into `FLAP`, so the flock is not one synchronised wing.
     phase: u8,
+    /// Index into `MODELS`, for a toaster. Rolled once per spawn — putting the
+    /// choice anywhere the frame loop can see it would make variety cost
+    /// something, and it must not.
+    model: u8,
     /// Cell coordinates of the rectangle this object last stamped into
     /// `scene`, which is the rectangle it has to clear next frame.
     drawn: (i32, i32),
@@ -340,7 +109,8 @@ struct Obj {
 impl Obj {
     fn size(&self) -> (usize, usize) {
         if self.kind == 0 {
-            (TOASTER_W, TOASTER_H)
+            let m = &MODELS[self.model as usize];
+            (m.w, m.h)
         } else {
             (TOAST_W, TOAST_H)
         }
@@ -348,7 +118,7 @@ impl Obj {
 
     /// Which sprite this object shows right now: a wing frame for a toaster, a
     /// doneness level for a slice. This is the index the RENDERER uses, so a
-    /// test that wants the art indexes `TOASTER` with it rather than being
+    /// test that wants the art indexes the model with it rather than being
     /// handed a second value nothing draws from.
     fn sprite(&self, tick: u32, flap_div: u32) -> usize {
         match self.kind {
@@ -363,7 +133,7 @@ impl Obj {
     fn cells(&self, tick: u32, flap_div: u32) -> &'static [Cell] {
         let i = self.sprite(tick, flap_div);
         if self.kind == 0 {
-            &TOASTER_CELLS[i]
+            MODELS[self.model as usize].frames[i]
         } else {
             &TOAST_CELLS[i]
         }
@@ -499,7 +269,7 @@ impl Toasters {
         };
         for _ in 0..count {
             let kind = if next_rand(&mut t.rng) % 100 < toast_pct {
-                1 + (next_rand(&mut t.rng) % TOAST_SPRITE.len() as u32) as u8
+                1 + (next_rand(&mut t.rng) % TOAST_CELLS.len() as u32) as u8
             } else {
                 0
             };
@@ -508,6 +278,7 @@ impl Toasters {
                 y: 0,
                 kind,
                 phase: (next_rand(&mut t.rng) % FLAP.len() as u32) as u8,
+                model: (next_rand(&mut t.rng) % MODELS.len() as u32) as u8,
                 drawn: (i32::MIN, i32::MIN),
             };
             // Frame 0 must already be a flock, not an empty screen filling up,
@@ -527,6 +298,15 @@ impl Toasters {
     /// cell boundary; weighting the choice by edge length is what keeps the
     /// arrival rate per unit of edge uniform instead of clumping in a corner.
     fn respawn(&mut self, i: usize) {
+        // A re-entry is a spawn, so it re-rolls the model — the flock's mix
+        // keeps turning over instead of being fixed at construction. It has to
+        // happen BEFORE `h`, and before anything stamps: the clear pass for
+        // this frame already ran against the old size. Toasters only: a slice
+        // has no model, and drawing the rng for one would be a field nothing
+        // reads deciding where every later object enters.
+        if self.objs[i].kind == 0 {
+            self.objs[i].model = (next_rand(&mut self.rng) % MODELS.len() as u32) as u8;
+        }
         let h = self.objs[i].size().1 as i32 * self.cell_h;
         let (pw, ph) = (self.cols * self.cell_w, self.rows * self.cell_h);
         let edge = next_rand(&mut self.rng) as i32;
@@ -622,81 +402,6 @@ mod tests {
         Panel::new(640, 480, 640)
     }
 
-    /// Every character the art uses has to exist in the atlas and be a
-    /// non-blank glyph, or a sprite silently loses strokes. The space is the
-    /// one legitimate blank.
-    #[test]
-    fn every_sprite_character_has_a_glyph() {
-        let rows = TOASTER
-            .iter()
-            .flatten()
-            .chain(TOAST_SPRITE.iter().flatten());
-        for row in rows {
-            for &b in row.as_bytes() {
-                assert!((0x20..0x7F).contains(&b), "{b:#x} is not printable ascii");
-                let g = font::ASCII[(b - 0x20) as usize];
-                assert_eq!(
-                    g == font::BLANK,
-                    b == b' ',
-                    "{:?} maps to glyph {g}",
-                    b as char
-                );
-            }
-        }
-        // Uniform rows are what makes the stamp a fixed rectangle.
-        for f in &TOASTER {
-            for row in f {
-                assert_eq!(row.len(), TOASTER_W);
-            }
-        }
-        for f in &TOAST_SPRITE {
-            for row in f {
-                assert_eq!(row.len(), TOAST_W);
-            }
-        }
-    }
-
-    /// The subject of the whole palette: four regions, each its own colour, and
-    /// two olives that have to stay two. Frame 2 is level flight, the frame the
-    /// flock spends most of its time in; row 2 is the body row. Asserting named
-    /// cells is also the only thing that sees an ink row shifted within its own
-    /// width — same length, blanks in the same places, every stroke a valid key,
-    /// and the whole body wrongly coloured.
-    #[test]
-    fn each_region_of_the_toaster_is_its_own_colour() {
-        let f = &TOASTER_CELLS[2];
-        let at = |r: usize, c: usize| f[r * TOASTER_W + c].colour() as u16;
-
-        assert_eq!(at(2, 0), ink(b'W'), "the near wing is white");
-        assert_eq!(at(2, 13), ink(b'c'), "the far wing is one stop down");
-        assert_eq!(at(2, 5), ink(b'C'), "the front panel is chrome");
-        assert_eq!(at(2, 4), ink(b'c'), "lit at its left edge");
-        assert_eq!(at(2, 8), ink(b's'), "and in shadow at its right");
-        assert_eq!(at(2, 3), ink(b'O'), "the body's side edges are turned away");
-        assert_eq!(at(2, 9), ink(b'O'));
-        assert_eq!(at(0, 5), ink(b'o'), "the top face is the lit olive");
-        assert_eq!(at(1, 5), ink(b'm'), "the slot rims are chrome");
-
-        // The depth cue. One olive and the three-quarter view is a flat box,
-        // exactly as one wing colour would make the flap a flat flicker.
-        assert_ne!(
-            ink(b'O'),
-            ink(b'o'),
-            "two olives, or there is no near and far"
-        );
-        assert_ne!(ink(b'W'), ink(b'c'), "two whites, same reason");
-
-        // Doneness has to darken. Every slice's crumb top, against the next.
-        let top = |d: usize| PAL[TOAST_CELLS[d][1].colour()];
-        for d in 1..4 {
-            assert!(
-                top(d) < top(d - 1),
-                "slice {d} is not darker than {}",
-                d - 1
-            );
-        }
-    }
-
     /// The two details the module doc calls the tells. Motion must be strictly
     /// down AND left at the fixed RISE/RUN slope, and every object must move by
     /// the same vector on the same frame — no per-object speed.
@@ -724,28 +429,47 @@ mod tests {
         }
     }
 
-    /// The wings have to actually beat, and beat in both directions. A flap
-    /// stuck on one frame, or walking 0,1,2,3 and snapping back, both pass a
-    /// "does it animate" check and neither is the original.
+    /// The wings have to actually beat, and beat in both directions, on EVERY
+    /// model. A flap stuck on one frame, or walking 0,1,2,3 and snapping back,
+    /// both pass a "does it animate" check and neither is the original.
+    ///
+    /// The walk is what is under test here, not the art: whether all four
+    /// positions are distinct pictures is `art::tests`.
     #[test]
-    fn the_wings_flap_through_all_four_positions_and_back() {
-        let o = Obj {
-            x: 0,
-            y: 0,
-            kind: 0,
-            phase: 0,
-            drawn: (i32::MIN, i32::MIN),
-        };
-        let seen: Vec<&str> = (0..FLAP.len() as u32)
-            .map(|t| TOASTER[o.sprite(t, 1)][2])
-            .collect();
-        let distinct: std::collections::BTreeSet<&&str> = seen.iter().collect();
-        assert_eq!(distinct.len(), 4, "four wing positions, got {seen:?}");
-        assert_eq!(seen[1], seen[FLAP.len() - 1], "the beat must ping-pong");
-        // And it must be the wing that moves, not the body: the body columns
-        // are identical across every frame.
-        for f in &TOASTER {
-            assert_eq!(&f[3][3..10], &TOASTER[0][3][3..10]);
+    fn every_model_flaps_through_all_four_positions_and_back() {
+        for (m, model) in MODELS.iter().enumerate() {
+            let o = Obj {
+                x: 0,
+                y: 0,
+                kind: 0,
+                phase: 0,
+                model: m as u8,
+                drawn: (i32::MIN, i32::MIN),
+            };
+            let walk: Vec<usize> = (0..FLAP.len() as u32).map(|t| o.sprite(t, 1)).collect();
+            let mut positions = walk.clone();
+            positions.sort_unstable();
+            positions.dedup();
+            assert_eq!(
+                positions,
+                vec![0, 1, 2, 3],
+                "model {m}: four positions, got {walk:?}"
+            );
+            assert_eq!(
+                walk[1],
+                walk[FLAP.len() - 1],
+                "model {m}: beat must ping-pong"
+            );
+
+            // And it must be the WING that moves, not the body: the base row's
+            // middle columns — inside the body on every model, outside every
+            // wing — are identical across all four frames.
+            let (w, h) = (model.w, model.h);
+            let body =
+                |f: &'static [Cell]| f[(h - 1) * w + w / 4..(h - 1) * w + w * 3 / 4].to_vec();
+            for (i, f) in model.frames.iter().enumerate() {
+                assert_eq!(body(f), body(model.frames[0]), "model {m} frame {i} body");
+            }
         }
         // The divisor is what ties the flap to wall-clock time rather than to
         // the frame rate, so a slow panel must not flap slowly.
@@ -809,29 +533,53 @@ mod tests {
     }
 
     /// The failure mode this hand-rolled double-buffer actually has: a sprite
-    /// that is stamped but not erased leaves a trail, and every other test
-    /// here passes while it happens — damage is still reported, pixels still
-    /// change. Lit cells would climb without bound; they must stay level.
+    /// stamped but not erased leaves a trail, and every other test here passes
+    /// while it happens — damage is still reported, pixels still change.
+    ///
+    /// It is not enough to watch lit pixels: they do NOT climb without bound.
+    /// Stale columns get swept by the flock's own clear rectangles, so a real
+    /// trail saturates (measured: 18.5k lit -> 33k, a 1.8x that a "less than
+    /// 3x" bound waves through). What holds exactly, every frame, is that
+    /// `scene` shows the flock and nothing else: the union of what the objects
+    /// stamped, no cell more and no cell less. A single trailing column fails
+    /// it.
     #[test]
     fn a_sprite_leaves_no_trail() {
         let p = Panel::new(1920, 1080, 1920);
         let mut t = Toasters::new(&p, 30);
         let mut buf = vec![0u32; p.buf_len()];
 
-        let lit = |t: &mut Toasters, buf: &mut Vec<u32>| {
-            saver::frame(t, buf, &p);
-            buf.iter().filter(|&&px| px != 0).count()
-        };
-        let early = lit(&mut t, &mut buf);
-        for _ in 0..400 {
-            lit(&mut t, &mut buf);
+        for n in 0..400 {
+            saver::frame(&mut t, &mut buf, &p);
+            // `render` has already bumped the tick, so the sprites on screen
+            // are the ones the PREVIOUS tick chose.
+            let tick = t.tick.wrapping_sub(1);
+            let mut want = vec![false; t.scene.len()];
+            for o in &t.objs {
+                let (w, h) = o.size();
+                let cells = o.cells(tick, t.flap_div);
+                for r in 0..h as i32 {
+                    for c in 0..w as i32 {
+                        let (x, y) = (o.drawn.0 + c, o.drawn.1 + r);
+                        if x < 0 || x >= t.cols || y < 0 || y >= t.rows {
+                            continue;
+                        }
+                        if cells[r as usize * w + c as usize].glyph() != font::BLANK as usize {
+                            want[(y * t.cols + x) as usize] = true;
+                        }
+                    }
+                }
+            }
+            let stale =
+                (0..want.len()).find(|&i| want[i] != (t.scene[i].glyph() != font::BLANK as usize));
+            if let Some(i) = stale {
+                let (x, y) = (i as i32 % t.cols, i as i32 / t.cols);
+                panic!(
+                    "frame {n}: cell ({x},{y}) is {} but the flock says {}",
+                    if want[i] { "blank" } else { "lit" },
+                    if want[i] { "lit" } else { "blank" }
+                );
+            }
         }
-        let late = lit(&mut t, &mut buf);
-        // Generous: the flock's on-screen count varies as objects respawn. A
-        // trail is unbounded growth, not a wobble.
-        assert!(
-            late < early * 3,
-            "lit pixels grew {early} -> {late}: sprites are not being erased"
-        );
     }
 }
