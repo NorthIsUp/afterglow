@@ -13,14 +13,17 @@ use crate::hardrain::HardRain;
 use crate::hypercube::Hypercube;
 use crate::life::Life;
 use crate::lissajous::Lissajous;
+use crate::marble::Marble;
 use crate::matrix::Matrix;
 use crate::mirror::{self, Mirror};
 use crate::moire::Moire;
 use crate::next_rand;
+use crate::podracer::Podracer;
 use crate::pov::Pov;
 use crate::rain::Rain;
 use crate::sakura::Sakura;
 use crate::satori::Satori;
+use crate::speeder::Speeder;
 use crate::strings::Strings;
 use crate::surface::{Damage, Panel, Surface};
 use crate::tactiles::Tactiles;
@@ -94,6 +97,9 @@ const SAVERS: &[(&str, Build)] = &[
     ("strings", |p, fps| Box::new(Strings::new(p, fps))),
     ("tactiles", |p, fps| Box::new(Tactiles::new(p, fps))),
     ("pov", |p, fps| Box::new(Pov::new(p, fps))),
+    ("podracer", |p, fps| Box::new(Podracer::new(p, fps))),
+    ("speeder", |p, fps| Box::new(Speeder::new(p, fps))),
+    ("marble", |p, fps| Box::new(Marble::new(p, fps))),
     ("hardrain", |p, fps| Box::new(HardRain::new(p, fps))),
     ("zot", |p, fps| Box::new(Zot::new(p, fps))),
 ];

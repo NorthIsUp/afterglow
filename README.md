@@ -34,9 +34,12 @@ falls back to `ascii` — a headless pod must never crash-loop on a typo.
 | `strings`   | "String Theory", the After Dark module — a polygon whose corners each bounce independently, redrawn every frame over the fading outlines behind it, so a ribbon of lines sweeps and folds. Three ribbons, one hue each.                                                                                                                                                                                               | `STRINGS_RIBBONS` (1..4, default 3), `STRINGS_VERTICES` (corners per polygon, 2..8, default 4), `STRINGS_FADE_MS` (200..20000, default 1000), `STRINGS_SPEED` (sub-cells/sec per corner, 5..1000, default 60), `STRINGS_CELL_W` / `STRINGS_CELL_H` (8, 16)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `life`      | Conway's Game of Life on a toroidal board, cells coloured by age — white-hot at birth, cooling to blue — with a fading ash trail. A churn-triggered "meteor" of fresh soup keeps it from settling into still lifes.                                                                                                                                                                                                   | `LIFE_GPS` (generations per second, 1..60, default 10), `LIFE_DENSITY` (percent alive in fresh soup, 5..80, default 38), `LIFE_SEEDS` (startup soup discs, 1..64, default 12), `LIFE_QUIET` (churn per MILLE below which a generation is quiet, 1..500, default 30), `LIFE_PATIENCE` (quiet generations before a meteor, 1..600, default 12), `LIFE_FADE` (generations of ash, 0..6, default 5), `LIFE_CELL_W` / `LIFE_CELL_H` (4..64, 8 and 8), `LIFE_SEED` (0 = roll one from the clock and pid; any other value reproduces the board exactly — not to be confused with `LIFE_SEEDS`, which counts soup discs)                                                                                                                             |
 
+| `marble` | Marble Madness — an isometric course floating in black space, a chrome marble rolling down it on autopilot, and hazards trying to stop it. Ramps, narrow catwalks over nothing, acid pools, a hammer and a leashed black hunter marble. Falling off costs a respawn at the last checkpoint; reaching the goal generates a new course. | `MARBLE_TILE` (tile width in GLASS px, 0 = derive from the panel, else 16..160), `MARBLE_SPEED` (milli-tiles/sec, 500..20000, default 4200), `MARBLE_STEER` (autopilot thrust, milli-tiles/sec², 100..40000, default 5200 — how well the invisible player plays), `MARBLE_PATIENCE` (steps with no route progress before a respawn, 30..4000, default 260), `MARBLE_COURSE_S` (10..3600, default 150), `MARBLE_HAZARDS` (0..6, default 3), `MARBLE_CELL_W` / `MARBLE_CELL_H` (4..32 / 4..64, 8 and 8), `MARBLE_SEED` (0 = roll one from the clock and pid; any other value reproduces the course exactly) |
 | `hardrain` | A downpour: steeply slanted streaks under a gusting wind, a mist the sky is veiled in, squalls sweeping across, and standing water at the bottom that ripples where the rain lands. The storm to `rain`'s drizzle. | `HARDRAIN_DENSITY` (per 1000 cells, 0..400, default 55), `HARDRAIN_SPEED` (hundredths of a panel height per second, 10..1000, default 110), `HARDRAIN_WIND` (cells sideways per 100 of fall, -300..300, default 95), `HARDRAIN_GUST` (same units, 0..300, default 70), `HARDRAIN_GUST_SECS` (1..600, default 11), `HARDRAIN_POOL_PCT` (water depth as a percent of rows, 0..40, default 9; 0 = off), `HARDRAIN_SQUALL_SECS` (mean seconds between squalls, 0..600, default 17; 0 = off), `HARDRAIN_SPRAY` (droplets per impact, 0..4, default 2), `HARDRAIN_CELL_W` / `HARDRAIN_CELL_H` (8, 16) |
 | `doodles` | After Dark's scribbler: pens wander the panel leaving one continuous freehand line each, looping back over themselves until the sheet is full, then it fades and a new one starts. Each pen's hue sweeps across the life of a doodle, so the scribble shows its own history. | `DOODLES_PENS` (1..4, default 3), `DOODLES_SPEED` (pen steps/sec at 1080p, 30..8000, default 420), `DOODLES_INERTIA` (per-mille of the turn rate carried to the next step, 500..999, default 960), `DOODLES_WANDER` (milli-rad of turn-rate noise per step, 1..300, default 20), `DOODLES_CURL` (milli-rad/step, tightest curl, 5..500, default 90), `DOODLES_FILL_PCT` (1..90, default 28), `DOODLES_MAX_S` (5..900, default 90), `DOODLES_FADE_MS` (200..10000, default 1600), `DOODLES_CELL_W` / `DOODLES_CELL_H` (8, 16), `DOODLES_SEED` (0 = roll one from the clock and pid; any other value reproduces the doodle exactly) |
 | `pov` | Points of View — a rotating platonic solid drawn as a grid of dots on its own surface, changing to the next of the five every ten seconds in a burst that throws the points outward and lands them on the new shape with an overshoot. | `POV_HOLD_SECS` (1..600, default 10), `POV_BURST_MS` (100..5000, default 1200), `POV_SPACING` (dots between surface samples, 2..24, default 6), `POV_SCALE` (figure radius in thousandths of the SHORTER panel side, 50..600, default 420), `POV_BURST` (outward scatter in thousandths of the figure radius, 0..2000, default 450), `POV_Z_DIST` (2000..40000, default 6000), `POV_RATE_XY` / `POV_RATE_XZ` / `POV_RATE_YZ` (milli-revolutions per second, default 7 / 23 / 13), `POV_CELL_W` / `POV_CELL_H` (8, 16) |
+| `podracer` | First-person Boonta Eve: two podracer engines hang ahead of you on their cables, flaring and yawing independently as you turn, while an ochre canyon rips past on both sides. One ray per cell column finds the wall; the floor and sky fall out of the ground-plane solve. Arches you fly through, rock spires, slot canyons barely wider than the pod, heat shimmer over the rim, and every so often a rival's engine wash crossing the view. Full repaint — it damages most of the panel every frame, because most of the panel is moving. | `PODRACER_CELL` (px, 4..32, default 8), `PODRACER_SPEED` (course m/s, 40..900, default 300), `PODRACER_FOV` (focal as a percent of panel width, 30..200, default 78), `PODRACER_WIDTH` (canyon half-width in metres, 6..90, default 30), `PODRACER_PINCH` (how far a slot closes, percent, 0..90, default 64), `PODRACER_SPREAD` (engine separation, percent of panel width, 10..90, default 46), `PODRACER_ENGINE` (engine radius, percent of panel width, 3..30, default 7, capped at 22% of the aspect-corrected height), `PODRACER_SHIMMER` (0..100, default 70), `PODRACER_FEATURES` (arches and spires alive at once, 0..24, default 7), `PODRACER_WASH_SECS` (mean seconds between a rival's wash, 0 = off..600, default 9), `PODRACER_SEED` (0 = roll one from the clock and pid; any other value reproduces the run exactly) |
+| `speeder` | A first-person speeder-bike chase through the forest moon — enormous redwood trunks rush past at parallax while the bike weaves between them on two incommensurate sines, dappled canopy light streams over the mossy floor, and every so often a fallen trunk sweeps up out of frame to be ducked under or another bike flashes across the view. One spawn in twenty is aimed at where the camera WILL be, so the near misses are deliberate; a trunk moving too fast for the eye to hold an edge on is stippled rather than solid. Its grid is SQUARE, so all of the perspective is in cells and `SAVER_PIXEL_ASPECT` corrects it for free — the opposite choice to `warp`'s. | `SPEEDER_CELL` (px, 4..32, default 8, square), `SPEEDER_SPEED` (metres/sec, 10..300, default 58), `SPEEDER_TRUNKS` (8..400, default 60), `SPEEDER_FOV` (focal as a per-cent of COLUMNS, 20..200, default 62 — smaller is wider and faster-looking), `SPEEDER_HORIZON` (eye line as a per-cent of rows, 10..80, default 44), `SPEEDER_WEAVE` (swing off the path in DECIMETRES, 0..200, default 64; 0 flies straight), `SPEEDER_DAPPLE` (per-cent of the floor in a pool of light, 0..100, default 34), `SPEEDER_LOG_SECS` (mean seconds between fallen trunks, 0..600, default 16; 0 = off), `SPEEDER_RIDER_SECS` (mean seconds between other bikes, 0..600, default 12; 0 = off), `SPEEDER_SEED` (0 = roll one from the clock and pid; any other value reproduces the ride exactly) |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
 `SAVER_ROTATE_SECS` (0..86400, default 0 = off), `SAVER_PIXEL_ASPECT` (25..400,
@@ -79,12 +82,13 @@ square and 21 of the 25 are corrected without a line of their own. Four are not,
 because they measure something in framebuffer PIXELS rather than in cells, and
 each carries the stretch explicitly:
 
-| saver            | what needed it                                                              |
-| ---------------- | --------------------------------------------------------------------------- |
-| `warp`           | the projection: `focal_y = focal * aspect`, so the tunnel is round          |
-| `moire`          | the gratings are evaluated in a space `aspect` shorter than the framebuffer |
-| `toasters{,2,3}` | the 2.5:1 flight diagonal, which is a pixel slope and not a cell slope      |
-| `confetti`       | the 48% pile incline, which is meant to be 48% on the GLASS                 |
+| saver            | what needed it                                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------- |
+| `warp`           | the projection: `focal_y = focal * aspect`, so the tunnel is round                            |
+| `podracer`       | the projection: `fy = f * aspect`, so the engines are round and the canyon is not a letterbox |
+| `moire`          | the gratings are evaluated in a space `aspect` shorter than the framebuffer                   |
+| `toasters{,2,3}` | the 2.5:1 flight diagonal, which is a pixel slope and not a cell slope                        |
+| `confetti`       | the 48% pile incline, which is meant to be 48% on the GLASS                                   |
 
 Everything else physical needs nothing and that is not luck: `hardrain`'s wind is
 "cells sideways per 100 of fall" and `sakura`'s drift, `rain`, `worms` and the
@@ -471,6 +475,80 @@ debris rather than as part of the action.
 `LIFE_GPS` paces generations independently of `SAVER_FPS` because Life at 30
 generations a second is unreadable. A frame with no generation in it costs one
 u32 compare per cell and reports no damage.
+
+### About the marble saver
+
+`image/src/marble.rs` is Atari's Marble Madness, not a marble run: an isometric
+course seen from a fixed three-quarter view, a marble worked down it by a very
+simple autopilot, and the void underneath everything.
+
+**The projection is the whole look, and it is computed in GLASS units.** A tile
+is `gx = (x - y) * tw`, `gy = (x + y) * tw/2 - z * zs` — a diamond exactly twice
+as wide as it is tall. That 2:1 has to hold **on the panel**, not in the
+framebuffer, and `SAVER_PIXEL_ASPECT=180` is precisely the difference between
+the two. So there is one conversion from glass to sub-cells:
+
+```text
+ux = cell_w / 2                       px per sub-cell across
+uy = cell_h / 4 * 100 / pixel_aspect  px per sub-cell down, un-stretched
+```
+
+`uy` divides the aspect back out — at 100 it is a no-op, at 180 it is the only
+thing keeping the diamonds 2:1. `diamonds_are_two_to_one_on_the_glass_at_both_aspects`
+measures the drawn tile, in glass units, at both aspects; it does not assert the
+constants, because the constants are right in both worlds and the bug is not.
+
+Tiles are painted back to front by increasing `x + y`, each a top diamond plus a
+skirt down its two lower edges to whatever the neighbour's height is. The skirt
+is what turns a heightfield into cliffs and catwalks instead of a flat mosaic.
+The camera follows the marble, so most frames move every tile on the panel and
+the damage model is a full repaint through `Grid::flush`.
+
+**Courses are generated, then validated, then rejected.** A route of descending
+straight segments is carved first — decks one to five tiles wide, some walled,
+some slick and unwalled — and the geometry is built around it. Five criteria:
+a flood fill from the start that may drop any distance but never climb more than
+`CLIMB` must reach the goal (acid counts as solid, so the dry line past a pool
+has to exist); every hazard's tile must border that reachable set; the route's
+bounding box must span at least 11 tiles in both axes and descend at least 9
+height units; the deck must be between 60 tiles and a third of the field; and
+then the candidate is handed to a **physics probe** that runs the same step and
+the same autopilot, hazards off, and must reach the goal. Measured over 400
+candidates at 1080p: 359 pass the first four, 316 of those pass the probe —
+about 1.3 candidates per accepted course, with the goal-unreachable check and
+the probe doing essentially all the rejecting. Fourteen candidates in, the last
+one ships anyway: a headless pod must never stall the frame loop over taste.
+
+**Progress, not churn, is the stagnation measure.** `advance` already knows the
+furthest waypoint reached. A fall or a hazard respawns the marble at the last
+checkpoint; `MARBLE_PATIENCE` steps with no progress at all respawns it with a
+shove; and a respawn that fails to beat the previous one four times running
+blames the course and regenerates it. Everything that respawns routes through
+one function, so there is one place to get that ladder right. Measured over
+60 000 steps with the defaults: about 133 goals, 141 falls, 104 hazard deaths
+and 19 no-progress respawns, of which roughly 15 escalate to a new course —
+that is one fall per goal, which is what "someone playing reasonably well and
+occasionally losing it" measures out as.
+
+Two numbers in there were found the hard way. A hunter marble that chases
+without a leash follows you the length of the course and shoves you off the same
+catwalk forever: 40 falls per goal, measured. And a checkpoint beside an acid
+pool is an infinite death loop — 1 992 deaths in 60 000 steps on one seed —
+which is why a respawn buys 45 steps of grace.
+
+Tunnelling is swept, not capped by inspection: a step is split into
+`ceil(speed / 0.22)` substeps so nothing moves more than 0.22 of a tile at a
+time, against a one-tile catwalk, and the per-step speed is clamped to the
+substep budget independently of `MARBLE_SPEED` and of `SAVER_FPS`. Walls block
+by tile KIND as well as by height, because `height` deliberately refuses to
+blend into a wall — without that the bilinear smoothing builds a ramp up the
+side of the thing that is there to stop you, and a fast marble simply drives
+over it.
+
+Cost: 342 us/frame at 1920x1080 with `SAVER_PIXEL_ASPECT=180`, against `moire`
+at 277 in the same process — 1.23x the most expensive saver measured, which
+puts it around 170m of the 500m limit. Most of that is the fill: the camera
+moves, so every visible tile is redrawn every frame.
 
 ### About the toasters saver
 

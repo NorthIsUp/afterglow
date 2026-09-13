@@ -60,8 +60,8 @@
 //!   everything reaches the glass squashed by 1.8: set it to 180 there. Applied
 //!   once, in `Grid::new`, by making the cell that much taller — every saver
 //!   draws in cells or in sub-cells of one, so the correction reaches all but
-//!   the four that measure something in framebuffer pixels (`warp`, `moire`,
-//!   `toasters*`, `confetti`), which carry it explicitly. Process-wide rather
+//!   the five that measure something in framebuffer pixels (`warp`, `moire`,
+//!   `toasters*`, `confetti`, `podracer`), which carry it explicitly. Process-wide rather
 //!   than per-saver: it is a property of the monitor, and a knob 25 savers each
 //!   have to remember is a knob 25 savers get wrong. See the README.
 //! * `RETRY_SECONDS`  — wait between attempts when no display is present (default 30)
@@ -96,14 +96,17 @@ mod host;
 mod hypercube;
 mod life;
 mod lissajous;
+mod marble;
 mod matrix;
 mod mirror;
 mod moire;
+mod podracer;
 mod pov;
 mod rain;
 mod sakura;
 mod satori;
 mod saver;
+mod speeder;
 mod strings;
 mod surface;
 mod tactiles;

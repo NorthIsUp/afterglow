@@ -104,7 +104,7 @@ jobs:
             # Coverage for the mirror itself is in the cargo test above, which
             # is where its HTTP round-trip and never-block-the-display
             # invariants live.
-            for s in ascii blocks matrix toasters toasters2 toasters3 city life doodles strings tactiles pov hardrain zot; do
+            for s in ascii blocks matrix toasters toasters2 toasters3 city life doodles strings tactiles pov hardrain zot podracer speeder marble; do
               SAVER=$s SAVER_HTTP=off SAVER_DUMP=/tmp/dump-$s SAVER_DUMP_FRAMES=20 \
                 SAVER_DUMP_EVERY=1 ./target/release/screensaver
               # DISTINCT FRAMES, not lit bytes. Counting non-NUL bytes only
