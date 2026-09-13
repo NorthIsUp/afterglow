@@ -3,10 +3,14 @@
 use crate::city::City;
 use crate::dvd::Dvd;
 use crate::fire::Fire;
+use crate::fractal::Fractal;
 use crate::grid::Grid;
+use crate::hypercube::Hypercube;
 use crate::lissajous::Lissajous;
 use crate::matrix::Matrix;
 use crate::mirror::Mirror;
+use crate::moire::Moire;
+use crate::rain::Rain;
 use crate::sakura::Sakura;
 use crate::satori::Satori;
 use crate::surface::{Damage, Panel, Surface};
@@ -14,6 +18,7 @@ use crate::toasters::Toasters;
 use crate::toasters2::Toasters2;
 use crate::toasters3::Toasters3;
 use crate::warp::Warp;
+use crate::worms::Worms;
 
 /// A screensaver. One frame, one call. Dispatch happens here and NOWHERE below
 /// it: no `&dyn Palette`, no `fn cell(&self, x, y) -> Cell`, no `&mut dyn FnMut`
@@ -66,6 +71,11 @@ const SAVERS: &[(&str, Build)] = &[
     ("satori", |p, fps| Box::new(Satori::new(p, fps))),
     ("warp", |p, fps| Box::new(Warp::new(p, fps))),
     ("sakura", |p, fps| Box::new(Sakura::new(p, fps))),
+    ("fractal", |p, fps| Box::new(Fractal::new(p, fps))),
+    ("hypercube", |p, fps| Box::new(Hypercube::new(p, fps))),
+    ("moire", |p, fps| Box::new(Moire::new(p, fps))),
+    ("rain", |p, fps| Box::new(Rain::new(p, fps))),
+    ("worms", |p, fps| Box::new(Worms::new(p, fps))),
     ("city", |p, fps| Box::new(City::new(p, fps))),
 ];
 
