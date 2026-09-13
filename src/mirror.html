@@ -30,9 +30,10 @@
     max-height: calc(100vh - 3rem);
     width: auto;
     height: auto;
-    /* The panel scales an 8x16 glyph to a 16x32 cell with hard edges; smoothing
-       here would make the mirror look unlike the thing it mirrors. */
-    image-rendering: pixelated;
+    /* Set from JS per layout — see fitScaling(). `pixelated` is right when the
+       canvas is shown at or above its own size, and WRONG below it: nearest
+       neighbour at a fractional downscale drops whole rows and columns of
+       pixels, which is the line striping the mirror was showing. */
     border: 1px solid #132;
     background: #000;
   }
@@ -46,7 +47,13 @@
   }
   #pick {
     display: flex;
+    /* Eighteen savers do not fit on one line, and a picker that runs off the
+       edge hides the savers at the end of the list entirely. Wrap and centre,
+       so the row grows downward instead of sideways. */
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 0.4rem;
+    max-width: 100%;
   }
   #pick button {
     font: inherit;
@@ -54,8 +61,11 @@
     color: #4b8b4b;
     background: #000;
     border: 1px solid #132;
-    padding: 0.3rem 0.8rem;
+    /* Tighter than before: the horizontal padding was set when there were
+       three savers and is what pushes the row past the edge at eighteen. */
+    padding: 0.25rem 0.55rem;
     cursor: pointer;
+    white-space: nowrap;
   }
   #pick button[aria-pressed="true"] {
     color: #7cf65d;
@@ -149,6 +159,21 @@
     );
   }
 
+  // A 1920-wide canvas in a smaller window is a fractional downscale, and
+  // nearest-neighbour picks one source pixel per destination pixel, so entire
+  // scanlines vanish — a one-cell-tall streak or a one-pixel grid line can
+  // disappear completely. Smoothing averages instead of dropping, which is the
+  // honest rendering when the mirror cannot show every pixel. Above 1:1 we want
+  // hard edges back, because that is what the panel itself looks like.
+  function fitScaling() {
+    const shown = canvas.clientWidth;
+    if (!shown) return;
+    const ratio = shown / canvas.width;
+    const crisp = ratio >= 1 || Number.isInteger(1 / ratio);
+    canvas.style.imageRendering = crisp ? "pixelated" : "auto";
+  }
+  addEventListener("resize", fitScaling);
+
   function applyMeta(m) {
     meta = m;
     buildPicker(m);
@@ -156,6 +181,7 @@
     canvas.height = m.rows * m.cell_h;
     canvas.style.setProperty("--ar", canvas.width / canvas.height);
     ctx.imageSmoothingEnabled = false;
+    fitScaling();
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     buildAtlases(m);
