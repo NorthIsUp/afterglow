@@ -2,9 +2,53 @@
 //!
 //! Every saver here draws cells, so the change test, the damage report and the
 //! frame-0 full paint live once, in `flush`, instead of once per saver.
+//!
+//! # Pixel aspect
+//!
+//! The cell is also where the panel's non-square pixels are corrected. Pine's
+//! monitor is 1280x400 and advertises nothing the Pi can read, so the firmware
+//! drives it at 1920x1080 and the panel rescales 1.5x across and 2.7x down —
+//! everything lands on screen squashed vertically by 1.8. `SAVER_PIXEL_ASPECT`
+//! makes the CELL that much taller, and every saver whose coordinates are cells
+//! or braille sub-cells — which is all of them but `moire` and `warp` — is
+//! corrected for free. A knob 25 savers each have to remember is a knob 25
+//! savers get wrong.
+
+use std::sync::OnceLock;
 
 use crate::font;
 use crate::surface::{Panel, Surface};
+
+/// How much taller than wide one framebuffer pixel lands on the panel, in
+/// per-cent. 100 is square and is a byte-for-byte no-op; pine's panel is 180.
+///
+/// Read once per process, not per `Grid`: this is a property of the monitor,
+/// and a saver switch must not pay an env lookup on the render thread.
+pub fn pixel_aspect() -> usize {
+    #[cfg(test)]
+    if let Some(a) = TEST_ASPECT.with(std::cell::Cell::get) {
+        return a;
+    }
+    static ASPECT: OnceLock<usize> = OnceLock::new();
+    *ASPECT.get_or_init(|| crate::env_num(&["SAVER_PIXEL_ASPECT"], 100, 25, 400) as usize)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_ASPECT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Build a saver as if the panel had this aspect. Per THREAD, because the four
+/// savers that stretch something themselves construct from the process-wide
+/// value and cargo runs tests in parallel — `set_var` would land one test's
+/// geometry in another's saver, which is the trap `satori` documents.
+#[cfg(test)]
+pub fn with_test_aspect<R>(aspect: usize, f: impl FnOnce() -> R) -> R {
+    TEST_ASPECT.with(|c| c.set(Some(aspect)));
+    let out = f();
+    TEST_ASPECT.with(|c| c.set(None));
+    out
+}
 
 /// Unlit glyph pixels. A cell always paints its whole rectangle, which is what
 /// makes skipping an unchanged cell sound.
@@ -67,9 +111,22 @@ impl Grid {
     /// `cols = panel.w / cell_w`, `rows = panel.h / cell_h`, both at least 1.
     /// The right/bottom remainder belongs to no cell, so `flush` paints it
     /// black on frame 0 — see `paint_margins`.
+    ///
+    /// `cell_h` is the height a SQUARE pixel would need; `SAVER_PIXEL_ASPECT`
+    /// stretches it to what this panel needs. A saver that keeps its own copy
+    /// must take it back from `cell_h()`, not from the value it passed in.
     pub fn new(panel: &Panel, cell_w: usize, cell_h: usize) -> Self {
+        Self::with_aspect(panel, cell_w, cell_h, pixel_aspect())
+    }
+
+    /// `new` with the aspect handed in, so the tests can vary it: cargo runs
+    /// them in parallel threads and the environment is process-wide.
+    pub fn with_aspect(panel: &Panel, cell_w: usize, cell_h: usize, aspect: usize) -> Self {
         let cell_w = cell_w.max(1);
-        let cell_h = cell_h.max(1);
+        // Rounded, not truncated: a cell is a couple of dozen pixels, so
+        // flooring 16 x 1.8 to 28 costs nearly a whole percent of the
+        // correction the knob was set to make.
+        let cell_h = ((cell_h.max(1) * aspect + 50) / 100).max(1);
         let cols = (panel.w / cell_w).max(1);
         let rows = (panel.h / cell_h).max(1);
         Self {
@@ -247,6 +304,45 @@ pub const fn bake<const N: usize>(rgb: &[[u8; 3]; N]) -> [u32; N] {
 mod tests {
     use super::*;
     use crate::surface::Run;
+
+    /// The knob unset must be a no-op down to the byte: every saver's frames
+    /// were dumped before and after this went in and diffed, and that proof is
+    /// only worth something if 100 cannot quietly round a cell somewhere.
+    #[test]
+    fn the_default_aspect_changes_no_geometry_at_all() {
+        for (w, h) in [(1920, 1080), (1280, 400), (1918, 1051)] {
+            let panel = Panel::new(w, h, w);
+            for (cw, ch) in [(8, 16), (16, 32), (12, 16), (4, 4), (24, 24), (8, 128)] {
+                let g = Grid::with_aspect(&panel, cw, ch, 100);
+                assert_eq!((g.cell_w(), g.cell_h()), (cw, ch), "{w}x{h} cell {cw}x{ch}");
+                assert_eq!((g.cols(), g.rows()), ((w / cw).max(1), (h / ch).max(1)));
+            }
+        }
+    }
+
+    /// And set, it has to actually move: the cell gets TALLER, by the rounded
+    /// per-cent, and nothing gets wider. A correction applied to the wrong axis
+    /// renders exactly as wrong as no correction at all.
+    #[test]
+    fn a_non_default_aspect_stretches_the_cell_down_and_only_down() {
+        let panel = Panel::new(1920, 1080, 1920);
+        // 16 x 1.80 = 28.8: rounds UP. Truncating costs a percent of the
+        // correction the knob was set to make.
+        let g = Grid::with_aspect(&panel, 8, 16, 180);
+        assert_eq!((g.cell_w(), g.cell_h()), (8, 29));
+        assert_eq!((g.cols(), g.rows()), (240, 1080 / 29));
+
+        // Monotonic, never wider, and never zero however small the knob goes.
+        let mut last = 0;
+        for aspect in [25, 50, 99, 100, 101, 150, 180, 400] {
+            let g = Grid::with_aspect(&panel, 8, 16, aspect);
+            assert_eq!(g.cell_w(), 8, "aspect {aspect} moved the width");
+            assert!(g.cell_h() >= last, "aspect {aspect} shrank the cell");
+            assert!(g.cell_h() >= 1);
+            last = g.cell_h();
+        }
+        assert_eq!(Grid::with_aspect(&panel, 8, 1, 25).cell_h(), 1);
+    }
 
     #[test]
     fn cell_packs_both_fields() {

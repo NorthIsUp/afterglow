@@ -193,7 +193,17 @@ impl Moire {
 
         let grid = Grid::new(panel, cell_w, cell_h);
         let (dw, dh) = (grid.cols() * 2, grid.rows() * 4);
-        let (w, h) = (panel.w as f32, panel.h as f32);
+        // The other saver whose geometry is in PANEL PIXELS rather than in
+        // cells, so the aspect correction cannot ride in on the taller cell:
+        // a ring that is circular in the framebuffer arrives on pine's panel
+        // as an ellipse. A dot keeps the SQUARE-pixel height the env asked for
+        // (`sub_h` below is off `cell_h`, not off `grid.cell_h()`), so the
+        // whole figure is evaluated in a space `aspect` times shorter than the
+        // framebuffer — and the centres and sway amplitudes must be in it too.
+        let (w, h) = (
+            panel.w as f32,
+            panel.h as f32 * 100.0 / crate::grid::pixel_aspect() as f32,
+        );
 
         let spin_rad = spin.to_radians() / 1000.0;
         // An all-junk MOIRE_KINDS still has to produce a picture: a headless pod
@@ -392,6 +402,24 @@ mod tests {
     /// exactly what frame 0 has to cover.
     fn panel() -> Panel {
         Panel::new(1920, 1080, 1920)
+    }
+
+    /// The gratings are evaluated in panel pixels, so a ring that is circular
+    /// in the framebuffer lands on pine's panel as an ellipse. The figure is
+    /// therefore laid out in a space `aspect` shorter than the framebuffer —
+    /// centre and sway included, or the pattern drifts off the top.
+    #[test]
+    fn the_rings_are_laid_out_in_square_pixels() {
+        let at = |a| crate::grid::with_test_aspect(a, || Moire::new(&panel(), 30));
+        let (sq, pine) = (at(100), at(180));
+        assert_eq!(sq.families[0].cy0, 540.0);
+        assert_eq!(sq.sub_h, pine.sub_h, "a dot keeps its square-pixel height");
+        assert!(
+            (pine.families[0].cy0 * 1.8 - sq.families[0].cy0).abs() < 0.5,
+            "centre {} is not the 1080-tall panel seen as 600",
+            pine.families[0].cy0
+        );
+        assert!((pine.families[0].ay * 1.8 - sq.families[0].ay).abs() < 0.5);
     }
 
     /// T1. Frame 0 reaches every scanline, including the strip below the last

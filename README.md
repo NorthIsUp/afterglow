@@ -39,8 +39,9 @@ falls back to `ascii` — a headless pod must never crash-loop on a typo.
 | `pov` | Points of View — a rotating platonic solid drawn as a grid of dots on its own surface, changing to the next of the five every ten seconds in a burst that throws the points outward and lands them on the new shape with an overshoot. | `POV_HOLD_SECS` (1..600, default 10), `POV_BURST_MS` (100..5000, default 1200), `POV_SPACING` (dots between surface samples, 2..24, default 6), `POV_SCALE` (figure radius in thousandths of the SHORTER panel side, 50..600, default 420), `POV_BURST` (outward scatter in thousandths of the figure radius, 0..2000, default 450), `POV_Z_DIST` (2000..40000, default 6000), `POV_RATE_XY` / `POV_RATE_XZ` / `POV_RATE_YZ` (milli-revolutions per second, default 7 / 23 / 13), `POV_CELL_W` / `POV_CELL_H` (8, 16) |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
-`SAVER_ROTATE_SECS` (0..86400, default 0 = off), `DRM_DEVICE` (default
-`/dev/dri/card0`), `RETRY_SECONDS`.
+`SAVER_ROTATE_SECS` (0..86400, default 0 = off), `SAVER_PIXEL_ASPECT` (25..400,
+default 100 = off — see below), `DRM_DEVICE` (default `/dev/dri/card0`),
+`RETRY_SECONDS`.
 
 All of these are plain deployment env changes — no image rebuild.
 
@@ -49,6 +50,59 @@ All of these are plain deployment env changes — no image rebuild.
 400 that changes nothing. The switch rebuilds the saver on the render thread and
 bumps the mirror's epoch, so viewers reconnect onto the new geometry exactly as
 they do for a modeset — and a restart goes back to whatever `SAVER` says.
+
+### Squashed on pine: `SAVER_PIXEL_ASPECT`
+
+Pine's monitor is a **1280x400** panel that advertises nothing the Pi can read —
+its EDID is 0 bytes, the connector comes up as `Unknown-1`, there is no
+`/dev/vcio`, and vc4/v3d are not in the Talos image at all. The VideoCore
+firmware picks 1920x1080 at boot and that is what simpledrm hands us;
+`framebuffer_width` / `framebuffer_height` in `config.txt` were tried on the real
+node and measured dead (the evidence is in `cluster/schematic.yaml`).
+
+So the panel rescales our output **non-uniformly**: 1920→1280 is 1.5x, 1080→400
+is 2.7x. Everything reaches the glass squashed vertically by 2.7/1.5 = **1.8x** —
+a circle is a wide ellipse, a square a wide rectangle.
+
+`SAVER_PIXEL_ASPECT` is that number in per-cent: "one framebuffer pixel is this
+much taller than it is wide once the panel has finished rescaling", so **180** on
+pine and **100** (the default) everywhere else. It is a **process-wide** knob, not
+a per-saver one, and 100 is a byte-for-byte no-op — proved by dumping all 25
+savers before and after and diffing the PPMs.
+
+It applies in `Grid::new`, which makes the CELL 1.8x taller. That is the whole
+trick: every saver here draws in cells or in braille sub-cells of a cell, so a
+cell that is visually square makes the saver's own coordinate space visually
+square and 21 of the 25 are corrected without a line of their own. Four are not,
+because they measure something in framebuffer PIXELS rather than in cells, and
+each carries the stretch explicitly:
+
+| saver            | what needed it                                                              |
+| ---------------- | --------------------------------------------------------------------------- |
+| `warp`           | the projection: `focal_y = focal * aspect`, so the tunnel is round          |
+| `moire`          | the gratings are evaluated in a space `aspect` shorter than the framebuffer |
+| `toasters{,2,3}` | the 2.5:1 flight diagonal, which is a pixel slope and not a cell slope      |
+| `confetti`       | the 48% pile incline, which is meant to be 48% on the GLASS                 |
+
+Everything else physical needs nothing and that is not luck: `hardrain`'s wind is
+"cells sideways per 100 of fall" and `sakura`'s drift, `rain`, `worms` and the
+rest are all in cells or sub-cells, so a taller cell re-leans them by exactly the
+right amount. Vertical stays vertical at any aspect.
+
+Two things change as a side effect, both wanted: there are fewer ROWS (1080/29
+rather than 1080/16 at the usual 8x16 cell), and a saver sized off "the shorter
+panel side" — `pov`, `hypercube` — now measures that side in visually square
+units, so the figure comes out round rather than merely fitted.
+
+The mirror sends the FRAMEBUFFER, which is pre-stretched, so `/meta` carries
+`pixel_aspect` and the page divides its canvas height by it. The browser then
+shows what the wall shows rather than what the renderer drew — the page has no
+monitor to do the un-stretching for it. Only the displayed shape changes; the
+pixels are the framebuffer's, untouched.
+
+`meta_reports_the_aspect_the_renderer_actually_used` is what keeps the two from
+drifting apart: a `/meta` aspect the renderer did not use is invisible in review
+and surfaces only as "the web version does not match the screen".
 
 ### Rotating on a timer
 
@@ -113,7 +167,9 @@ tetrahedron inscribed in the same sphere as an icosahedron looks half the size.
 
 A braille dot is `cell_w/2` by `cell_h/4`, square at the default 8x16. Keep that
 ratio if you change `POV_CELL_W` / `POV_CELL_H`, or the solid comes out as an
-ellipsoid.
+ellipsoid. `SAVER_PIXEL_ASPECT` stretches `cell_h` on top of whatever you set, so
+the dot is square on the GLASS rather than in the framebuffer — set the pair as
+if the pixels were square and let the knob do the rest.
 
 ### About the matrix saver
 

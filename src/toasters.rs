@@ -209,6 +209,9 @@ impl Toasters {
         let cell_w = env_num(&["TOASTER_CELL_W"], 16, 8, 64) as i32;
         let cell_h = env_num(&["TOASTER_CELL_H"], 32, 8, 128) as i32;
         let grid = Grid::new(panel, cell_w as usize, cell_h as usize);
+        // Back from the grid, not the env: `SAVER_PIXEL_ASPECT` stretches it,
+        // and the flock's pixel arithmetic has to agree with the cell it lands in.
+        let cell_h = grid.cell_h() as i32;
         let (cols, rows) = (grid.cols() as i32, grid.rows() as i32);
 
         // Objects per 1000 cells, and the calibration knob: the right crowd
@@ -251,7 +254,11 @@ impl Toasters {
             objs: Vec::with_capacity(count),
             scene: vec![Cell::CLEAR; (cols * rows) as usize],
             step_x: -unit * RUN,
-            step_y: unit * RISE,
+            // The flock's slope is in PANEL PIXELS, so the taller cell does
+            // not carry the aspect correction into it: 22 deg below horizontal
+            // in the framebuffer arrives on pine's panel at 12. Stretched here,
+            // once, so the per-frame step stays one add.
+            step_y: unit * RISE * crate::grid::pixel_aspect() as i32 / 100,
             flap_div: (fps / flap_fps).max(1),
             tick: 0,
             rng: 0x1357_9bdf,
@@ -390,6 +397,20 @@ mod tests {
 
     fn panel() -> Panel {
         Panel::new(640, 480, 640)
+    }
+
+    /// The 2.5:1 diagonal is a PIXEL slope, so unlike the sprite it does not
+    /// ride in on the taller cell: 22 degrees below horizontal in the
+    /// framebuffer reaches pine's panel at 12. Stretched, it arrives at 22.
+    #[test]
+    fn the_flock_flies_its_diagonal_on_the_glass() {
+        let at = |a| crate::grid::with_test_aspect(a, || Toasters::new(&panel(), 30));
+        let (sq, pine) = (at(100), at(180));
+        assert_eq!(sq.step_x, pine.step_x, "the run is unchanged");
+        assert_eq!(pine.step_y, sq.step_y * 9 / 5);
+        // And the sprite's own arithmetic has to agree with the cell it lands
+        // in, or an object draws a row away from where it is.
+        assert_eq!(pine.cell_h as usize, pine.grid.cell_h());
     }
 
     /// The two details the module doc calls the tells. Motion must be strictly

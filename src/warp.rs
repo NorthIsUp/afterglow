@@ -89,6 +89,12 @@ pub struct Warp {
     dirty: Vec<u32>,
     rng: u32,
     focal: f32,
+    /// `focal` again, stretched by `SAVER_PIXEL_ASPECT`. `warp` projects into
+    /// PANEL PIXELS rather than into cells, so it is one of the two savers the
+    /// aspect correction cannot reach through the cell: a tunnel that is round
+    /// in the framebuffer arrives on pine's panel as a wide ellipse. Resolved
+    /// here so the projection stays two multiplies and a divide.
+    focal_y: f32,
     dz: f32,
     max_steps: usize,
     /// Half the panel, in pixels — the projection's origin.
@@ -133,6 +139,7 @@ impl Warp {
             dirty: Vec::with_capacity(bound * 2),
             rng: 0x5EED_1234,
             focal: spread * 100.0,
+            focal_y: spread * 100.0 * crate::grid::pixel_aspect() as f32 / 100.0,
             dz: speed / fps.max(1) as f32,
             max_steps,
             cx: panel.w as f32 / 2.0,
@@ -215,7 +222,10 @@ impl Warp {
             self.zs[i] = z1;
 
             let (x, y) = (self.xs[i], self.ys[i]);
-            let (x1, y1) = (self.cx + x * self.focal / z1, self.cy + y * self.focal / z1);
+            let (x1, y1) = (
+                self.cx + x * self.focal / z1,
+                self.cy + y * self.focal_y / z1,
+            );
             // Once it is well past the edge it can never come back — recycling
             // it keeps the on-screen density up instead of spending the streak
             // loop on a star nobody can see.
@@ -223,7 +233,10 @@ impl Warp {
                 self.spawn(i);
                 continue;
             }
-            let (x0, y0) = (self.cx + x * self.focal / z0, self.cy + y * self.focal / z0);
+            let (x0, y0) = (
+                self.cx + x * self.focal / z0,
+                self.cy + y * self.focal_y / z0,
+            );
 
             // Cubed rather than linear in depth: linear brightness puts the
             // whole far field in the middle of the ramp, and the centre then
@@ -304,6 +317,17 @@ mod tests {
 
     fn warp() -> Warp {
         Warp::new(&panel(), 30)
+    }
+
+    /// `warp` projects into PANEL PIXELS, so the taller cell does not carry
+    /// `SAVER_PIXEL_ASPECT` into it and the tunnel would reach pine's panel as
+    /// a wide ellipse. The y focal length is the whole correction.
+    #[test]
+    fn the_tunnel_is_round_on_the_glass_not_in_the_framebuffer() {
+        let w = crate::grid::with_test_aspect(100, warp);
+        assert_eq!(w.focal_y, w.focal, "square pixels must not stretch it");
+        let w = crate::grid::with_test_aspect(180, warp);
+        assert_eq!(w.focal_y, w.focal * 1.8);
     }
 
     /// Frame 0 has to cover every pixel, including the strip no cell owns, and

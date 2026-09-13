@@ -172,6 +172,8 @@ impl Toasters3 {
         let cell_w = env_num(&["TOASTER3_CELL_W"], 16, 8, 64) as i32;
         let cell_h = env_num(&["TOASTER3_CELL_H"], 32, 8, 128) as i32;
         let grid = Grid::new(panel, cell_w as usize, cell_h as usize);
+        // Back from the grid, not the env: `SAVER_PIXEL_ASPECT` stretches it.
+        let cell_h = grid.cell_h() as i32;
         let (cols, rows) = (grid.cols() as i32, grid.rows() as i32);
 
         // Objects per 1000 cells. 2, not `toasters`' 4, and for the same
@@ -197,7 +199,11 @@ impl Toasters3 {
             objs: Vec::with_capacity(count),
             scene: vec![Cell::CLEAR; (cols * rows) as usize],
             step_x: -unit * RUN,
-            step_y: unit * RISE,
+            // The flock's slope is in PANEL PIXELS, so the taller cell does
+            // not carry the aspect correction into it: 22 deg below horizontal
+            // in the framebuffer arrives on pine's panel at 12. Stretched here,
+            // once, so the per-frame step stays one add.
+            step_y: unit * RISE * crate::grid::pixel_aspect() as i32 / 100,
             flap_div: (fps / flap_fps).max(1),
             tick: 0,
             rng: 0x2468_ace0,
@@ -322,6 +328,17 @@ mod tests {
 
     fn panel() -> Panel {
         Panel::new(1920, 1080, 1920)
+    }
+
+    /// As `toasters`: the 2.5:1 diagonal is a PIXEL slope, so it does not ride
+    /// in on the taller cell and has to be stretched for pine's panel.
+    #[test]
+    fn the_flock_flies_its_diagonal_on_the_glass() {
+        let at = |a| crate::grid::with_test_aspect(a, || Toasters3::new(&panel(), 30));
+        let (sq, pine) = (at(100), at(180));
+        assert_eq!(sq.step_x, pine.step_x, "the run is unchanged");
+        assert_eq!(pine.step_y, sq.step_y * 9 / 5);
+        assert_eq!(pine.cell_h as usize, pine.grid.cell_h());
     }
 
     /// The two details `toasters`' module doc calls the tells, and they have to

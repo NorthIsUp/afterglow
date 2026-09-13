@@ -202,7 +202,7 @@ impl Mirror {
         let mut json = String::with_capacity(8 << 10);
         json.push_str(&format!(
             "{{\"saver\":\"{saver}\",\"savers\":[{savers}],\"epoch\":{epoch},\
-             \"panel_w\":{pw},\"panel_h\":{ph},\
+             \"panel_w\":{pw},\"panel_h\":{ph},\"pixel_aspect\":{pa},\
              \"cols\":{cols},\"rows\":{rows},\
              \"cell_w\":{cw},\"cell_h\":{ch},\
              \"glyph_w\":{},\"glyph_h\":{},\"palette\":[",
@@ -210,6 +210,7 @@ impl Mirror {
             font::GLYPH_H,
             pw = panel.w,
             ph = panel.h,
+            pa = crate::grid::pixel_aspect(),
             cols = g.cols(),
             rows = g.rows(),
             cw = g.cell_w(),
@@ -544,6 +545,39 @@ mod tests {
         // And the grid is still reported, since the cells are addressed by it.
         assert!(head.contains("\"cols\":120,\"rows\":33"), "{head}");
         assert!(head.contains("\"cell_w\":16,\"cell_h\":32"), "{head}");
+        // The page squashes its canvas by this to show what the wall shows.
+        // Without it in /meta the browser renders the pre-distorted picture.
+        assert!(head.contains("\"pixel_aspect\":100"), "{head}");
+    }
+
+    /// The page divides the canvas by `pixel_aspect` to undo the stretch the
+    /// renderer applied for the panel's benefit. If `/meta` reports a number
+    /// the renderer did not use, the mirror silently shows the wrong shape —
+    /// which is invisible in review and only shows up as "the web version does
+    /// not match the screen".
+    #[test]
+    fn meta_reports_the_aspect_the_renderer_actually_used() {
+        for pct in [100usize, 180, 250] {
+            let (g, panel) = crate::grid::with_test_aspect(pct, || {
+                let panel = Panel::new(1920, 1080, 1920);
+                let g = Grid::new(&panel, 16, 32);
+                (g, panel)
+            });
+            // The cell really is that much taller than the env said. Rounded,
+            // not truncated -- 32 * 1.8 is 57.6 and the cell is 58.
+            assert_eq!(g.cell_h(), (32 * pct + 50) / 100, "aspect {pct}");
+
+            let m = Mirror::new(15);
+            crate::grid::with_test_aspect(pct, || {
+                m.describe("matrix", &g, &panel, &[0, 0xFF]);
+            });
+            let meta = m.meta.lock().unwrap().clone();
+            let head = meta.split(",\"palette\"").next().unwrap().to_string();
+            assert!(
+                head.contains(&format!("\"pixel_aspect\":{pct}")),
+                "aspect {pct}: {head}"
+            );
+        }
     }
 
     /// The keyframe-on-connect trick is the sentinel: a viewer's `prev` filled

@@ -49,6 +49,17 @@
 //!   saver already showing, and a `/select` gives the saver it picked a full
 //!   interval before rotation moves on again.
 //! * `SAVER_FPS`      — target frames/sec, 1..=120 (default 30)
+//! * `SAVER_PIXEL_ASPECT` — how much taller than wide one framebuffer pixel
+//!   lands on the panel, in per-cent, 25..=400. **100, the default, is off and
+//!   is a byte-for-byte no-op.** Pine's monitor is a 1280x400 panel the firmware
+//!   drives at 1920x1080 and which then rescales 1.5x across and 2.7x down, so
+//!   everything reaches the glass squashed by 1.8: set it to 180 there. Applied
+//!   once, in `Grid::new`, by making the cell that much taller — every saver
+//!   draws in cells or in sub-cells of one, so the correction reaches all but
+//!   the four that measure something in framebuffer pixels (`warp`, `moire`,
+//!   `toasters*`, `confetti`), which carry it explicitly. Process-wide rather
+//!   than per-saver: it is a property of the monitor, and a knob 25 savers each
+//!   have to remember is a knob 25 savers get wrong. See the README.
 //! * `RETRY_SECONDS`  — wait between attempts when no display is present (default 30)
 //! * `SAVER_HTTP`     — address the web mirror listens on (default
 //!   `127.0.0.1:8080`, which is the `tailscale-auth` sidecar's default upstream;

@@ -223,8 +223,13 @@ impl Confetti {
         let slope = env_num(&["CONFETTI_SLOPE"], 48, 5, 200) as u32;
         // rise/run in pixels, converted to grain units per column. `.max(1)`
         // because a zero drop is a pile that cannot lean at all.
-        let max_drop =
-            (slope * grid.cell_w() as u32 * grains / (100 * grid.cell_h() as u32)).max(1);
+        //
+        // Against `cell`, the SQUARE-pixel cell height, not `grid.cell_h()`,
+        // which `SAVER_PIXEL_ASPECT` has stretched: a grain is a slice of the
+        // stretched cell, so dividing by the stretched height would hold the
+        // pile's incline fixed in framebuffer pixels and land it on pine's
+        // panel at 48/1.8 = 27%. The angle is meant to be 48% on the GLASS.
+        let max_drop = (slope * grid.cell_w() as u32 * grains / (100 * cell as u32)).max(1);
         // Grain units a landed piece adds. Below `grains` (a whole cell) on
         // purpose: it is the one knob that trades airborne density against how
         // fast the heap swallows the panel.
@@ -752,6 +757,28 @@ mod tests {
     /// remainder strip is exactly what frame 0 is asked to prove it covers.
     fn panel() -> Panel {
         Panel::new(1920, 1070, 1920)
+    }
+
+    /// `CONFETTI_SLOPE` is 48% on the GLASS, not in the framebuffer. Pine's
+    /// panel squashes by 1.8, so the framebuffer incline has to be that much
+    /// steeper — which it is only because `max_drop` is derived from the
+    /// SQUARE-pixel cell height rather than from the stretched one.
+    #[test]
+    fn the_pile_leans_at_its_angle_on_the_glass() {
+        let at = |a| crate::grid::with_test_aspect(a, || Confetti::new(&panel(), 30));
+        let (sq, pine) = (at(100), at(180));
+        assert_eq!(
+            sq.max_drop, pine.max_drop,
+            "the lean is in grains either way"
+        );
+        // A grain is a slice of the stretched cell, so the same grain count is
+        // 1.8x the framebuffer rise — 48% becomes 86%, and 86/1.8 is 48 again.
+        let (a, b) = (slope_pct(&sq, sq.max_drop), slope_pct(&pine, pine.max_drop));
+        assert_eq!(a, 48);
+        assert!(
+            (80..92).contains(&b),
+            "framebuffer slope {b}% is not ~1.8 x {a}%"
+        );
     }
 
     /// A lean in grain units per column as a rise/run percentage — what

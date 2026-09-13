@@ -131,6 +131,9 @@ impl Dvd {
         let cell_w = env_num(&["DVD_CELL_W"], 24, 4, 64) as usize;
         let cell_h = env_num(&["DVD_CELL_H"], 24, 4, 128) as usize;
         let grid = Grid::new(panel, cell_w, cell_h);
+        // Back from the grid, not the env: `SAVER_PIXEL_ASPECT` stretches it,
+        // and the bounce arithmetic below is in panel pixels.
+        let cell_h = grid.cell_h();
         let (cols, rows) = (grid.cols(), grid.rows());
 
         let ah = ART.len();

@@ -187,7 +187,14 @@
     // a new page keeps today's slightly-wrong shape instead of a 0x0 canvas.
     canvas.width = m.panel_w || m.cols * m.cell_w;
     canvas.height = m.panel_h || m.rows * m.cell_h;
-    canvas.style.setProperty("--ar", canvas.width / canvas.height);
+    // The PANEL's shape, not the framebuffer's. With SAVER_PIXEL_ASPECT set,
+    // the renderer draws things `aspect` per-cent too tall on purpose, because
+    // the monitor squashes them back. The page has no such monitor, so it has
+    // to do the squashing itself or it shows the pre-distorted picture rather
+    // than the one on the wall. Only the displayed shape changes; the pixels
+    // are the framebuffer's, untouched.
+    const aspect = (m.pixel_aspect || 100) / 100;
+    canvas.style.setProperty("--ar", (canvas.width * aspect) / canvas.height);
     ctx.imageSmoothingEnabled = false;
     fitScaling();
     ctx.fillStyle = "#000";
