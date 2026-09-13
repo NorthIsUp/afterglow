@@ -1103,40 +1103,9 @@ mod tests {
         );
     }
 
-    // Allocations on THIS thread, so tests running in parallel do not see each
-    // other's traffic. A `Cell<usize>` has no destructor, so `with` cannot fail
-    // during teardown, and `const` init means the key itself never allocates —
-    // both of which an allocator hook has to be sure of.
-    thread_local! {
-        static ALLOCS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    }
-
-    /// Counting global allocator. This is crate-wide — one test binary, one
-    /// allocator — and it earns that: the buffer-identity check below is blind
-    /// to a scratch `Vec` allocated and dropped inside `render`, which is the
-    /// commonest way this frame loop would start allocating.
-    struct Counting;
-
-    unsafe impl std::alloc::GlobalAlloc for Counting {
-        unsafe fn alloc(&self, l: std::alloc::Layout) -> *mut u8 {
-            ALLOCS.with(|n| n.set(n.get() + 1));
-            std::alloc::System.alloc(l)
-        }
-        unsafe fn alloc_zeroed(&self, l: std::alloc::Layout) -> *mut u8 {
-            ALLOCS.with(|n| n.set(n.get() + 1));
-            std::alloc::System.alloc_zeroed(l)
-        }
-        unsafe fn realloc(&self, p: *mut u8, l: std::alloc::Layout, new: usize) -> *mut u8 {
-            ALLOCS.with(|n| n.set(n.get() + 1));
-            std::alloc::System.realloc(p, l, new)
-        }
-        unsafe fn dealloc(&self, p: *mut u8, l: std::alloc::Layout) {
-            std::alloc::System.dealloc(p, l)
-        }
-    }
-
-    #[global_allocator]
-    static COUNTING: Counting = Counting;
+    // The counting allocator is crate-wide — one test binary, one allocator —
+    // so it lives in `testalloc` and every saver's no-alloc test shares it.
+    use crate::testalloc::count as allocs;
 
     /// `render` owns no per-frame collection — `shade` is sized in `new`, only
     /// ever written through by index, and `Grid::fill` writes in place.
@@ -1156,22 +1125,15 @@ mod tests {
         assert!(len > 0, "nothing was reserved for the frame loop");
         let cells = f.grid.cells().len();
         // Non-vacuous: the counter is wired up and does count.
-        let warm = ALLOCS.with(|n| n.get());
+        let warm = allocs();
         drop(vec![0u8; 8]);
-        assert!(
-            ALLOCS.with(|n| n.get()) > warm,
-            "the counter is not counting"
-        );
+        assert!(allocs() > warm, "the counter is not counting");
         // Enough frames to cross a family boundary at this panel's cycle, so
         // `begin` is on the path too — that is where a rebuild would hide.
         for _ in 0..20_000 {
-            let before = ALLOCS.with(|n| n.get());
+            let before = allocs();
             saver::frame(&mut f, &mut buf, &p);
-            assert_eq!(
-                ALLOCS.with(|n| n.get()),
-                before,
-                "the render path allocated"
-            );
+            assert_eq!(allocs(), before, "the render path allocated");
             assert_eq!(
                 (f.shade.len(), f.shade.capacity(), f.shade.as_ptr()),
                 (len, cap, at),

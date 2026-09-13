@@ -98,6 +98,8 @@ mod sakura;
 mod satori;
 mod saver;
 mod surface;
+#[cfg(test)]
+mod testalloc;
 mod toasters;
 mod toasters2;
 mod toasters3;
