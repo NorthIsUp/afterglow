@@ -38,10 +38,14 @@
 //!   in the dark wood — under it where it lies across the panel, on the leaning
 //!   side where it stands up — which is the whole difference between a bar and
 //!   a cylinder, and it costs one comparison per sub-cell.
-//! * **The style is the scene's weather, not the tree's habit.** `Style` is
-//!   rolled once per scene and both the cherry and the sapling behind it are
-//!   grown in it, because one swept tree beside one upright one reads as a bug.
-//!   A windswept tree is the SAME generator: a trunk laid over three times as
+//! * **There is exactly one tree.** A second, a third the height, used to be
+//!   planted on the far side — the same generator scaled down, which draws a
+//!   miniature adult: four generations of forking and a full ball of blossom
+//!   on a stubby trunk. A young tree has fewer generations, a straighter and
+//!   proportionally thicker trunk and sparser blossom, none of which scaling
+//!   gives you, so it read as the same tree drawn twice rather than as a grove.
+//! * **The style is rolled per scene, not per tree.** A windswept tree is the
+//!   SAME generator as an upright one: a trunk laid over three times as
 //!   far, an apex that carries on leaning instead of reaching back up for the
 //!   light, `Shape::sweep` combing every limb downwind a little harder each
 //!   generation, and the limbs thrown into the wind cut short.
@@ -430,8 +434,8 @@ struct Raster {
     bits: Vec<u8>,
     col: Vec<u16>,
     /// Branch endpoints of the tree being grown, where blossom clusters are
-    /// stamped. Cleared per tree: a second, smaller tree tiered against the
-    /// first one's height comes out uniformly dark.
+    /// stamped. Cleared at the head of `grow`, so the dry attempt's tips do
+    /// not tier the real one's blossom against a crown that was thrown away.
     tips: Vec<(i32, i32)>,
     shape: Shape,
     /// Swallow every `px` while a tree is being grown only to be measured. A
@@ -1200,9 +1204,6 @@ impl Sakura {
         // Rooted on the ground line and leaning AWAY from the nearer edge, so
         // the crown always has panel to spread into — and, beside a pond, so
         // the canopy sits over its own reflection.
-        // The style is one scene's weather, not one tree's habit: it arrives
-        // from `new` and both trees here are grown in it, because one swept
-        // cherry beside one upright one reads as a bug rather than as a grove.
         //
         // A swept tree is rooted further out toward the edge it leans away
         // from, because its crown is thrown clear of the trunk rather than
@@ -1249,43 +1250,8 @@ impl Sakura {
             dots,
         );
 
-        // A sapling on the far side, sometimes. Downwind of the big tree and
-        // well short of it: a second tree of the same height reads as a
-        // repeated sprite rather than as a grove.
-        if next_rand(&mut rng) % 100 < 35 && !(setting == Setting::Mountain && trunk_x < 24) {
-            // Downwind of the big tree — except on the mountain, where the
-            // only ground is UPHILL of the trunk and a sapling placed downwind
-            // stands in mid air over the drop.
-            let far = if setting == Setting::Mountain {
-                (next_rand(&mut rng) as i32).rem_euclid(trunk_x - 16) + 6
-            } else if away > 0 {
-                subcols as i32 * (72 + (next_rand(&mut rng) % 20) as i32) / 100
-            } else {
-                subcols as i32 * (8 + (next_rand(&mut rng) % 20) as i32) / 100
-            };
-            let len = (trunk_len * (32 + (next_rand(&mut rng) % 19) as i32) / 100).max(6);
-            // Leaning the other way from the big tree, so the pair reads as two
-            // trees rather than as one drawn twice — except in a wind, which
-            // blows on both of them and lays them the same way.
-            let sap_lean = match style {
-                Style::Upright => -away * (6 + (next_rand(&mut rng) % 15) as i32),
-                Style::Windswept => away * style.lean(&mut rng),
-            };
-            let sap_thick = (thick * 3 / 5).max(3);
-            plant(
-                &mut r,
-                &mut rng,
-                Trunk {
-                    x: far,
-                    y: trunk_y,
-                    len,
-                    lean: sap_lean,
-                    thick: sap_thick,
-                    style,
-                },
-                dots * 30 / 100,
-            );
-        }
+        // One tree, and only one — see the module doc for the sapling that
+        // used to stand on the far side and why a scaled-down one cannot.
 
         // --- the stars --------------------------------------------------
         // Only in empty sky: a star inside the canopy, or on a ridge, would
@@ -2338,8 +2304,8 @@ mod tests {
     /// numbers here are the control, and they are the ones that would go on
     /// passing if `Shape::sweep` were quietly dropped.
     ///
-    /// Tips, not cells: the sapling's blossom is in the scene too, and this is
-    /// about one tree.
+    /// Tips rather than painted cells: this is about where the crown was GROWN,
+    /// and the stamp spreads blossom past the tips that carry it.
     #[test]
     fn the_windswept_style_combs_the_whole_crown_downwind() {
         for seed in 1..120u32 {
