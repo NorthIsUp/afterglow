@@ -106,7 +106,7 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
 
     // Geometry, palette and glyph table are fixed until the saver changes, so
     // the mirror is told once and every frame after it is only cells.
-    saver::announce(mirror, saver.as_ref());
+    saver::announce(mirror, saver.as_ref(), &panel);
     let mut selected = mirror.selected();
     // Off unless SAVER_ROTATE_SECS says otherwise. Built here, not once in
     // main, so a modeset retry gives the current saver a full turn.

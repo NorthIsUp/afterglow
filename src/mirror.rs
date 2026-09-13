@@ -53,8 +53,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use crate::font;
-use crate::grid::Cell;
+use crate::grid::{Cell, Grid};
 use crate::saver;
+use crate::surface::Panel;
 
 /// Each viewer holds its own `prev` grid and does its own diff. Two people
 /// looking at a screensaver is already generous; the cap is what stops a
@@ -148,15 +149,17 @@ impl Mirror {
 
     /// Record what the viewers need to draw a frame: geometry, the palette and
     /// the glyph table. Called once per successful modeset.
-    pub fn describe(
-        &self,
-        saver: &str,
-        cols: usize,
-        rows: usize,
-        cw: usize,
-        ch: usize,
-        pal: &[u32],
-    ) {
+    ///
+    /// The panel ships alongside the grid because they are not the same
+    /// rectangle: `rows = panel.h / cell_h` truncates, so at 1920x1080 a 32px
+    /// cell leaves a 24px strip below the last row belonging to no cell.
+    /// `Grid::flush` paints that strip black on frame 0; a page sized to
+    /// `rows * cell_h` does not know it exists and draws the panel at the wrong
+    /// aspect (1.818 vs 1.778 for matrix), stretching every cell to fit.
+    ///
+    /// Grid and panel rather than six scalars because clippy's
+    /// `too_many_arguments` bites at eight, and these are what the caller holds.
+    pub fn describe(&self, saver: &str, g: &Grid, panel: &Panel, pal: &[u32]) {
         // Bump the epoch FIRST and bake that number into the JSON, so the page
         // can hand it back on `/stream` and be refused if the scene has moved
         // on. The pairing cannot tear because this is the only writer of either
@@ -176,11 +179,18 @@ impl Mirror {
         let mut json = String::with_capacity(8 << 10);
         json.push_str(&format!(
             "{{\"saver\":\"{saver}\",\"savers\":[{savers}],\"epoch\":{epoch},\
+             \"panel_w\":{pw},\"panel_h\":{ph},\
              \"cols\":{cols},\"rows\":{rows},\
              \"cell_w\":{cw},\"cell_h\":{ch},\
              \"glyph_w\":{},\"glyph_h\":{},\"palette\":[",
             font::GLYPH_W,
             font::GLYPH_H,
+            pw = panel.w,
+            ph = panel.h,
+            cols = g.cols(),
+            rows = g.rows(),
+            cw = g.cell_w(),
+            ch = g.cell_h(),
             savers = crate::saver::names()
                 .map(|n| format!("\"{n}\""))
                 .collect::<Vec<_>>()
@@ -461,6 +471,40 @@ fn write_chunk(s: &mut TcpStream, body: &[u8]) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// Describe a scene whose panel is exactly the cell grid — enough for the
+    /// tests that need SOME geometry and do not care which.
+    fn scene(m: &Mirror, saver: &str, cols: usize, rows: usize, cw: usize, ch: usize) {
+        let panel = Panel::new(cols * cw, rows * ch, cols * cw);
+        m.describe(saver, &Grid::new(&panel, cw, ch), &panel, &[0, 0xFF]);
+    }
+
+    /// `/meta` must carry the PANEL, because that is the rectangle the page
+    /// sizes its canvas to. `rows = panel.h / cell_h` truncates: matrix's 32px
+    /// cell leaves a 24px strip under the grid, so a page sized to
+    /// `rows * cell_h` draws a 1.818 image of a 1.778 panel and stretches every
+    /// block 2.3% vertically. Matrix on a real 1080p panel, because a geometry
+    /// where the cell divides evenly cannot tell the two apart.
+    #[test]
+    fn meta_reports_the_panel_not_the_cell_grid() {
+        let m = Mirror::new();
+        let panel = Panel::new(1920, 1080, 1920);
+        let g = Grid::new(&panel, 16, 32);
+        m.describe("matrix", &g, &panel, &[0, 0xFF]);
+        // The gap this whole test is about: the grid is 24px short of the panel.
+        assert_eq!((g.cols(), g.rows()), (120, 33));
+        assert_eq!(g.rows() * g.cell_h(), 1056);
+
+        // Geometry only: the glyph table is 260 rows of sixteen bytes, and a
+        // failure that prints it is a failure nobody can read.
+        let meta = m.meta.lock().unwrap().clone();
+        let head = meta.split(",\"palette\"").next().unwrap().to_string();
+        assert!(head.contains("\"panel_w\":1920"), "{head}");
+        assert!(head.contains("\"panel_h\":1080"), "{head}");
+        // And the grid is still reported, since the cells are addressed by it.
+        assert!(head.contains("\"cols\":120,\"rows\":33"), "{head}");
+        assert!(head.contains("\"cell_w\":16,\"cell_h\":32"), "{head}");
+    }
+
     /// The keyframe-on-connect trick is the sentinel: a viewer's `prev` filled
     /// with a cell no saver can produce diffs against everything.
     #[test]
@@ -493,7 +537,7 @@ mod tests {
     #[test]
     fn a_viewer_gets_a_keyframe_then_deltas() {
         let m = Mirror::new();
-        m.describe("test", 2, 2, 8, 16, &[0, 0xFF]);
+        scene(&m, "test", 2, 2, 8, 16);
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         {
@@ -623,7 +667,7 @@ mod tests {
     #[test]
     fn a_stream_for_a_scene_that_has_been_replaced_is_refused() {
         let m = Mirror::new();
-        m.describe("matrix", 2, 2, 8, 16, &[0, 0xFF]);
+        scene(&m, "matrix", 2, 2, 8, 16);
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         {
@@ -668,7 +712,7 @@ mod tests {
 
         // The user clicks another saver and the panel modesets — the exact
         // window the page's two fetches straddle.
-        m.describe("dvd", 4, 4, 8, 16, &[0, 0xFF]);
+        scene(&m, "dvd", 4, 4, 8, 16);
         let after = text("GET /meta");
         assert!(after.contains("\"epoch\":2"), "{after}");
 

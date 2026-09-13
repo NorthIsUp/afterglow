@@ -177,8 +177,16 @@
   function applyMeta(m) {
     meta = m;
     buildPicker(m);
-    canvas.width = m.cols * m.cell_w;
-    canvas.height = m.rows * m.cell_h;
+    // The PANEL, not the cell grid. `rows = panel_h / cell_h` truncates, so for
+    // matrix at 1920x1080 the grid is 1920x1056 — a 1.818 rectangle standing in
+    // for a 1.778 panel, which the fit below then stretched every block 2.3%
+    // vertically to fill. The strip under the last row is left black, which is
+    // exactly what Grid paints there on frame 0.
+    //
+    // Fall back to the grid for a /meta without the fields — an old pod behind
+    // a new page keeps today's slightly-wrong shape instead of a 0x0 canvas.
+    canvas.width = m.panel_w || m.cols * m.cell_w;
+    canvas.height = m.panel_h || m.rows * m.cell_h;
     canvas.style.setProperty("--ar", canvas.width / canvas.height);
     ctx.imageSmoothingEnabled = false;
     fitScaling();

@@ -74,7 +74,7 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
     // mirror rather than a burst; `SAVER_HTTP=off` keeps a dump instant.
     let paced =
         (cfg.http != "off").then(|| Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps)));
-    saver::announce(mirror, saver.as_ref());
+    saver::announce(mirror, saver.as_ref(), &panel);
     let mut selected = mirror.selected();
     let mut rot = saver::Rotate::from_env(Instant::now());
 

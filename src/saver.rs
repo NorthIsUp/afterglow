@@ -219,23 +219,15 @@ pub fn switch(
     *saver = make(name_at(want), panel, fps);
     // The new grid geometry and palette differ, so this bumps the mirror's
     // epoch and every viewer reconnects onto the new /meta.
-    announce(mirror, saver.as_ref());
+    announce(mirror, saver.as_ref(), panel);
     true
 }
 
 /// Tell the mirror what this saver draws through. Every construction of a saver
 /// is followed by one of these — a viewer holding the previous saver's geometry
 /// and palette would mis-draw every cell.
-pub fn announce(mirror: &Mirror, s: &dyn Saver) {
-    let g = s.grid();
-    mirror.describe(
-        s.name(),
-        g.cols(),
-        g.rows(),
-        g.cell_w(),
-        g.cell_h(),
-        s.palette(),
-    );
+pub fn announce(mirror: &Mirror, s: &dyn Saver, panel: &Panel) {
+    mirror.describe(s.name(), s.grid(), panel, s.palette());
 }
 
 /// The per-frame body, shared verbatim by the DRM path and the dump path. A
