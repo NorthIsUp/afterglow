@@ -40,7 +40,7 @@ falls back to `ascii` — a headless pod must never crash-loop on a typo.
 | `pov` | Points of View — a rotating platonic solid drawn as a grid of dots on its own surface, changing to the next of the five every ten seconds in a burst that throws the points outward and lands them on the new shape with an overshoot. | `POV_HOLD_SECS` (1..600, default 10), `POV_BURST_MS` (100..5000, default 1200), `POV_SPACING` (dots between surface samples, 2..24, default 6), `POV_SCALE` (figure radius in thousandths of the SHORTER panel side, 50..600, default 420), `POV_BURST` (outward scatter in thousandths of the figure radius, 0..2000, default 450), `POV_Z_DIST` (2000..40000, default 6000), `POV_RATE_XY` / `POV_RATE_XZ` / `POV_RATE_YZ` (milli-revolutions per second, default 7 / 23 / 13), `POV_CELL_W` / `POV_CELL_H` (8, 16) |
 | `podracer` | First-person Boonta Eve: two podracer engines hang ahead of you on their cables, flaring and yawing independently as you turn, while an ochre canyon rips past on both sides. One ray per cell column finds the wall; the floor and sky fall out of the ground-plane solve. Arches you fly through, rock spires, slot canyons barely wider than the pod, heat shimmer over the rim, and every so often a rival's engine wash crossing the view. Full repaint — it damages most of the panel every frame, because most of the panel is moving. | `PODRACER_CELL` (px, 4..32, default 8), `PODRACER_SPEED` (course m/s, 40..900, default 300), `PODRACER_FOV` (focal as a percent of panel width, 30..200, default 78), `PODRACER_WIDTH` (canyon half-width in metres, 6..90, default 30), `PODRACER_PINCH` (how far a slot closes, percent, 0..90, default 64), `PODRACER_SPREAD` (engine separation, percent of panel width, 10..90, default 46), `PODRACER_ENGINE` (engine radius, percent of panel width, 3..30, default 7, capped at 22% of the aspect-corrected height), `PODRACER_SHIMMER` (0..100, default 70), `PODRACER_FEATURES` (arches and spires alive at once, 0..24, default 7), `PODRACER_WASH_SECS` (mean seconds between a rival's wash, 0 = off..600, default 9), `PODRACER_SEED` (0 = roll one from the clock and pid; any other value reproduces the run exactly) |
 | `speeder` | A first-person speeder-bike chase through the forest moon — enormous redwood trunks rush past at parallax while the bike weaves between them on two incommensurate sines, dappled canopy light streams over the mossy floor, and every so often a fallen trunk sweeps up out of frame to be ducked under or another bike flashes across the view. One spawn in twenty is aimed at where the camera WILL be, so the near misses are deliberate; a trunk moving too fast for the eye to hold an edge on is stippled rather than solid. Its grid is SQUARE, so all of the perspective is in cells and `SAVER_PIXEL_ASPECT` corrects it for free — the opposite choice to `warp`'s. | `SPEEDER_CELL` (px, 4..32, default 8, square), `SPEEDER_SPEED` (metres/sec, 10..300, default 58), `SPEEDER_TRUNKS` (8..400, default 60), `SPEEDER_FOV` (focal as a per-cent of COLUMNS, 20..200, default 62 — smaller is wider and faster-looking), `SPEEDER_HORIZON` (eye line as a per-cent of rows, 10..80, default 44), `SPEEDER_WEAVE` (swing off the path in DECIMETRES, 0..200, default 64; 0 flies straight), `SPEEDER_DAPPLE` (per-cent of the floor in a pool of light, 0..100, default 34), `SPEEDER_LOG_SECS` (mean seconds between fallen trunks, 0..600, default 16; 0 = off), `SPEEDER_RIDER_SECS` (mean seconds between other bikes, 0..600, default 12; 0 = off), `SPEEDER_SEED` (0 = roll one from the clock and pid; any other value reproduces the ride exactly) |
-| `xwing` | The Death Star run from the cockpit, in three acts on a loop: the station swelling out of a starfield, a low pass over its greebled surface, then the trench — walls closing in, green turret fire coming up at you and red going out, and the targeting computer swinging down over the view. | `XWING_SEED`, `XWING_APPROACH_SECS` / `XWING_SURFACE_SECS` / `XWING_TRENCH_SECS` (1..600, default 11 / 9 / 13), `XWING_SPEED` (world units/sec, 50..20000, default 900), `XWING_GREEBLE` (plating block size, 4..2000, default 60), `XWING_FOV` (focal length in thousandths of the visual panel width, 200..3000, default 800), `XWING_STARS` (0..4000, default 170), `XWING_TOWERS` (0..400, default 16), `XWING_BOLTS` (0..400, default 28), `XWING_CELL_W` / `XWING_CELL_H` (4..32, default 8 / 8) |
+| `xwing` | The Death Star run from the cockpit, in three acts on a loop: the station swelling out of a starfield, a low pass over its greebled surface, then the trench — walls closing in and the targeting computer swinging down over the view. Green fire comes in and red goes out in every act, TIE fighters cross, chase and pass the canopy, and anything a red bolt reaches explodes. | `XWING_SEED`, `XWING_APPROACH_SECS` / `XWING_SURFACE_SECS` / `XWING_TRENCH_SECS` (1..600, default 11 / 9 / 13), `XWING_SPEED` (world units/sec, 50..20000, default 900), `XWING_GREEBLE` (plating block size, 4..2000, default 60), `XWING_FOV` (focal length in thousandths of the visual panel width, 200..3000, default 800), `XWING_STARS` (0..4000, default 170), `XWING_TOWERS` (0..400, default 16), `XWING_BOLTS` (0..400, default 28), `XWING_TIE_SECS` (mean seconds between TIE sorties, 0..600, default 7; 0 = none), `XWING_TIES` (0..200, default 6), `XWING_BOOM_SECS` (mean seconds between surface explosions, 0..600, default 9; 0 = none), `XWING_BOOMS` (0..200, default 6), `XWING_PITCH_MS` (act 2's nose coming up, 0..10000, default 1600), `XWING_RISE_MS` (act 3's walls rising, 0..10000, default 1400), `XWING_CELL_W` / `XWING_CELL_H` (4..32, default 8 / 8) |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
 `SAVER_ROTATE_SECS` (0..86400, default 0 = off), `SAVER_PIXEL_ASPECT` (25..400,
@@ -834,19 +834,47 @@ in — and then cuts back and does it again.
   past that they are finer than the panel can resolve, and drawing them anyway
   is moire. That cut-off doubles as the distance LOD, and without it the horizon
   — where every surface here converges — is a band of static.
-- **The geometry is in square-pixel units, not cells.** `SAVER_PIXEL_ASPECT=180`
+- **The joins are flight, not edits.** Act 1 ends with the plating covering
+  the frame and act 2 opens NOSE-DOWN, which is also plating covering the
+  frame, so the cut lands on matching pixels; the horizon then sweeps down into
+  place over `XWING_PITCH_MS` — a dive being pulled out of. Act 3 opens on the
+  plain act 2 ended on and the walls GROW out of it over `XWING_RISE_MS` before
+  they start closing in. The only join that is still a cut is the last one, and
+  it is behind the explosion that ends act 3.
+- **Every act is under fire, and only the targeting computer is trench-only.**
+  Green comes in from a gun emplacement on the station's face, then a surface
+  battery, then a wall turret; red goes out from the wingtips throughout. TIEs
+  fly one of three sorties — a crossing shot, a pursuit ahead of the camera, a
+  pass across the canopy — and the silhouette is drawn from its proportions
+  (two cut-cornered hexagons at `|dx| ~ 1.5`, a ball, the struts), because at
+  eight cells across that outline is the only thing it could be and two
+  rectangles would be a barbell. A red bolt that reaches one takes it, and the
+  explosion is flash, expanding shell, debris, fade — a one-frame white blob
+  reads as a dropped frame, which is what `an_explosion_flashes_expands_and_ends`
+  is there to prevent.
+- **The geometry is in glass units, not cells.** `SAVER_PIXEL_ASPECT=180`
   nearly halves `rows`, so a trench whose walls were placed at "a quarter of
   `cols`" would close at a different rate on the panel than in a 1080p dump.
-  Everything projects into visual units (one unit = one framebuffer pixel wide,
-  a cell is `cell_h * aspect` tall) and converts to cells once, at the stamp;
-  `the_shot_is_the_same_at_both_pixel_aspects` renders 1920x1080 at 100 and
-  1920x600 at 180 — the same shot on two grids with 2.7x different row counts —
-  and compares how much of the frame is sky.
+  Everything projects into units of the glass width of one framebuffer pixel;
+  the panel squashes vertically by the aspect, so a framebuffer pixel is
+  `100 / aspect` units TALL and `row_v` DIVIDES the already-stretched `cell_h`
+  back out — the same conversion `marble` makes, and it comes back equal to
+  `col_v`, since `Grid` made the cell square on the glass in the first place.
+  It shipped inverted, which composed a 1:1 picture onto the panel's 3.2:1
+  glass and squashed the whole run into a third of its vertical extent;
+  `the_shot_is_the_same_at_both_pixel_aspects` could not see it because both of
+  its arms were derived from the same inverted convention, so
+  `the_cell_is_square_on_the_glass` now pins the operator directly. **The live
+  panel is 1920x1080 at 180, which is 1920x600 — 3.2:1 — on the glass**, and
+  that is the geometry to dump at; 1280x400 at 180 is a much narrower slice of
+  glass than the panel actually is.
 - **Cost.** A full repaint with a couple of divides and two hashes per cell.
-  Measured at 1920x1080 against `moire`: act 1 (approach) 1.5x, act 2 (surface)
-  1.1x, act 3 (trench) 1.8x — the trench resolves a wall AND a floor per cell
-  and takes the nearer. On the 1280x400 panel the whole cycle is 1.4x `moire`,
-  which puts it around 200m of the pod's 500m.
+  Measured at 1920x1080 against `moire`: act 1 (approach) 1.55x, act 2
+  (surface) 1.24x, act 3 (trench) 1.92x — the trench resolves a wall AND a
+  floor per cell and takes the nearer. TIEs, explosions and the extra fire cost
+  5-13% of an act each, because a sprite is a bounded box where the scene is
+  every cell. On the live panel the whole cycle is 1.43x `moire`, around 200m
+  of the pod's 500m.
 
 ### About the zot saver
 

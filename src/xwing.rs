@@ -15,9 +15,26 @@
 //!    the targeting computer swings down over the view. It ends in a flash and
 //!    cuts back to act 1.
 //!
-//! Acts 1 and 2 join nearly seamlessly — act 1 ends with the plating covering
-//! the frame — and acts 2 and 3 join by the trench starting WIDE and narrowing,
-//! so the walls appear to rise out of the surface that was already there.
+//! # The joins are flight, not edits
+//!
+//! Act 1 ends with the plating covering the frame, and act 2 opens NOSE-DOWN —
+//! the steepest possible look at a plain is also plating covering the frame, so
+//! the cut lands on matching pixels — and then the horizon sweeps down into
+//! place over `XWING_PITCH_MS`, which is what pulling out of a dive looks like
+//! from inside it. Act 3 opens on the plain act 2 ended on, already wide, and
+//! the walls GROW out of it over `XWING_RISE_MS` before closing in. Only the
+//! last join is a cut, and it is behind the explosion that ends act 3.
+//!
+//! # What else is out there
+//!
+//! Green fire comes in and red fire goes out in EVERY act — a gun emplacement
+//! on the station's face while it is still a sphere ahead, a surface battery
+//! over the plain, a wall turret in the trench, and TIE fighters wherever they
+//! are. A sortie is one of three: a crossing shot, a pursuit ahead of the
+//! camera, or a pass straight across the canopy. Red fire that reaches one
+//! takes it, and what is left is an explosion — flash, expanding shell,
+//! debris, fade — which also happens on its own to a surface installation
+//! every `XWING_BOOM_SECS` or so.
 //!
 //! # Everything grey is generated, not tiled
 //!
@@ -40,9 +57,17 @@
 //! `SAVER_PIXEL_ASPECT=180` makes a cell 1.8x taller, so `rows` nearly halves —
 //! a trench whose walls were placed at "a quarter of `cols`" would close at a
 //! different rate on the panel than in a 1080p dump. So every projection here
-//! is computed in VISUAL units (1 unit = one framebuffer pixel wide; a cell is
-//! `cell_h * aspect` units tall), and the conversion to cells happens once, at
-//! the stamp. Both panels are 16:9 in those units, so both show the same shot.
+//! is computed in VISUAL units — 1 unit = the glass width of one framebuffer
+//! pixel, and since the panel squashes vertically by `aspect`, a framebuffer
+//! pixel is `100 / aspect` units TALL. `Grid` has already multiplied `cell_h`
+//! by the aspect to make the cell square on the glass, so `row_v` divides it
+//! back out and comes to the same number as `col_v`: that equality is the
+//! invariant, and `the_cell_is_square_on_the_glass` pins it. The conversion to
+//! cells happens once, at the stamp.
+//!
+//! The live panel is 1920x1080 at `SAVER_PIXEL_ASPECT=180`, which is 1920x600
+//! on the glass — 3.2:1, not 16:9. Nothing here assumes a frame shape; it
+//! projects into whatever glass rectangle the panel turns out to be.
 //!
 //! # Damage model: full repaint (`Grid::flush`)
 //!
@@ -65,6 +90,12 @@
 //! | `XWING_STARS` | 170 | stars in the pool |
 //! | `XWING_TOWERS` | 16 | towers and dishes in the pool |
 //! | `XWING_BOLTS` | 28 | turret/cannon bolts in the pool |
+//! | `XWING_TIE_SECS` | 7 | mean seconds between TIE sorties, 0..600; 0 = none |
+//! | `XWING_TIES` | 6 | TIEs in the pool, 0..200 — also the rate limiter |
+//! | `XWING_BOOM_SECS` | 9 | mean seconds between surface explosions, 0..600; 0 = none |
+//! | `XWING_BOOMS` | 6 | explosions in the pool, 0..200 |
+//! | `XWING_PITCH_MS` | 1600 | act 2's nose coming up, 0..10000; 0 = a hard cut |
+//! | `XWING_RISE_MS` | 1400 | act 3's walls rising, 0..10000; 0 = a hard cut |
 //! | `XWING_CELL_W` / `XWING_CELL_H` | 8 / 8 | cell size in pixels |
 //!
 //! The act lengths are in real time and divided by `fps`, so the run is the
@@ -73,10 +104,12 @@
 //! # Per-frame cost
 //!
 //! A full repaint with a couple of divides and two hashes per cell. Measured at
-//! 1920x1080 against `moire`: act 1 1.5x, act 2 1.1x, act 3 1.8x — the trench
-//! is the expensive one because every cell resolves a wall AND a floor and
-//! takes the nearer. On the 1280x400 panel the whole cycle is 1.4x `moire`,
-//! which is around 200m of the pod's 500m.
+//! 1920x1080 against `moire`: act 1 1.55x, act 2 1.24x, act 3 1.92x — the
+//! trench is the expensive one because every cell resolves a wall AND a floor
+//! and takes the nearer. TIEs, explosions and the extra fire cost 5-13% of an
+//! act each: they are sprites over a bounded box, where the scene is every
+//! cell. On the live panel (1920x1080 at aspect 180) the whole cycle is 1.43x
+//! `moire`, around 200m of the pod's 500m.
 
 use crate::font;
 use crate::grid::{bake, dot_bit, Cell, Grid};
@@ -130,6 +163,10 @@ const C_GREEN_TRAIL: u8 = 15;
 const C_GREEN_CORE: u8 = 17;
 const C_RED_TRAIL: u8 = 18;
 const C_RED_CORE: u8 = 20;
+const C_TIE_BODY: u8 = 3;
+const C_TIE_BALL: u8 = 5;
+const C_TIE_RIM: u8 = 8;
+const C_TIE_GLASS: u8 = 10;
 const C_HUD: u8 = 21;
 const C_HUD_LIT: u8 = 22;
 const C_FLASH: u8 = 23;
@@ -172,6 +209,15 @@ const HUD_FRAC: f32 = 0.42;
 /// bolt is a rod that foreshortens with distance rather than a streak whose
 /// length happens to be however far it moved since the last frame.
 const BOLT_SECS: f32 = 0.10;
+/// A TIE's wing panel is this tall in world units, half-height. The whole
+/// silhouette is four of these across, which is the ratio that makes the
+/// hexagons read rather than the ball.
+const TIE_R: f32 = 52.0;
+/// How long one explosion lasts.
+const BOOM_SECS: f32 = 1.15;
+/// Debris thrown by one. Derived from the boom's seed rather than pooled: a
+/// spark is a direction, and a direction is a hash away.
+const BOOM_SPARKS: usize = 14;
 /// Seconds of white-out at the very end of act 3. Short: this is a cut, not a
 /// strobe, and a long one on a panel two feet from a bed is unkind.
 const FLASH_SECS: f32 = 0.22;
@@ -217,6 +263,43 @@ fn seam_at(f: f32, span: f32) -> Option<f32> {
     }
 }
 
+/// Which part of a TIE is at this point of its own silhouette, in units of a
+/// wing panel's half-height, or None for the gaps — which are most of it.
+///
+/// The proportions are the whole point: two hexagonal panels at `|dx| ~ 1.5`
+/// with cut corners, a ball at the origin, and the struts between. At eight
+/// cells across, that outline is still the only thing in the rotation it could
+/// be; drawn as two rectangles it is a barbell.
+#[inline]
+fn tie_part(dx: f32, dy: f32) -> Option<u8> {
+    let (ax, ay) = (dx.abs(), dy.abs());
+    if (0.95..=2.05).contains(&ax) {
+        // 0 at the panel's spine, 1 at its outer and inner edge.
+        let e = (ax - 1.5).abs() / 0.55;
+        if e <= 1.0 && ay <= 1.0 - 0.62 * (e - 0.30).max(0.0) / 0.70 {
+            // The rim is what survives when the whole panel is three cells
+            // wide: an unframed hexagon at that size is a grey lozenge.
+            return Some(if e > 0.82 || ay > 0.80 {
+                C_TIE_RIM
+            } else {
+                C_TIE_BODY
+            });
+        }
+        return None;
+    }
+    let r2 = dx * dx + dy * dy;
+    if r2 < 0.045 {
+        return Some(C_TIE_GLASS);
+    }
+    if r2 < 0.20 {
+        return Some(C_TIE_BALL);
+    }
+    if ay < 0.10 && ax < 1.0 {
+        return Some(C_TIE_BODY);
+    }
+    None
+}
+
 #[derive(Clone, Copy, Default)]
 struct Star {
     x: f32,
@@ -249,6 +332,37 @@ struct Bolt {
     live: bool,
     /// Colour base: `C_GREEN_TRAIL` or `C_RED_TRAIL`.
     tint: u8,
+}
+
+/// A TIE fighter. Three sorties use the same struct and differ only in the
+/// velocity they are born with — a crossing shot, a pursuit ahead of the
+/// camera, and a pass right across the canopy.
+#[derive(Clone, Copy, Default)]
+struct Tie {
+    u: f32,
+    v: f32,
+    z: f32,
+    du: f32,
+    dv: f32,
+    dz: f32,
+    /// Seconds until it shoots. Negative once it has.
+    fire_in: f32,
+    live: bool,
+}
+
+/// One explosion: a flash, an expanding shell, and debris.
+#[derive(Clone, Copy, Default)]
+struct Boom {
+    u: f32,
+    v: f32,
+    z: f32,
+    /// World radius the shell reaches.
+    r: f32,
+    age: f32,
+    /// Fixes this explosion's debris directions for its whole life — a boom
+    /// whose sparks were re-rolled every frame is a ball of static.
+    seed: u32,
+    live: bool,
 }
 
 pub struct XWing {
@@ -284,6 +398,22 @@ pub struct XWing {
     /// units. Interpolated geometrically, so the swell accelerates.
     ar0: f32,
     ar1: f32,
+    /// The horizon, after the pitch that opens act 2. Everything in acts 2 and
+    /// 3 projects about THIS and not about `hy`: a pitch is exactly the
+    /// vanishing point moving up or down the frame.
+    hz: f32,
+    /// Seconds the nose takes to come up at the start of act 2, and the walls
+    /// take to rise at the start of act 3.
+    pitch_secs: f32,
+    rise_secs: f32,
+    /// The trench's half-width this frame, for the turrets on its walls.
+    trench_w: f32,
+    /// Seconds until the next TIE sortie and the next surface explosion. A
+    /// zero interval turns that event off.
+    next_tie: f32,
+    tie_secs: f32,
+    next_boom: f32,
+    boom_secs: f32,
     /// Seconds until the next turret bolt, and the cannon's burst state.
     next_turret: f32,
     next_cannon: f32,
@@ -291,6 +421,8 @@ pub struct XWing {
     stars: Vec<Star>,
     towers: Vec<Tower>,
     bolts: Vec<Bolt>,
+    ties: Vec<Tie>,
+    booms: Vec<Boom>,
     rng: u32,
 }
 
@@ -301,14 +433,18 @@ impl XWing {
         let grid = Grid::new(panel, cw, ch);
         let (cols, rows) = (grid.cols(), grid.rows());
 
-        // The CELL is already stretched by SAVER_PIXEL_ASPECT; this turns that
-        // back into how tall the cell LANDS, which is the unit everything
-        // below is computed in.
-        let aspect = crate::grid::pixel_aspect() as f32 / 100.0;
+        // `cell_h` has ALREADY been stretched by SAVER_PIXEL_ASPECT, so
+        // turning it back into the height the cell occupies on the glass is a
+        // DIVISION. Multiplying applies the correction a second time, in the
+        // wrong direction: at 180 that is 3.24x (the aspect squared) too tall,
+        // and the whole shot composes into a 1:1 frame that the panel then
+        // shows on 3.2:1 glass. `marble.rs` does the same conversion and says
+        // the same thing.
         let col_v = grid.cell_w() as f32;
-        let row_v = grid.cell_h() as f32 * aspect;
+        let row_v = grid.cell_h() as f32 * 100.0 / crate::grid::pixel_aspect() as f32;
         let (vw, vh) = (cols as f32 * col_v, rows as f32 * row_v);
         let focal = vw * env_num(&["XWING_FOV"], 800, 200, 3000) as f32 / 1000.0;
+        let diag = (vw * vw + vh * vh).sqrt();
 
         let mut x = Self {
             pat: vec![0; cols * rows],
@@ -335,16 +471,28 @@ impl XWing {
             travel: 0.0,
             speed: env_num(&["XWING_SPEED"], 900, 50, 20_000) as f32,
             greeble: env_num(&["XWING_GREEBLE"], 60, 4, 2000) as f32,
-            // From a tenth of the frame to half again its height: by the end
-            // the limb is off every edge and the plating IS the frame, which is
-            // what makes the cut into act 2 land.
-            ar0: vh * 0.11,
-            ar1: vh * 1.55,
+            // Sized off the frame's DIAGONAL, not its height: the station
+            // has to end act 1 covering every corner, and on the 3.2:1 glass
+            // the live panel actually is, a radius set against the height
+            // leaves space showing at the sides — which breaks the one thing
+            // the cut into act 2 depends on.
+            ar0: diag * 0.05,
+            ar1: diag * 0.60,
+            hz: vh / 2.0,
+            pitch_secs: env_num(&["XWING_PITCH_MS"], 1600, 0, 10_000) as f32 / 1000.0,
+            rise_secs: env_num(&["XWING_RISE_MS"], 1400, 0, 10_000) as f32 / 1000.0,
+            trench_w: TRENCH_W0,
+            next_tie: 0.0,
+            tie_secs: env_num(&["XWING_TIE_SECS"], 7, 0, 600) as f32,
+            next_boom: 0.0,
+            boom_secs: env_num(&["XWING_BOOM_SECS"], 9, 0, 600) as f32,
             next_turret: 0.0,
             next_cannon: 0.0,
             stars: vec![Star::default(); env_num(&["XWING_STARS"], 170, 0, 4000) as usize],
             towers: vec![Tower::default(); env_num(&["XWING_TOWERS"], 16, 0, 400) as usize],
             bolts: vec![Bolt::default(); env_num(&["XWING_BOLTS"], 28, 0, 400) as usize],
+            ties: vec![Tie::default(); env_num(&["XWING_TIES"], 6, 0, 200) as usize],
+            booms: vec![Boom::default(); env_num(&["XWING_BOOMS"], 6, 0, 200) as usize],
             rng: saver_seed(&["XWING_SEED"], 0x58_57_49_4E),
             grid,
         };
@@ -388,21 +536,15 @@ impl XWing {
     /// allocate: every pool is written IN PLACE and none of them is resized.
     fn enter_act(&mut self) {
         self.travel = 0.0;
-        match self.act {
-            1 => {
-                for i in 0..self.towers.len() {
-                    let z = NEAR + self.unit01() * (FAR - NEAR);
-                    self.respawn_tower(i, z);
-                }
+        // Fire carries across the cut rather than restarting with it: an act
+        // change is meant to read as continuing flight, and a frame where
+        // every bolt in the air vanishes at once is an edit.
+        self.next_turret = 0.35 + self.unit01() * 0.6;
+        if self.act == 1 {
+            for i in 0..self.towers.len() {
+                let z = NEAR + self.unit01() * (FAR - NEAR);
+                self.respawn_tower(i, z);
             }
-            2 => {
-                self.next_turret = 0.35;
-                self.next_cannon = 1.2;
-                for b in &mut self.bolts {
-                    b.live = false;
-                }
-            }
-            _ => {}
         }
     }
 
@@ -427,6 +569,63 @@ impl XWing {
             self.t = 0.0;
             self.act = (self.act + 1) % 3;
             self.enter_act();
+        }
+        // Act 2 opens nose-down: act 1 ended with plating filling the frame,
+        // and the steepest possible look at a plain is plating filling the
+        // frame too, so the cut lands on matching pixels. The horizon then
+        // sweeps DOWN into place, which is what pulling out of a dive looks
+        // like from inside it. Smoothstep, so the nose eases rather than
+        // arriving at the level with a corner in the motion.
+        self.hz = self.hy;
+        if self.act == 1 && self.t < self.pitch_secs {
+            let k = self.t / self.pitch_secs;
+            let ease = k * k * (3.0 - 2.0 * k);
+            self.hz = self.hy - (self.hy + self.vh * 0.6) * (1.0 - ease);
+        }
+        self.tick_events();
+    }
+
+    /// How far the trench walls have risen, 0..1. Act 3 opens on the plain act
+    /// 2 ended on and the walls grow out of it — a trench that arrived at full
+    /// height on one frame is the edit this replaces.
+    #[inline]
+    fn rise(&self) -> f32 {
+        if self.act != 2 || self.rise_secs <= 0.0 {
+            return 1.0;
+        }
+        let k = (self.t / self.rise_secs).min(1.0);
+        k * k * (3.0 - 2.0 * k)
+    }
+
+    /// The two occasional events, on their own clocks so they survive an act
+    /// change: a TIE sortie and a surface explosion.
+    fn tick_events(&mut self) {
+        if self.tie_secs > 0.0 {
+            self.next_tie -= self.dt;
+            if self.next_tie <= 0.0 {
+                // Mean interval, jittered either side: a fixed period reads as
+                // a metronome once you have watched it twice.
+                self.next_tie = self.tie_secs * (0.55 + self.unit01() * 0.9);
+                self.spawn_tie();
+            }
+        }
+        // Surface installations only: in space there is nothing to blow up
+        // that a TIE did not already fly into.
+        if self.boom_secs > 0.0 && self.act > 0 {
+            self.next_boom -= self.dt;
+            if self.next_boom <= 0.0 {
+                self.next_boom = self.boom_secs * (0.55 + self.unit01() * 0.9);
+                let side = if self.unit01() < 0.5 { -1.0 } else { 1.0 };
+                let u = if self.act == 2 {
+                    side * self.trench_w * 0.9
+                } else {
+                    side * (400.0 + self.unit01() * 1400.0)
+                };
+                let z = 3200.0 + self.unit01() * 3400.0;
+                let v = CAM_H - self.unit01() * 260.0;
+                let r = 150.0 + self.unit01() * 120.0;
+                self.spawn_boom(u, v, z, r);
+            }
         }
     }
 
@@ -705,7 +904,7 @@ impl XWing {
     fn surface(&mut self) {
         let (cols, rows) = (self.cols, self.rows);
         for cy in 0..rows {
-            let sy = (cy as f32 + 0.5) * self.row_v - self.hy;
+            let sy = (cy as f32 + 0.5) * self.row_v - self.hz;
             if sy <= self.row_v * 0.25 {
                 continue; // sky: the stars are already there
             }
@@ -733,8 +932,8 @@ impl XWing {
             if x1 < 0.0 || x0 >= self.vw {
                 continue;
             }
-            let base = self.hy + CAM_H * sc;
-            let top = self.hy + (CAM_H - t.h) * sc;
+            let base = self.hz + CAM_H * sc;
+            let top = self.hz + (CAM_H - t.h) * sc;
             let fog = 1.0 - z / FAR;
             let body = (1.0 + 5.0 * fog * fog) as u8;
             if t.kind == 0 {
@@ -771,9 +970,13 @@ impl XWing {
         // the saver that is meant to be felt rather than seen.
         let p = self.phase();
         let w = TRENCH_W0 + (TRENCH_W1 - TRENCH_W0) * p;
+        self.trench_w = w;
+        // The walls grow out of the plain act 2 ended on rather than arriving
+        // at full height on the first frame of the act.
+        let top = TRENCH_TOP * self.rise();
         let (cols, rows) = (self.cols, self.rows);
         for cy in 0..rows {
-            let sy = (cy as f32 + 0.5) * self.row_v - self.hy;
+            let sy = (cy as f32 + 0.5) * self.row_v - self.hz;
             for cx in 0..cols {
                 let sx = (cx as f32 + 0.5) * self.col_v - self.hx;
                 // Where this ray meets the wall, and where it meets the floor.
@@ -792,7 +995,7 @@ impl XWing {
                     // Height up the wall, positive downwards. Above the wall's
                     // top edge is the sky slit.
                     let v = sy * zw / self.focal;
-                    if v < -TRENCH_TOP {
+                    if v < -top {
                         continue;
                     }
                     let fog = 1.0 - zw / FAR;
@@ -810,32 +1013,65 @@ impl XWing {
                 }
             }
         }
-        self.fire(w);
-        self.bolts();
         self.hud(p);
     }
 
-    /// Spawn turret and cannon fire. Turret bolts come from the walls ahead and
-    /// climb towards the camera; cannon fire leaves it and converges on the
-    /// vanishing point. Both get faster as the act goes on.
-    fn fire(&mut self, w: f32) {
-        let p = self.phase();
+    /// Incoming green fire and outgoing red, in EVERY act — the run is under
+    /// fire from the moment the station is in front of you, not only once the
+    /// trench walls are up. What changes per act is where the green comes
+    /// from: a gun emplacement on the station's face while it is still a
+    /// sphere ahead, a surface battery in act 2, a wall turret in act 3, and
+    /// it gets busier as the trench closes.
+    fn fire(&mut self) {
         self.next_turret -= self.dt;
         if self.next_turret <= 0.0 {
-            self.next_turret = 0.55 - 0.35 * p + self.unit01() * 0.5;
-            let side = if self.unit01() < 0.5 { -1.0 } else { 1.0 };
-            let z = 2600.0 + self.unit01() * 4200.0;
-            let u = side * w * (0.80 + self.unit01() * 0.18);
-            let v = 250.0 + self.unit01() * 350.0;
+            let (u, v, z) = match self.act {
+                // Out of the face of the station: anywhere across the frame,
+                // and far enough that the bolt has a flight to be seen in.
+                0 => (
+                    self.unit11() * 2400.0,
+                    self.unit11() * 1100.0,
+                    4200.0 + self.unit01() * 3600.0,
+                ),
+                // Off the plain, beside the flight path, climbing.
+                1 => (
+                    self.unit11() * 2600.0,
+                    CAM_H - self.unit01() * 60.0,
+                    3000.0 + self.unit01() * 4000.0,
+                ),
+                // Off a trench wall, at gun height up it.
+                _ => {
+                    let side = if self.unit01() < 0.5 { -1.0 } else { 1.0 };
+                    (
+                        side * self.trench_w * (0.80 + self.unit01() * 0.18),
+                        250.0 + self.unit01() * 350.0,
+                        2600.0 + self.unit01() * 4200.0,
+                    )
+                }
+            };
+            // Sparser out in the open, relentless by the end of the trench.
+            let base = match self.act {
+                0 => 0.85,
+                1 => 0.70,
+                _ => 0.55 - 0.35 * self.phase(),
+            };
+            self.next_turret = base + self.unit01() * 0.5;
             // Aimed near the camera but not at it: a bolt that always hit
             // would read as a hit, and nothing here takes damage.
             let flight = 1.1 + self.unit01() * 0.5;
-            let (du, dv) = ((self.unit11() * 260.0 - u) / flight, (-v - 120.0) / flight);
+            let (du, dv) = (
+                (self.unit11() * 260.0 - u) / flight,
+                (self.unit11() * 200.0 - v) / flight,
+            );
             self.spawn_bolt(u, v, z, du, dv, -z / flight, C_GREEN_TRAIL);
         }
         self.next_cannon -= self.dt;
         if self.next_cannon <= 0.0 {
-            self.next_cannon = 0.9 + self.unit01() * 1.4;
+            self.next_cannon = match self.act {
+                0 => 1.5,
+                1 => 1.2,
+                _ => 0.9,
+            } + self.unit01() * 1.4;
             // Four cannons, fired as a burst from the wingtips.
             for k in 0..4 {
                 let u = if k & 1 == 0 { -340.0 } else { 340.0 };
@@ -877,6 +1113,28 @@ impl XWing {
                 self.bolts[i] = b;
                 continue;
             }
+            // Outgoing fire that reaches a TIE takes it: the one thing in
+            // the saver where two objects interact, and the reason the
+            // explosions read as consequences rather than as scenery.
+            if b.tint == C_RED_TRAIL {
+                for j in 0..self.ties.len() {
+                    let t = self.ties[j];
+                    if t.live
+                        && (b.z - t.z).abs() < 320.0
+                        && (b.u - t.u).abs() < TIE_R * 1.9
+                        && (b.v - t.v).abs() < TIE_R * 1.2
+                    {
+                        self.ties[j] = Tie::default();
+                        b.live = false;
+                        self.spawn_boom(t.u, t.v, t.z, TIE_R * 2.4);
+                        break;
+                    }
+                }
+                if !b.live {
+                    self.bolts[i] = b;
+                    continue;
+                }
+            }
             self.bolts[i] = b;
 
             // The bolt is a ROD of fixed length in the world, not the smear
@@ -887,9 +1145,9 @@ impl XWing {
             let (sc0, sc1) = (self.focal / tail, self.focal / b.z);
             let (x0, y0) = (
                 self.hx + (b.u - b.du * BOLT_SECS) * sc0,
-                self.hy + (b.v - b.dv * BOLT_SECS) * sc0,
+                self.hz + (b.v - b.dv * BOLT_SECS) * sc0,
             );
-            let (x1, y1) = (self.hx + b.u * sc1, self.hy + b.v * sc1);
+            let (x1, y1) = (self.hx + b.u * sc1, self.hz + b.v * sc1);
             let (dx, dy) = (x1 - x0, y1 - y0);
             let steps =
                 ((dx.abs() / self.sub_w).max(dy.abs() / self.sub_h).ceil() as usize).clamp(1, 64);
@@ -909,6 +1167,233 @@ impl XWing {
                     self.dot(px, py + o * self.sub_h, lev);
                     self.dot(px, py - o * self.sub_h, lev);
                 }
+            }
+        }
+    }
+
+    // ---- TIE fighters ----------------------------------------------------
+
+    /// One sortie. Three shapes out of one struct: the kind decides only what
+    /// velocity it is born with.
+    fn spawn_tie(&mut self) {
+        let Some(i) = self.ties.iter().position(|t| !t.live) else {
+            // The pool IS the rate limiter. A sortie that finds it full simply
+            // does not launch, rather than growing a Vec on the render thread.
+            return;
+        };
+        let kind = next_rand(&mut self.rng) % 3;
+        let side = if self.unit01() < 0.5 { -1.0 } else { 1.0 };
+        let (u, v, z, du, dv, dz) = match kind {
+            // Crossing shot: in from one side, well ahead, gone in a second.
+            0 => (
+                side * 2400.0,
+                self.unit11() * 300.0 - 80.0,
+                2400.0 + self.unit01() * 2400.0,
+                -side * (1500.0 + self.unit01() * 900.0),
+                self.unit11() * 120.0,
+                -260.0,
+            ),
+            // Pursuit: holds station ahead of the camera, weaving, closing
+            // slowly — the shot where you are behind one and it cannot shake
+            // you. The only sortie that lasts long enough to shoot twice.
+            1 => (
+                self.unit11() * 700.0,
+                self.unit11() * 220.0 - 70.0,
+                2600.0 + self.unit01() * 2200.0,
+                self.unit11() * 260.0,
+                self.unit11() * 110.0,
+                -140.0,
+            ),
+            // Straight across the canopy: comes at you and blows past.
+            _ => (
+                self.unit11() * 420.0,
+                self.unit11() * 200.0,
+                6400.0,
+                self.unit11() * 600.0,
+                self.unit11() * 260.0,
+                -3200.0,
+            ),
+        };
+        self.ties[i] = Tie {
+            u,
+            v,
+            z,
+            du,
+            dv,
+            dz,
+            fire_in: 0.25 + self.unit01() * 0.9,
+            live: true,
+        };
+    }
+
+    fn ties(&mut self) {
+        for i in 0..self.ties.len() {
+            let mut t = self.ties[i];
+            if !t.live {
+                continue;
+            }
+            t.u += t.du * self.dt;
+            t.v += t.dv * self.dt;
+            t.z += t.dz * self.dt;
+            let x = self.hx + t.u * self.focal / t.z.max(1.0);
+            // Retired once it is past the camera or has left the frame far
+            // enough that it cannot come back.
+            if t.z < NEAR * 3.0 || t.z > FAR || x < -self.vw || x > self.vw * 2.0 {
+                self.ties[i] = Tie::default();
+                continue;
+            }
+            t.fire_in -= self.dt;
+            if t.fire_in <= 0.0 {
+                t.fire_in = 0.9 + self.unit01() * 1.6;
+                let flight = (t.z / 3200.0).max(0.45);
+                let (du, dv) = (
+                    (self.unit11() * 220.0 - t.u) / flight,
+                    (self.unit11() * 180.0 - t.v) / flight,
+                );
+                self.spawn_bolt(t.u, t.v, t.z, du, dv, -t.z / flight, C_GREEN_TRAIL);
+            }
+            self.ties[i] = t;
+            self.draw_tie(&t);
+        }
+    }
+
+    /// Opaque, per dot, over whatever is behind it: a TIE against the plating
+    /// has to occlude it, and a silhouette composited by `max` would let the
+    /// brighter greebles show through the panels.
+    fn draw_tie(&mut self, t: &Tie) {
+        let sc = self.focal / t.z;
+        let (x, y) = (self.hx + t.u * sc, self.hz + t.v * sc);
+        let s = TIE_R * sc;
+        if s < self.sub_h * 0.8 {
+            return; // further off than one dot: a speck, and a lying one
+        }
+        let inv = 1.0 / s;
+        let (hw, hh) = (s * 2.1, s * 1.1);
+        let cx0 = (((x - hw) / self.col_v).floor().max(0.0) as usize).min(self.cols);
+        let cx1 = ((((x + hw) / self.col_v).ceil().max(0.0)) as usize).min(self.cols);
+        let cy0 = (((y - hh) / self.row_v).floor().max(0.0) as usize).min(self.rows);
+        let cy1 = ((((y + hh) / self.row_v).ceil().max(0.0)) as usize).min(self.rows);
+        for cy in cy0..cy1 {
+            for cx in cx0..cx1 {
+                let (mut bits, mut lev) = (0u8, 0u8);
+                for sy in 0..4 {
+                    let py = (cy as f32 + (sy as f32 + 0.5) * 0.25) * self.row_v;
+                    for sx in 0..2 {
+                        let px = (cx as f32 + (sx as f32 + 0.5) * 0.5) * self.col_v;
+                        if let Some(l) = tie_part((px - x) * inv, (py - y) * inv) {
+                            bits |= dot_bit(sx, sy);
+                            lev = lev.max(l);
+                        }
+                    }
+                }
+                if bits != 0 {
+                    self.put(cx, cy, bits, lev);
+                }
+            }
+        }
+    }
+
+    // ---- explosions -------------------------------------------------------
+
+    fn spawn_boom(&mut self, u: f32, v: f32, z: f32, r: f32) {
+        let seed = next_rand(&mut self.rng) | 1;
+        if let Some(b) = self.booms.iter_mut().find(|b| !b.live) {
+            *b = Boom {
+                u,
+                v,
+                z,
+                r,
+                age: 0.0,
+                seed,
+                live: true,
+            };
+        }
+    }
+
+    fn booms(&mut self) {
+        for i in 0..self.booms.len() {
+            let mut b = self.booms[i];
+            if !b.live {
+                continue;
+            }
+            b.age += self.dt;
+            // The blast stands still in the world and the flight goes past it.
+            if self.act > 0 {
+                b.z -= self.speed * self.dt;
+            }
+            if b.age > BOOM_SECS || b.z < NEAR {
+                self.booms[i] = Boom::default();
+                continue;
+            }
+            self.booms[i] = b;
+            self.draw_boom(&b);
+        }
+    }
+
+    /// Flash, shell, debris, fade — in that order and overlapping, because all
+    /// four at once is a white blob and a viewer reads a white blob as a
+    /// dropped frame.
+    fn draw_boom(&mut self, b: &Boom) {
+        let sc = self.focal / b.z;
+        let (x, y) = (self.hx + b.u * sc, self.hz + b.v * sc);
+        let a = b.age / BOOM_SECS;
+        // Out fast, then stalling: a shell decelerating into its own debris.
+        // `sqrt` is the cheap version of that curve and the right shape.
+        let r = (b.r * sc * a.sqrt() * 1.9).min(self.vh * 0.9);
+        if r < self.sub_h {
+            return;
+        }
+        // The shell thins as it expands, so it reads as a shell rather than as
+        // a growing disc.
+        let thick = (r * 0.22).max(self.sub_h);
+        let (r2, in2) = (r * r, (r - thick) * (r - thick));
+        let core = if a < 0.26 {
+            (r * 0.8 * (1.0 - a / 0.26)).max(self.sub_h)
+        } else {
+            0.0
+        };
+        let core2 = core * core;
+        let shell = match a {
+            _ if a < 0.30 => C_FLASH,
+            _ if a < 0.55 => C_BRIGHT,
+            _ if a < 0.80 => 8,
+            _ => 5,
+        };
+        let cy0 = (((y - r) / self.row_v).floor().max(0.0) as usize).min(self.rows);
+        let cy1 = ((((y + r) / self.row_v).ceil().max(0.0)) as usize).min(self.rows);
+        for cy in cy0..cy1 {
+            for sy in 0..4 {
+                let py = (cy as f32 + (sy as f32 + 0.5) * 0.25) * self.row_v;
+                let dy = py - y;
+                let span = (r2 - dy * dy).max(0.0).sqrt();
+                let mut px = x - span;
+                while px <= x + span {
+                    let d2 = (px - x) * (px - x) + dy * dy;
+                    if d2 < core2 {
+                        self.dot(px, py, C_FLASH);
+                    } else if d2 > in2 {
+                        self.dot(px, py, shell);
+                    }
+                    px += self.sub_w;
+                }
+            }
+        }
+        // Debris: fixed directions per boom, thrown past the shell and fading
+        // through the red end as they go.
+        if a > 0.12 {
+            let spark = if a < 0.45 {
+                C_FLASH
+            } else if a < 0.75 {
+                C_RED_CORE
+            } else {
+                C_RED_TRAIL + 1
+            };
+            for k in 0..BOOM_SPARKS {
+                let h = hash2(b.seed as i32, k as i32);
+                let ang = (h & 1023) as f32 / 1024.0 * std::f32::consts::TAU;
+                let reach = 1.15 + ((h >> 10) & 255) as f32 / 255.0 * 1.5;
+                let d = r * reach;
+                self.dot(x + ang.cos() * d, y + ang.sin() * d, spark);
             }
         }
     }
@@ -958,6 +1443,13 @@ impl XWing {
         let mut d = -wdt * 0.35;
         while d <= wdt * 0.35 {
             self.dot(cx + d, my, C_HUD);
+            d += step;
+        }
+        // The vertical arm is measured against the box's HEIGHT. Against its
+        // width — which is what this did — the crosshair grows out through the
+        // top and bottom of its own frame on any panel wider than 16:9.
+        let mut d = -h * 0.35;
+        while d <= h * 0.35 {
             self.dot(cx, my + d, C_HUD);
             d += step;
         }
@@ -1071,6 +1563,13 @@ impl Saver for XWing {
             1 => self.surface(),
             _ => self.trench(),
         }
+        // Order is the depth sort: the scene is opaque, TIEs occlude it, fire
+        // and explosions composite over both by `max`, then the canopy the
+        // whole thing is seen through.
+        self.ties();
+        self.fire();
+        self.bolts();
+        self.booms();
         self.cockpit();
         self.flash();
 
@@ -1107,8 +1606,15 @@ mod tests {
     /// The panel this actually drives, and the dump size everything else is
     /// measured at. Both are 16:9 in VISUAL units once the aspect is applied,
     /// which is the whole point of the geometry being in those units.
-    const PANELS: [(usize, usize, usize); 3] =
-        [(1920, 1080, 100), (1280, 400, 180), (800, 600, 100)];
+    /// The 1080p dump, THE LIVE PANEL (1920x1080 at 180, which is 1920x600 —
+    /// 3.2:1 — on the glass), a short panel at an extreme glass ratio, and a
+    /// 4:3 one. Nothing here may assume a frame shape.
+    const PANELS: [(usize, usize, usize); 4] = [
+        (1920, 1080, 100),
+        (1920, 1080, 180),
+        (1280, 400, 180),
+        (800, 600, 100),
+    ];
 
     fn at(w: usize, h: usize, aspect: usize) -> (Panel, XWing) {
         let p = Panel::new(w, h, w);
@@ -1224,14 +1730,20 @@ mod tests {
         );
 
         let mut seen = [false; 3];
+        let (mut ties, mut booms) = (0, 0);
         let n = crate::testalloc::allocs_during(|| {
             for _ in 0..4000 {
                 saver::frame(&mut x, &mut buf, &p);
                 seen[x.act as usize] = true;
+                ties += usize::from(x.ties.iter().any(|t| t.live));
+                booms += usize::from(x.booms.iter().any(|b| b.live));
             }
         });
         assert_eq!(n, 0, "the render path allocated {n} times");
         assert_eq!(seen, [true; 3], "the window did not cross every act");
+        // Non-vacuous for the pools added since: a window with no TIE and no
+        // explosion in it has not tested the things most likely to allocate.
+        assert!(ties > 0 && booms > 0, "no TIE ({ties}) or boom ({booms})");
 
         // Non-vacuous: the counter has to be able to see an allocation, on this
         // thread, or the assertion above is about nothing.
@@ -1335,18 +1847,20 @@ mod tests {
             // whose walls were placed in cells rather than in square-pixel
             // units closes at a different rate at 180 than at 100.
             let slit = |x: &XWing| {
-                let cy = x.rows / 5;
+                // A row ABOVE the targeting computer's box, which hangs from
+                // a fifth of the way down and would otherwise be what this
+                // measured once it drops.
+                let cy = x.rows / 9;
                 (x.cols / 4..x.cols * 3 / 4)
                     .filter(|&cx| x.grid.cells()[cy * x.cols + cx].colour() == 0)
                     .count()
             };
-            // BOTH samples before the targeting computer starts to drop: it
-            // covers this row too, and a test that let it would pass on a
-            // trench whose walls never moved at all.
-            const { assert!(0.55 < 1.0 - HUD_FRAC) };
-            run_to(&mut x, &p, &mut buf, 2, 0.03);
+            // The first sample is after the walls have finished RISING, so
+            // this measures them closing in and not them growing; the second
+            // is before the final flash.
+            run_to(&mut x, &p, &mut buf, 2, 0.25);
             let open = slit(&x);
-            run_to(&mut x, &p, &mut buf, 2, 0.55);
+            run_to(&mut x, &p, &mut buf, 2, 0.95);
             let closed = slit(&x);
             assert!(
                 open > 0,
@@ -1384,34 +1898,70 @@ mod tests {
         assert_ne!(before, patch(&x), "the plating is not going anywhere");
     }
 
-    /// Only this saver has weapons, and they belong to act 3. Green and red are
-    /// also the two colour families nothing else in the file can produce, so
-    /// this doubles as "the acts are not bleeding into one another".
+    /// Only this saver has weapons, and now every act does: the run is under
+    /// fire from the moment the station is in front of you. Green is the one
+    /// colour family nothing else in the file can produce — the plating is
+    /// grey, the explosions are white and red — so a green cell above the
+    /// console is incoming fire and cannot be anything else.
+    ///
+    /// This was one test with the targeting computer until the trench stopped
+    /// being the only armed act. The HUD half of its claim is still true and
+    /// is now `the_targeting_computer_is_the_trench_only`; splitting rather
+    /// than deleting is the point — a test that has gone half-wrong has a
+    /// right half worth keeping.
     #[test]
-    fn weapons_and_the_targeting_computer_are_the_trench_only() {
+    fn every_act_is_under_fire() {
         let (p, mut x) = at(1920, 1080, 100);
         let mut buf = vec![0u32; p.buf_len()];
+        let green = |x: &XWing| above_console(x, C_GREEN_TRAIL..=C_GREEN_CORE);
+        let red = |x: &XWing| above_console(x, C_RED_TRAIL..=C_RED_CORE);
 
-        // The console indicators use the bolt AND the targeting-computer
-        // colours by design, so both counts have to look above it — one that
-        // did not would pass on a saver that never fired and never locked on.
-        let armed = |x: &XWing| above_console(x, C_GREEN_TRAIL..=C_RED_CORE);
+        // No TIEs: they fire green too, and the claim here is that the act
+        // itself is shooting — a station gun, a surface battery, a wall
+        // turret. Left in, a saver that had dropped all three would still
+        // pass on the fighters' fire.
+        x.tie_secs = 0.0;
+        for act in [0u8, 1, 2] {
+            run_to_act(&mut x, &p, &mut buf, act);
+            for t in &mut x.ties {
+                *t = Tie::default();
+            }
+            // Over a stretch of the act: a bolt is in flight for under a
+            // second, so a single frame proves nothing either way.
+            let (mut g, mut r) = (0, 0);
+            for _ in 0..(4.0 / x.dt) as usize {
+                saver::frame(&mut x, &mut buf, &p);
+                g += green(&x);
+                r += red(&x);
+            }
+            assert!(g > 40, "act {act}: nothing shot at it ({g} green cells)");
+            assert!(r > 40, "act {act}: it never shot back ({r} red cells)");
+        }
+    }
+
+    /// The targeting computer, though, IS the trench: it drops when there is
+    /// something to drop it for. This is the surviving half of the test above.
+    #[test]
+    fn the_targeting_computer_is_the_trench_only() {
+        let (p, mut x) = at(1920, 1080, 100);
+        let mut buf = vec![0u32; p.buf_len()];
+        let hud = |x: &XWing| above_console(x, C_HUD..=C_HUD_LIT);
+
         for act in [0u8, 1] {
             run_to_act(&mut x, &p, &mut buf, act);
-            assert_eq!(armed(&x), 0, "act {act} is shooting at something");
+            for _ in 0..(3.0 / x.dt) as usize {
+                saver::frame(&mut x, &mut buf, &p);
+                assert_eq!(hud(&x), 0, "act {act} has a targeting computer in it");
+            }
         }
 
-        // Over the act, because a bolt is in flight for under a second.
         run_to_act(&mut x, &p, &mut buf, 2);
-        let mut bolts = 0;
-        let mut hud = 0;
+        let mut seen = 0;
         while x.act == 2 {
             saver::frame(&mut x, &mut buf, &p);
-            bolts += armed(&x);
-            hud += above_console(&x, C_HUD..=C_HUD_LIT);
+            seen += hud(&x);
         }
-        assert!(bolts > 200, "the trench never fired ({bolts} bolt cells)");
-        assert!(hud > 200, "the targeting computer never dropped ({hud})");
+        assert!(seen > 200, "the targeting computer never dropped ({seen})");
     }
 
     /// Greebles are GENERATED, not tiled: the whole difference between reading
@@ -1473,15 +2023,24 @@ mod tests {
     /// is here to fail on.
     #[test]
     fn the_shot_is_the_same_at_both_pixel_aspects() {
-        // 1920x1080 square, and 1920x600 at 180: both 1920x1080 VISUAL.
+        // The same GLASS rectangle out of two different framebuffers: 1920x1080
+        // square pixels, and 1920x1944 at 180, which the panel squashes by 1.8
+        // back to 1920x1080. Deriving the second size from the first is the
+        // half of this test that has to be got right — a pair of sizes derived
+        // from an inverted convention makes both arms wrong together and the
+        // comparison passes on a broken saver, which is exactly what happened
+        // here. `the_cell_is_square_on_the_glass` guards the convention itself.
         let (p_a, mut a) = at(1920, 1080, 100);
-        let (p_b, mut b) = at(1920, 600, 180);
+        let (p_b, mut b) = at(1920, 1944, 180);
         assert!(
-            b.rows * 2 < a.rows,
-            "{} vs {} rows: no test",
-            a.rows,
-            b.rows
+            (a.vh - b.vh).abs() < a.row_v * 4.0 && (a.vw - b.vw).abs() < 1.0,
+            "the two panels are not the same glass: {}x{} vs {}x{}",
+            a.vw,
+            a.vh,
+            b.vw,
+            b.vh
         );
+        assert_ne!(a.rows, b.rows, "same grid on both: nothing is being tested");
         let (mut ba, mut bb) = (vec![0u32; p_a.buf_len()], vec![0u32; p_b.buf_len()]);
         run_to(&mut a, &p_a, &mut ba, 2, 0.3);
         run_to(&mut b, &p_b, &mut bb, 2, 0.3);
@@ -1519,6 +2078,237 @@ mod tests {
         assert!((ha - hb).abs() < 0.06, "horizon {ha:.3} vs {hb:.3}");
     }
 
+    /// The units, pinned directly. Everything else about the geometry is
+    /// derived from `row_v`, and the assertion the rest of the suite makes is
+    /// a COMPARISON — which two arms sharing one inverted operator both
+    /// satisfy. This one cannot be satisfied by a consistent mistake: `Grid`
+    /// makes the cell square on the glass, so its height in glass units must
+    /// come back equal to its width, at every aspect.
+    #[test]
+    fn the_cell_is_square_on_the_glass() {
+        let p = Panel::new(1920, 1080, 1920);
+        for aspect in [25, 50, 100, 130, 180, 250, 400] {
+            let x = with_test_aspect(aspect, || XWing::new(&p, 30));
+            let off = (x.row_v - x.col_v).abs() / x.col_v;
+            assert!(
+                off < 0.10,
+                "aspect {aspect}: a cell is {}x{} on the glass, {:.0}% off square",
+                x.col_v,
+                x.row_v,
+                off * 100.0
+            );
+            // And the glass rectangle is the framebuffer with the squash taken
+            // out of it: 1920x1080 at 180 is 1920x600, which is the 3.2:1 the
+            // live panel actually is.
+            let want = 1080.0 * 100.0 / aspect as f32;
+            assert!(
+                (x.vh - want).abs() < want * 0.10,
+                "aspect {aspect}: glass height {} wanted ~{want}",
+                x.vh
+            );
+        }
+    }
+
+    /// Act 2 opens nose-down and the nose comes up. Measured as sky: on the
+    /// first frame of the act the plain fills the frame and there is none,
+    /// and once the pitch is done there is a sky again. A hard cut into level
+    /// flight — the edit this replaces — has sky on the first frame.
+    #[test]
+    fn the_nose_comes_up_into_act_two() {
+        for (w, h, a) in PANELS {
+            let (p, mut x) = at(w, h, a);
+            let mut buf = vec![0u32; p.buf_len()];
+            let sky = |x: &XWing| {
+                // The canopy struts eat the top corners, so count the middle.
+                (0..x.rows / 6)
+                    .flat_map(|cy| (x.cols / 3..x.cols * 2 / 3).map(move |cx| (cy, cx)))
+                    .filter(|(cy, cx)| x.grid.cells()[cy * x.cols + cx].colour() == 0)
+                    .count()
+            };
+            run_to(&mut x, &p, &mut buf, 1, 0.0);
+            let diving = sky(&x);
+            run_to(&mut x, &p, &mut buf, 1, 0.5);
+            let level = sky(&x);
+            assert!(
+                diving * 4 < level,
+                "{w}x{h}@{a}: no pitch — {diving} cells of sky at the cut, {level} once level"
+            );
+        }
+    }
+
+    /// And act 3 opens on the plain act 2 ended on, with the walls growing out
+    /// of it. Measured at the frame's edge, which is the near end of the wall:
+    /// it is sky at the cut and solid once they are up.
+    #[test]
+    fn the_trench_walls_rise_into_act_three() {
+        for (w, h, a) in PANELS {
+            let (p, mut x) = at(w, h, a);
+            let mut buf = vec![0u32; p.buf_len()];
+            // Just inboard of the canopy struts, which own the top corners in
+            // every act and would answer "is there a wall there" for it.
+            let wall = |x: &XWing| {
+                // Just above the horizon, where a wall of ANY height reaches
+                // and a flat plain cannot: near the vanishing point the test
+                // is the same on a 16:9 frame and on the panel's 3.2:1 one,
+                // where a row picked near the top is off the end of a wall
+                // that is only 900 units tall.
+                let cy = x.rows * 2 / 5;
+                let k = x.cols / 5;
+                (k..k + 4)
+                    .chain(x.cols - k - 4..x.cols - k)
+                    .filter(|&cx| {
+                        // Plating only. A star or a bolt at the sample point
+                        // is not a wall, and on the short panel one of them
+                        // lands there.
+                        (1..=C_BRIGHT as usize).contains(&x.grid.cells()[cy * x.cols + cx].colour())
+                    })
+                    .count()
+            };
+            run_to(&mut x, &p, &mut buf, 2, 0.0);
+            let cut = wall(&x);
+            run_to(&mut x, &p, &mut buf, 2, 0.25);
+            let up = wall(&x);
+            assert_eq!(cut, 0, "{w}x{h}@{a}: the walls were already up at the cut");
+            assert!(up >= 6, "{w}x{h}@{a}: the walls never rose ({up}/8 cells)");
+        }
+    }
+
+    /// A TIE has to be a TIE: the silhouette is the whole reason it is in
+    /// here. Counted inside the sprite's OWN box and nowhere else — the four
+    /// shades it is drawn in are ordinary plating greys, so a count over the
+    /// whole frame answers "how much Death Star is on screen" and passes with
+    /// no TIE in it at all. Driven directly rather than waiting for the
+    /// interval, so it is deterministic.
+    #[test]
+    fn a_tie_is_a_silhouette_and_a_red_bolt_kills_it() {
+        let (p, mut x) = at(1920, 1080, 100);
+        let mut buf = vec![0u32; p.buf_len()];
+        saver::frame(&mut x, &mut buf, &p);
+        for t in &mut x.ties {
+            *t = Tie::default();
+        }
+        // Below the station, which at the start of act 1 is a small disc above
+        // centre, so the box below holds nothing but sky and this TIE.
+        let t = Tie {
+            u: 0.0,
+            v: 300.0,
+            z: 1400.0,
+            fire_in: 99.0,
+            live: true,
+            ..Tie::default()
+        };
+        x.ties[0] = t;
+        saver::frame(&mut x, &mut buf, &p);
+
+        let sc = x.focal / t.z;
+        let (px, py) = (x.hx + t.u * sc, x.hz + t.v * sc);
+        let s = TIE_R * sc;
+        let cx0 = ((px - s * 2.2) / x.col_v) as usize;
+        let cx1 = (((px + s * 2.2) / x.col_v) as usize).min(x.cols);
+        let cy0 = ((py - s * 1.2) / x.row_v) as usize;
+        let cy1 = (((py + s * 1.2) / x.row_v) as usize).min(x.rows);
+        let across = |cy: usize| {
+            (cx0..cx1)
+                .filter(|&cx| x.grid.cells()[cy * x.cols + cx].colour() != 0)
+                .count()
+        };
+        let has = |lev: u8| {
+            (cy0..cy1).any(|cy| {
+                (cx0..cx1).any(|cx| x.grid.cells()[cy * x.cols + cx].colour() == lev as usize)
+            })
+        };
+        let body: usize = (cy0..cy1).map(across).sum();
+        assert!(body > 40, "the TIE drew {body} cells: not a silhouette");
+        // The ball and its window are what separate it from any other shape.
+        assert!(has(C_TIE_GLASS), "no cockpit window");
+        assert!(has(C_TIE_BALL), "no cockpit ball");
+
+        // And the panels are HEXAGONS. Measured across ONE PANEL, not across
+        // the whole sprite: the ball and the struts only exist at the middle,
+        // so a sprite made of two RECTANGLES is also wider there and passes a
+        // whole-silhouette comparison while being a barbell.
+        let panel = |cy: usize| {
+            let (a, b) = (px - s * 2.05, px - s * 0.95);
+            ((a / x.col_v) as usize..(b / x.col_v) as usize)
+                .filter(|&cx| cx < x.cols && x.grid.cells()[cy * x.cols + cx].colour() != 0)
+                .count()
+        };
+        let lit: Vec<usize> = (cy0..cy1).filter(|&cy| across(cy) > 0).collect();
+        let (top, mid) = (lit[0], lit[lit.len() / 2]);
+        assert!(
+            panel(mid) > panel(top) + 1,
+            "the panel has no cut corners: {} cells across its top, {} across its middle",
+            panel(top),
+            panel(mid)
+        );
+
+        // A red bolt through it takes it, and leaves an explosion behind.
+        x.spawn_bolt(t.u, t.v, t.z, 0.0, 0.0, 10.0, C_RED_TRAIL);
+        saver::frame(&mut x, &mut buf, &p);
+        assert!(!x.ties[0].live, "the bolt went straight through it");
+        assert!(
+            x.booms.iter().any(|b| b.live),
+            "it died without an explosion"
+        );
+    }
+
+    /// An explosion has to have a SHAPE — flash, then an expanding shell, then
+    /// debris, then gone. A one-frame white blob reads as a dropped frame,
+    /// which is the thing this test is here to keep it from being.
+    #[test]
+    fn an_explosion_flashes_expands_and_ends() {
+        let (p, mut x) = at(1920, 1080, 100);
+        let mut buf = vec![0u32; p.buf_len()];
+        saver::frame(&mut x, &mut buf, &p);
+        for b in &mut x.booms {
+            *b = Boom::default();
+        }
+        x.spawn_boom(0.0, -60.0, 1400.0, 260.0);
+        // Frozen: the flight would carry the blast out of frame mid-test.
+        x.speed = 0.0;
+        let lit_white = |x: &XWing| count(x, C_FLASH..=C_FLASH);
+
+        saver::frame(&mut x, &mut buf, &p);
+        let first = lit_white(&x);
+        assert!(first > 0, "the explosion never flashed");
+
+        // It grows: the white area is bigger a few frames in than on the first.
+        let mut widest = first;
+        for _ in 0..(BOOM_SECS * 0.3 / x.dt) as usize {
+            saver::frame(&mut x, &mut buf, &p);
+            widest = widest.max(lit_white(&x));
+        }
+        assert!(
+            widest > first * 2,
+            "the explosion did not expand ({first} -> {widest} cells)"
+        );
+
+        // And it ends, rather than sitting on the panel as a disc forever.
+        for _ in 0..(BOOM_SECS * 1.2 / x.dt) as usize {
+            saver::frame(&mut x, &mut buf, &p);
+        }
+        assert!(!x.booms.iter().any(|b| b.live), "the explosion never ended");
+    }
+
+    /// Act 1 has to end with the station covering the frame — that is the
+    /// whole reason the cut into act 2 lands on matching pixels. Sized off the
+    /// frame's HEIGHT it does on 16:9 and does not on the panel's 3.2:1 glass,
+    /// which no 1080p dump would ever show.
+    #[test]
+    fn the_station_fills_the_frame_before_the_cut() {
+        for (w, h, a) in PANELS {
+            let (p, mut x) = at(w, h, a);
+            let mut buf = vec![0u32; p.buf_len()];
+            run_to(&mut x, &p, &mut buf, 0, 0.99);
+            let space = count(&x, C_SPACE..=C_SPACE);
+            assert!(
+                space * 50 < x.cols * x.rows,
+                "{w}x{h}@{a}: {space} of {} cells are still space at the cut",
+                x.cols * x.rows
+            );
+        }
+    }
+
     /// A seed makes a run reproducible, which is the only way a rendering
     /// change can be shown to be a no-op. Four savers shipped without one.
     #[test]
@@ -1530,6 +2320,9 @@ mod tests {
             for i in 0..x.stars.len() {
                 x.spawn_star(i, false);
             }
+            // `new` rolls the first turret interval from the clock-seeded RNG,
+            // so re-enter the act to take it from the pinned one instead.
+            x.enter_act();
             let mut buf = vec![0u32; p.buf_len()];
             for _ in 0..40 {
                 saver::frame(&mut x, &mut buf, &p);
