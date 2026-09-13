@@ -20,11 +20,18 @@
 //!   a fixed point at half lit, so a city generated at 88% fades to 50% over a
 //!   few minutes with every test still passing. Re-drawing is memoryless in one
 //!   step, so the stationary distribution is exactly the generating one.
-//! * `Slot` carries the glyph, the lit percentage AND the colour family per
-//!   cell because a cell two buildings overlap belongs to exactly one of them,
-//!   and the twinkle has to reproduce that one. The same argument puts a star's
-//!   shape and brightness tier in `StarKind`: a light that changes shape or
-//!   jumps brightness class when it twinkles reads as flicker, not as a star.
+//! * `Slot` carries the glyph, the lit percentage AND the brightness profile
+//!   per cell because a cell two buildings overlap belongs to exactly one of
+//!   them, and the twinkle has to reproduce that one. The same argument puts a
+//!   star's shape and brightness tier in `StarKind`: a light that changes shape
+//!   or jumps brightness class when it twinkles reads as flicker, not as a star.
+//! * The profile is ONE index into `DRAWS`, covering colour family and
+//!   brightness together. They were a `bool` and a global table, and separating
+//!   them is what let a bright building relight off the district average.
+//! * The window GLYPHS are most of what keeps neighbours apart, and the reason
+//!   is in `SLOT_GLYPH`'s doc: two buildings whose windows are the same square
+//!   read as one texture at two phases however differently they are clocked, so
+//!   the shapes have to span proportion and not just pitch.
 //! * Nothing translates EXCEPT the shooting star, which is why it is the only
 //!   thing here that saves what it covered and puts it back.
 //!
@@ -103,20 +110,93 @@ const BEACON_COL: u16 = 16;
 /// starts being a colour scheme.
 const WARM_PER_MILLE: u32 = 8;
 
+/// Whole WARM BUILDINGS, per thousand buildings — a hotel or an apartment block
+/// where every room is on the same yellow bulb, against an office district that
+/// is entirely cold. The scattered accent above is one lamp left on in someone
+/// else's tower; this is a building of a different KIND, and it is the only
+/// thing here that changes the colour of a whole silhouette.
+///
+/// The rate makes it likely, `WARM_BLDG_MAX` makes it bounded. Rate alone does
+/// not: a district is ~27 buildings, so a 9% roll lands four of them about one
+/// generation in eight, and four warm towers is not a cold skyline with warm
+/// exceptions in it — it is a two-colour skyline. Same argument as
+/// `WARM_PER_MILLE`: the ceiling has to be a guarantee and not an average.
+const WARM_BLDG_PER_MILLE: u32 = 90;
+const WARM_BLDG_MAX: u32 = 2;
+
 /// Weighted draws over the ramps, so brightness varies without every light
-/// being equally bright — a uniform draw reads as a flat wash of one grey. Both
+/// being equally bright — a uniform draw reads as a flat wash of one grey. All
 /// are skewed dim: a sky of mostly hot dots looks like static, and a skyline of
 /// mostly hot windows looks like daylight.
 #[rustfmt::skip]
 const WINDOW_DRAW: [u16; 16] = [7, 8, 8, 9, 9, 9, 10, 10, 10, 10, 11, 11, 11, 12, 12, 12];
-/// Same shape over the warm ramp: mostly the two dim entries, the hot one rare.
+/// An office floor still at it: every room on the same circuit, so the spread
+/// is narrow and it sits at the hot end. A whole building in this reads as one
+/// slab of light where its neighbour reads as scattered rooms — which is the
+/// point. It is the DISTRIBUTION that differs, not one window.
+#[rustfmt::skip]
+const BRIGHT_DRAW: [u16; 16] = [7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 7, 8];
+/// The other end: a block where almost nothing is on, and what is on is barely
+/// on. Pairs with a low `fill_pct` to make a building that is present in the
+/// silhouette and nearly absent in the light.
+#[rustfmt::skip]
+const DIM_DRAW: [u16; 16] = [10, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 12, 11, 12, 12, 11];
+/// Same shape as `WINDOW_DRAW` over the warm ramp: mostly the two dim entries,
+/// the hot one rare.
 #[rustfmt::skip]
 const WARM_DRAW: [u16; 16] = [13, 13, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 14, 15, 14];
+
+/// Every brightness profile a slot can relight from, indexed by `Slot::draw`.
+/// One table rather than a `warm` flag and a branch because the thing that has
+/// to be stable per slot is "which distribution does this room come back at",
+/// and colour family is only one axis of that: a bright building that relit
+/// from the mixed ramp would dissolve into its neighbours exactly the way a
+/// warm window that relit white flickers.
+const DRAWS: [[u16; 16]; 4] = [WINDOW_DRAW, BRIGHT_DRAW, DIM_DRAW, WARM_DRAW];
+/// The warm entry, which is the only one outside the window ramp — so it is the
+/// only one a STYLE may not name, and the one the accent and the warm buildings
+/// both point at.
+const WARM_IX: u8 = 3;
+
+/// The window SHAPES, and the reason there is more than one of them.
+///
+/// Pitch, dark floors and fill rate all vary WHICH cells are lit. They do not
+/// vary what a window is, and two buildings whose windows are the same 6x4
+/// square read as one texture at two phases however differently they are
+/// clocked — which is the note this saver kept coming back on. Real skylines
+/// differ far more by window PROPORTION than by grid pitch, so the shapes below
+/// span it: a punched square, a floor-to-ceiling slot half as wide as it is
+/// tall, a pane twice as wide as it is tall, two small windows per cell, and a
+/// band that runs into its neighbour.
+///
+/// `font::BRAILLE` is this repo's own filled 2x4 quadrants rather than reading
+/// pips (see the font module doc), so indexing it by a quadrant mask is a
+/// sub-cell rectangle and nothing new has to be added to the atlas. The bits
+/// are the braille dot numbers: `0x01/0x02/0x04/0x40` are the left column top
+/// to bottom, `0x08/0x10/0x20/0x80` the right.
+const fn quad(mask: u8) -> u16 {
+    font::BRAILLE[mask as usize]
+}
 
 /// A lit window: a small square with dark margin all round, so a run of lit
 /// cells reads as separate windows rather than as one filled block. That is the
 /// difference between a skyline and a black rectangle.
 const WINDOW_GLYPH: u16 = font::BLOCK;
+/// Floor-to-ceiling glazing: 6x12 of the cell's 12x16, so the window is twice
+/// as tall as it is wide where `WINDOW_GLYPH` is half as tall as it is wide.
+/// Same grid, opposite proportion — the loudest shape difference available.
+const SLOT_GLYPH: u16 = quad(0x01 | 0x02 | 0x04);
+/// The other extreme: 12x8, a big pane wider than it is tall. Drawn at a wide
+/// column pitch so it stands alone rather than running into the cell beside it.
+const PANE_GLYPH: u16 = quad(0x02 | 0x04 | 0x10 | 0x20);
+/// Two small windows stacked in ONE cell, so this building has twice as many
+/// storeys as its neighbour on the same grid. Floor HEIGHT is the difference
+/// nothing else here could express — an apartment block beside an office slab.
+const TWIN_GLYPH: u16 = quad(0x01 | 0x04);
+/// A full-width band that meets the band in the next cell, so a lit row draws
+/// one unbroken spandrel line. Where `RIBBON_GLYPH` is two thin rules, this is
+/// a solid course — the difference between a drawn line and a lit floor.
+const BAND_GLYPH: u16 = quad(0x02 | 0x10);
 /// A curtain-wall strip: one narrow bar the full height of the cell, so a tower
 /// in this style has unbroken vertical lines where its neighbour has a grid of
 /// dots. It is the loudest of the style differences and the one that does most
@@ -213,44 +293,81 @@ struct Style {
     /// Fill as a percent OF `CITY_WINDOW_PCT`, so one knob still scales the
     /// whole skyline while a style can be the dark one.
     fill_pct: u32,
+    /// Which `DRAWS` profile this building's rooms relight from. Two buildings
+    /// at the same fill rate off the same ramp shimmer at the same rate in the
+    /// same colour whatever their pitch; one bright and one dim tell apart in
+    /// peripheral vision, which is where a skyline is actually read. Never
+    /// `WARM_IX` — warm is a property of a BUILDING or of one lamp, not of a
+    /// style, and the const block enforces it.
+    draw: u8,
+    /// A dark service core running the full height up the middle of the tier:
+    /// lifts, risers and stairs, which have no windows. It splits the facade
+    /// into two lit halves, so the building has an interior edge of its own
+    /// rather than only the two its neighbours give it.
+    core: bool,
 }
 
-/// The eleven ways a building lights up. Nothing here is rare: the styles exist
-/// to make neighbours differ, so each has to turn up often enough to be
-/// somebody's neighbour.
+/// A tier narrower than this has no middle to lose — a 4-cell building with a
+/// dark core is two 1-cell slivers, which reads as damage rather than as a
+/// building.
+const CORE_MIN_W: usize = 5;
+
+/// The ways a building lights up. Nothing here is rare: the styles exist to
+/// make neighbours differ, so each has to turn up often enough to be somebody's
+/// neighbour.
+///
+/// The table is read down the GLYPH and `draw` columns, not across the rows. An
+/// earlier cut varied only pitch, dark floors and fill, and rendered a skyline
+/// every building of which was the same 6x4 square at the same brightness on a
+/// different clock — different on paper, one texture on the panel. Two entries
+/// that share a glyph therefore differ on brightness, and two that share a
+/// brightness differ on shape.
 #[rustfmt::skip]
-const STYLES: [Style; 11] = [
+const STYLES: [Style; 17] = [
     // dense grid — the baseline everything else is read against
-    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 100 },
-    // wide-spaced columns
-    Style { glyph: WINDOW_GLYPH, col_pitch: 2, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 100 },
+    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 100, draw: 0, core: false },
+    // wide-spaced columns, and barely on
+    Style { glyph: WINDOW_GLYPH, col_pitch: 2, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 85,  draw: 2, core: false },
     // banded: a dark service floor every fourth storey
-    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 1, band_every: 4, checker: false, dim_below: 0,  fill_pct: 100 },
-    // curtain wall: vertical strips instead of a grid
-    Style { glyph: STRIP_GLYPH,  col_pitch: 2, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 100 },
+    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 1, band_every: 4, checker: false, dim_below: 0,  fill_pct: 100, draw: 0, core: false },
+    // curtain wall: vertical strips instead of a grid, and lit like an office
+    Style { glyph: STRIP_GLYPH,  col_pitch: 2, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 95,  draw: 1, core: false },
     // mostly dark — one tower in the row with the lights off
-    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 55  },
+    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 45,  draw: 2, core: false },
     // checkerboard
-    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 1, band_every: 0, checker: true,  dim_below: 0,  fill_pct: 100 },
+    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 1, band_every: 0, checker: true,  dim_below: 0,  fill_pct: 100, draw: 0, core: false },
     // tall floors: every other storey, so the bands are twice as far apart
-    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 2, band_every: 0, checker: false, dim_below: 0,  fill_pct: 100 },
+    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 2, band_every: 0, checker: false, dim_below: 0,  fill_pct: 100, draw: 1, core: false },
     // ribbon glazing on alternating floors
-    Style { glyph: RIBBON_GLYPH, col_pitch: 1, row_pitch: 2, band_every: 0, checker: false, dim_below: 0,  fill_pct: 100 },
-    // working late: the top third lit, the rest nearly dark
-    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 1, band_every: 0, checker: false, dim_below: 66, fill_pct: 100 },
-    // wide pitch AND a service floor: the two loudest knobs together
-    Style { glyph: WINDOW_GLYPH, col_pitch: 3, row_pitch: 1, band_every: 5, checker: false, dim_below: 0,  fill_pct: 100 },
+    Style { glyph: RIBBON_GLYPH, col_pitch: 1, row_pitch: 2, band_every: 0, checker: false, dim_below: 0,  fill_pct: 100, draw: 0, core: false },
+    // working late: the top third lit hard, the rest nearly dark
+    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 1, band_every: 0, checker: false, dim_below: 66, fill_pct: 100, draw: 1, core: false },
+    // wide pitch AND a service floor: the two loudest of the old knobs together
+    Style { glyph: WINDOW_GLYPH, col_pitch: 3, row_pitch: 1, band_every: 5, checker: false, dim_below: 0,  fill_pct: 90,  draw: 0, core: false },
     // sparse curtain wall, mostly dark
-    Style { glyph: STRIP_GLYPH,  col_pitch: 3, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 70  },
+    Style { glyph: STRIP_GLYPH,  col_pitch: 3, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 60,  draw: 2, core: false },
+    // floor-to-ceiling glazing, every floor, all of it on: the tall-window slab
+    Style { glyph: SLOT_GLYPH,   col_pitch: 1, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 100, draw: 1, core: false },
+    // the same tall windows around a dark lift core, at a wider pitch
+    Style { glyph: SLOT_GLYPH,   col_pitch: 2, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 95,  draw: 0, core: true  },
+    // big panes, well apart: a gallery or a showroom, not an office grid
+    Style { glyph: PANE_GLYPH,   col_pitch: 2, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 100, draw: 0, core: false },
+    // apartments: two short storeys per cell, most of them out
+    Style { glyph: TWIN_GLYPH,   col_pitch: 1, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 75,  draw: 2, core: false },
+    // unbroken spandrel courses every other floor
+    Style { glyph: BAND_GLYPH,   col_pitch: 1, row_pitch: 2, band_every: 0, checker: false, dim_below: 0,  fill_pct: 100, draw: 1, core: false },
+    // the 9pm office slab: every room on one circuit, split by its service core
+    Style { glyph: WINDOW_GLYPH, col_pitch: 1, row_pitch: 1, band_every: 0, checker: false, dim_below: 0,  fill_pct: 100, draw: 1, core: true  },
 ];
 
-/// Weighted draw over `STYLES`. The first five carry the skyline; the rest are
-/// seasoning, common enough to appear a few times across a 1080p panel and not
-/// so common that the eye starts reading them as the template.
+/// Weighted draw over `STYLES`. Half the draws are the punched square, which is
+/// the shape the skyline is read against; the other half is split across the
+/// four other proportions, so a run of four or five neighbours is unlikely to
+/// be two of anything.
 #[rustfmt::skip]
 const STYLE_DRAW: [u8; 32] = [
-    0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4,
-    5, 5, 5, 6, 6, 6, 7, 7, 8, 8, 9, 9, 10, 0, 1, 2,
+     0,  0,  1,  1,  2,  2,  3,  3,  4,  5,  5,  6,  6,  7,  8,  8,
+     9, 10, 11, 11, 11, 12, 12, 13, 13, 13, 14, 14, 15, 15, 16, 16,
 ];
 
 /// The silhouette, independent of how the building is lit. Two towers in the
@@ -344,21 +461,52 @@ const OVERLAP_MAX: usize = 3;
 /// `bake_sprites` makes for the toaster art. A runtime check would fire on the
 /// panel, headless, at 3am.
 const _: () = {
-    let mut i = 0;
-    while i < WINDOW_DRAW.len() {
-        assert!(
-            WINDOW_DRAW[i] >= WIN_LO && WINDOW_DRAW[i] <= WIN_HI,
-            "a window draw is outside the window ramp"
-        );
-        i += 1;
+    // Every cold profile inside the window ramp, the warm one inside the warm
+    // ramp, and nothing straddling: a slot's profile IS its colour family, so a
+    // profile with one foot in each ramp would make a building flicker between
+    // white and yellow and no runtime test could name the cause.
+    let mut d = 0;
+    while d < DRAWS.len() {
+        let mut i = 0;
+        while i < DRAWS[d].len() {
+            let c = DRAWS[d][i];
+            if d == WARM_IX as usize {
+                assert!(
+                    c >= WARM_LO && c <= WARM_HI,
+                    "the warm profile draws outside the warm ramp"
+                );
+            } else {
+                assert!(
+                    c >= WIN_LO && c <= WIN_HI,
+                    "a cold profile draws outside the window ramp"
+                );
+            }
+            i += 1;
+        }
+        d += 1;
     }
-    let mut i = 0;
-    while i < WARM_DRAW.len() {
+    assert!(
+        WARM_IX as usize == DRAWS.len() - 1,
+        "the warm profile must be last, so `draw < WARM_IX` means cold"
+    );
+    // The profiles have to actually be different distributions. Means, not
+    // sets: two tables over the same ramp that merely reordered each other
+    // would pass a set comparison and render identically.
+    let mut d = 1;
+    while d < WARM_IX as usize {
+        let mut a = 0;
+        let mut b = 0;
+        let mut i = 0;
+        while i < DRAWS[0].len() {
+            a += DRAWS[0][i] as u32;
+            b += DRAWS[d][i] as u32;
+            i += 1;
+        }
         assert!(
-            WARM_DRAW[i] >= WARM_LO && WARM_DRAW[i] <= WARM_HI,
-            "a warm draw is outside the warm ramp"
+            a.abs_diff(b) >= DRAWS[0].len() as u32,
+            "a brightness profile is not a stop away from the mixed one"
         );
-        i += 1;
+        d += 1;
     }
     let mut i = 0;
     while i < STREAK_RAMP.len() {
@@ -439,6 +587,19 @@ const _: () = {
             STYLES[i].glyph != font::BLANK,
             "a style lights its windows with a blank glyph"
         );
+        // A quadrant mask that is all eight bits is `font::SOLID`, and a
+        // building of solid cells is a filled rectangle with no windows in it.
+        assert!(
+            STYLES[i].glyph != font::SOLID,
+            "a style fills its cells solid"
+        );
+        // Warm is a property of a BUILDING or of one lamp left on, never of a
+        // style: a warm style would put an unbounded number of yellow windows
+        // on the panel and `WARM_PER_MILLE` would stop being the cap it claims.
+        assert!(
+            STYLES[i].draw < WARM_IX,
+            "a style relights from the warm ramp"
+        );
         // A style glyph that collided with a star glyph would break the star
         // filter in `new`: it keeps a sky cell when the glyph it finds is one
         // of the star shapes, so a building cell would survive as a "star" and
@@ -485,11 +646,22 @@ const _: () = {
 struct Slot {
     glyph: u16,
     lit_pct: u8,
-    /// Which ramp this window relights from. Per SLOT rather than per draw, so
-    /// a warm window is warm every time it comes back on — a window that picked
-    /// its family fresh each twinkle would flicker between white and yellow,
-    /// which reads as a broken pixel rather than as a lamp.
-    warm: bool,
+    /// Which `DRAWS` profile this window relights from — its colour family AND
+    /// its brightness distribution in one index. Per SLOT rather than per draw,
+    /// so a warm window is warm and a bright building stays bright every time
+    /// they come back on; a window that picked either fresh each twinkle would
+    /// flicker, which reads as a broken pixel rather than as a room.
+    draw: u8,
+}
+
+#[cfg(test)]
+impl Slot {
+    /// Only the tests ask this — the render path wants the whole profile, not
+    /// one bit of it, which is the point of folding family and brightness into
+    /// one index.
+    fn warm(&self) -> bool {
+        self.draw == WARM_IX
+    }
 }
 
 /// The shooting star. A head cell and a short tail, saved-and-restored: this is
@@ -649,6 +821,7 @@ impl City {
         // LEFTMOST of a tie, so the beacon does not hop between two equal
         // towers from one generation to the next.
         let mut tallest = (usize::MAX, 0usize, 1usize);
+        let mut warm_bldgs = 0u32;
         let mut x = 0usize;
         while x < cols {
             let class = ROOF_DRAW[next_rand(&mut rng) as usize % ROOF_DRAW.len()] as usize;
@@ -659,6 +832,14 @@ impl City {
             let top = (top_lo + next_rand(&mut rng) as usize % top_span).min(base - 1);
             let st = &STYLES[STYLE_DRAW[next_rand(&mut rng) as usize % STYLE_DRAW.len()] as usize];
             let lit_pct = (fill * st.fill_pct / 100).min(100);
+            // A whole warm building. Rolled HERE, per building, so it is the
+            // silhouette that is warm and not a patch of it — and so a warm
+            // building keeps its style's pitch, shape and fill and differs from
+            // its neighbour on colour as well as on all of those.
+            let warm_bldg =
+                warm_bldgs < WARM_BLDG_MAX && next_rand(&mut rng) % 1000 < WARM_BLDG_PER_MILLE;
+            warm_bldgs += u32::from(warm_bldg);
+            let draw = if warm_bldg { WARM_IX } else { st.draw };
 
             // The silhouette as up to three stacked boxes, bottom first: each
             // is (left, width, top, solid), and box k runs from its own top
@@ -737,6 +918,10 @@ impl City {
                             && (dark_floor
                                 || dark_row
                                 || !(cx - x).is_multiple_of(st.col_pitch)
+                                // Counted on the TIER, so the core stays up the
+                                // middle of a setback instead of drifting to
+                                // one side of it when the facade steps in.
+                                || (st.core && !plain && tw >= CORE_MIN_W && cx == tx + tw / 2)
                                 || (st.checker && !plain && !(cx + cy).is_multiple_of(2)));
                         if dark {
                             grid.set(i, Cell::CLEAR);
@@ -749,7 +934,7 @@ impl City {
                             continue;
                         }
                         let c = if next_rand(&mut rng) % 100 < p {
-                            Cell::new(st.glyph, pick(&mut rng, &WINDOW_DRAW))
+                            Cell::new(st.glyph, pick(&mut rng, &DRAWS[draw as usize]))
                         } else {
                             Cell::CLEAR
                         };
@@ -757,7 +942,7 @@ impl City {
                         let mine = Slot {
                             glyph: st.glyph,
                             lit_pct: p as u8,
-                            warm: false,
+                            draw,
                         };
                         if owner[i] == u32::MAX {
                             owner[i] = windows.len() as u32;
@@ -785,7 +970,7 @@ impl City {
             if k >= slot.len() {
                 break;
             }
-            slot[k].warm = true;
+            slot[k].draw = WARM_IX;
             let i = windows[k] as usize;
             if grid.cell(i).glyph() != font::BLANK as usize {
                 grid.set(i, Cell::new(slot[k].glyph, pick(&mut rng, &WARM_DRAW)));
@@ -949,13 +1134,13 @@ impl Saver for City {
                 let spec = self.slot[k];
                 // Re-DRAW at the slot's own odds rather than toggling: a toggle
                 // walks every building toward 50% lit whatever it was generated
-                // at. Its own glyph and its own colour family, too — relighting
-                // a curtain-wall cell as a grid window dissolves the building
-                // into its neighbour one twinkle at a time, and relighting a
-                // warm window white makes the accent flicker.
-                let draw = if spec.warm { &WARM_DRAW } else { &WINDOW_DRAW };
+                // at. Its own glyph and its own brightness profile, too —
+                // relighting a curtain-wall cell as a grid window dissolves the
+                // building into its neighbour one twinkle at a time, relighting
+                // a warm window white makes the accent flicker, and relighting a
+                // dim block off the mixed ramp walks it to the district average.
                 let c = if next_rand(&mut self.rng) % 100 < spec.lit_pct as u32 {
-                    Cell::new(spec.glyph, pick(&mut self.rng, draw))
+                    Cell::new(spec.glyph, pick(&mut self.rng, &DRAWS[spec.draw as usize]))
                 } else {
                     Cell::CLEAR
                 };
@@ -1142,7 +1327,7 @@ mod tests {
                 continue;
             }
             let col = cell.colour() as u16;
-            let want = if c.slot[k].warm {
+            let want = if c.slot[k].warm() {
                 WARM_LO..=WARM_HI
             } else {
                 WIN_LO..=WIN_HI
@@ -1441,58 +1626,388 @@ mod tests {
         );
     }
 
-    /// The warm accent: present, rare, and STABLE. A window that picked its
-    /// colour family fresh on every twinkle would hold the 1% on average and
-    /// still be wrong — it would read as a flickering pixel rather than as a
-    /// lamp left on, and the percentage test alone would pass.
+    /// The warm light is TWO things at two scales, and the scales are the point.
+    /// A lamp left on in a cold tower is one window; a hotel is a whole
+    /// silhouette. A city with only the first is a cold skyline with pixels in
+    /// it, and one with only the second has lost the accent — so both are
+    /// asserted, and the second is bounded, because four warm towers of
+    /// twenty-odd is not an exception any more, it is a second colour scheme.
+    ///
+    /// Both are STABLE. A window that picked its family fresh on every twinkle
+    /// would hold every percentage here on average and still read as a broken
+    /// pixel rather than as a lamp.
     #[test]
-    fn the_warm_windows_are_a_rare_stable_accent() {
+    fn warm_light_is_a_few_whole_buildings_and_a_scatter_of_lamps() {
         let p = panel();
         let mut c = city();
         let mut buf = vec![0u32; p.buf_len()];
+        let cols = c.grid.cols();
 
-        let warm_now = |c: &City| -> (usize, usize) {
-            let mut warm = 0;
-            let mut lit = 0;
+        let warm_col = |col: u16| (WARM_LO..=WARM_HI).contains(&col);
+        // Per COLUMN, because "a warm building" is a claim about the panel and
+        // not about the order `slot` happens to be filled in. A warm column is
+        // one whose lit windows are mostly warm; a warm building is a run of
+        // them, and three columns is the narrowest building the generator makes.
+        let warm_runs = |c: &City| -> (Vec<usize>, usize, usize) {
+            let mut warm = vec![0usize; cols];
+            let mut lit = vec![0usize; cols];
             for &i in &c.windows {
                 let cell = c.grid.cell(i as usize);
                 if cell.glyph() == font::BLANK as usize {
                     continue;
                 }
-                lit += 1;
-                warm += usize::from((WARM_LO..=WARM_HI).contains(&(cell.colour() as u16)));
+                lit[i as usize % cols] += 1;
+                warm[i as usize % cols] += usize::from(warm_col(cell.colour() as u16));
             }
-            (warm, lit)
+            let mut runs = Vec::new();
+            let mut run = 0;
+            for cx in 0..=cols {
+                let hot = cx < cols && lit[cx] > 0 && warm[cx] * 2 > lit[cx];
+                if hot {
+                    run += 1;
+                } else {
+                    if run >= 3 {
+                        runs.push(run);
+                    }
+                    run = 0;
+                }
+            }
+            (runs, warm.iter().sum(), lit.iter().sum())
         };
 
-        let (warm, lit) = warm_now(&c);
+        let (runs, warm, lit) = warm_runs(&c);
         assert!(warm > 0, "no warm window in the whole city");
         assert!(
-            warm * 100 <= lit,
-            "{warm} warm windows of {lit} lit is over the 1% cap"
+            !runs.is_empty(),
+            "no whole warm building: {warm} warm windows of {lit}, all scattered"
+        );
+        assert!(
+            runs.len() <= WARM_BLDG_MAX as usize,
+            "{} warm buildings against a ceiling of {WARM_BLDG_MAX}: {runs:?}",
+            runs.len()
+        );
+        // The ceiling on the whole thing. Two buildings of the widest class is
+        // about an eighth of the lit windows; past that the skyline has stopped
+        // being a cold one.
+        assert!(
+            warm * 6 <= lit,
+            "{warm} warm windows of {lit} lit is more than a sixth of the city"
+        );
+
+        // And the scattered lamps survive alongside them: warm windows OUTSIDE
+        // any warm building. Without this the whole test passes on two hotels
+        // and no lamps at all, which is the accent the reference has, gone.
+        // A lamp is one or two warm windows in a column with no warm building
+        // NEXT TO IT either. Both halves are needed: a warm building's
+        // overlapped edge column holds one or two warm windows too, so counting
+        // sparse columns alone scores a hotel's own corner as somebody's desk
+        // light and the assertion passes with every lamp deleted.
+        let mut warm_in_col = vec![0usize; cols];
+        for (k, &i) in c.windows.iter().enumerate() {
+            warm_in_col[i as usize % cols] += usize::from(c.slot[k].warm());
+        }
+        // A warm building's own columns, and TWO either side. Two, not one: a
+        // warm building at a column pitch of 2 ends in a column of its own with
+        // a single warm window in it, and at a reach of one that column scored
+        // as somebody's desk light — so the lamp check passed with every lamp
+        // deleted from the generator.
+        let near_hotel =
+            |cx: usize| (cx.saturating_sub(2)..=(cx + 2).min(cols - 1)).any(|o| warm_in_col[o] > 2);
+        let strays: usize = (0..cols)
+            .filter(|&cx| warm_in_col[cx] > 0 && !near_hotel(cx))
+            .map(|cx| warm_in_col[cx])
+            .sum();
+        assert!(
+            strays > 0,
+            "every warm window is in one of the {} warm buildings",
+            runs.len()
+        );
+        // Rare, at the rate `WARM_PER_MILLE` promises, with room for a few of
+        // the draws to have landed inside a warm building already.
+        assert!(
+            strays * 1000 <= c.slot.len() * WARM_PER_MILLE as usize,
+            "{strays} scattered warm lamps is over the {WARM_PER_MILLE}-per-mille cap"
         );
 
         // Stability: a slot's family never changes, however often it is redrawn.
         for _ in 0..60_000 {
             saver::frame(&mut c, &mut buf, &p);
-            // Cheap enough to check every frame at the sample rate below.
         }
         for (k, &i) in c.windows.iter().enumerate() {
             let cell = c.grid.cell(i as usize);
             if cell.glyph() == font::BLANK as usize {
                 continue;
             }
-            let is_warm = (WARM_LO..=WARM_HI).contains(&(cell.colour() as u16));
             assert_eq!(
-                is_warm, c.slot[k].warm,
+                warm_col(cell.colour() as u16),
+                c.slot[k].warm(),
                 "slot {k} changed colour family under the twinkle"
             );
         }
-        let (warm2, lit2) = warm_now(&c);
+        let (runs2, warm2, lit2) = warm_runs(&c);
         assert!(warm2 > 0, "the warm windows drained away");
+        assert_eq!(
+            runs2.len(),
+            runs.len(),
+            "the warm buildings dissolved over 60k frames: {runs:?} -> {runs2:?}"
+        );
         assert!(
-            warm2 * 100 <= lit2,
-            "{warm2} warm of {lit2} lit is over the 1% cap after 60k frames"
+            warm2 * 6 <= lit2,
+            "{warm2} warm of {lit2} lit after 60k frames"
+        );
+    }
+
+    /// The complaint this saver kept coming back on: every building read the
+    /// same, because every WINDOW was the same 6x4 square and only the clock
+    /// changed. Pitch, dark floors and fill rate all vary which cells are lit —
+    /// none of them varies what a window IS, so a skyline built only out of
+    /// them is one texture at a dozen phases, and every other test in this file
+    /// passes on it.
+    ///
+    /// So this pins PROPORTION, which is what the eye reads a facade by, and it
+    /// pins the share of draws the commonest shape gets, because four distinct
+    /// shapes nobody ever draws is the same skyline.
+    #[test]
+    fn the_window_shapes_span_several_proportions() {
+        // Bounding box AND lit area. The box alone is not the shape: two small
+        // windows stacked in one cell and one tall window filling it have the
+        // SAME box and read nothing alike, so a box-only comparison would have
+        // scored this table one proportion richer than it is.
+        let extent = |g: u16| -> (usize, usize, u32) {
+            let rows = &font::GLYPHS[g as usize];
+            let lo = rows.iter().position(|&r| r != 0).expect("a blank window");
+            let hi = rows.iter().rposition(|&r| r != 0).expect("a blank window");
+            let bits = rows.iter().fold(0u8, |a, &r| a | r);
+            let w = (0..8).filter(|b| bits & (0x80 >> b) != 0).count();
+            let fill = rows.iter().map(|r| r.count_ones()).sum();
+            (w, hi + 1 - lo, fill)
+        };
+
+        let mut shapes: Vec<(usize, usize, u32)> = STYLES.iter().map(|s| extent(s.glyph)).collect();
+        shapes.sort_unstable();
+        shapes.dedup();
+        assert!(
+            shapes.len() >= 5,
+            "the whole skyline is built from {} window proportions: {shapes:?}",
+            shapes.len()
+        );
+        // Both orientations and a square between them. A set of four shapes
+        // that were all wider than tall would satisfy the count and still read
+        // as one facade.
+        assert!(
+            shapes.iter().any(|&(w, h, _)| h >= 2 * w),
+            "no window is taller than it is wide: {shapes:?}"
+        );
+        assert!(
+            shapes.iter().any(|&(w, h, _)| w >= 2 * h),
+            "no window is wider than it is tall: {shapes:?}"
+        );
+        assert!(
+            shapes.iter().any(|&(w, h, _)| w * 2 > h && h * 2 > w),
+            "no window is roughly square: {shapes:?}"
+        );
+
+        // And the shapes have to be DRAWN. A commonest shape over three fifths
+        // of the draws is the skyline this replaced: everything else is
+        // seasoning and the eye reads the template.
+        let mut per_glyph = [0usize; STYLES.len()];
+        for &d in &STYLE_DRAW {
+            per_glyph[STYLES
+                .iter()
+                .position(|s| s.glyph == STYLES[d as usize].glyph)
+                .expect("a style with no glyph")] += 1;
+        }
+        let commonest = *per_glyph.iter().max().expect("no styles");
+        assert!(
+            commonest * 5 <= STYLE_DRAW.len() * 3,
+            "one window shape takes {commonest} of {} draws",
+            STYLE_DRAW.len()
+        );
+
+        // On the panel, not just in the table: at least four shapes actually
+        // reach a slot, and none of them owns most of the skyline.
+        let c = city();
+        let mut count = std::collections::BTreeMap::new();
+        for s in &c.slot {
+            *count.entry(s.glyph).or_insert(0usize) += 1;
+        }
+        assert!(
+            count.len() >= 4,
+            "{} window shapes on the panel: {count:?}",
+            count.len()
+        );
+        let top = *count.values().max().expect("an empty city");
+        assert!(
+            top * 5 <= c.slot.len() * 3,
+            "one shape holds {top} of {} slots",
+            c.slot.len()
+        );
+    }
+
+    /// Buildings differ in BRIGHTNESS, not only in pitch. Every window drawn
+    /// from one ramp gives a skyline that shimmers at the same rate in the same
+    /// colour whatever its geometry — which is most of why the old one read as
+    /// one wall — and it passes every density, roofline and glyph test here.
+    ///
+    /// And the profile is per SLOT, so it survives the twinkle: a dim block
+    /// that relit off the mixed ramp would walk to the district average over a
+    /// few minutes with nothing failing while it happened.
+    #[test]
+    fn buildings_differ_in_brightness_and_keep_their_profile() {
+        let p = panel();
+        let mut c = city();
+        let mut buf = vec![0u32; p.buf_len()];
+        let cols = c.grid.cols();
+
+        // Percent of a column's lit cold windows that are in the HOT half of
+        // the ramp. Deliberately not the mean colour: with a dozen windows to a
+        // column the mean of one global draw wanders by a whole ramp step on
+        // sampling noise alone, so a "one step between the deciles" assertion
+        // passes with every building on the same table — measured, not
+        // reasoned. The hot SHARE separates the profiles by construction:
+        // `BRIGHT_DRAW` is 14/16 hot, `WINDOW_DRAW` 3/16 and `DIM_DRAW` none.
+        //
+        // Warm windows are excluded: they are a different family and would
+        // answer this question by accident.
+        let hot = (WIN_LO + WIN_HI) / 2;
+        let hot_share = |c: &City| -> Vec<u32> {
+            let mut h = vec![0u32; cols];
+            let mut n = vec![0u32; cols];
+            for &i in &c.windows {
+                let cell = c.grid.cell(i as usize);
+                let col = cell.colour() as u16;
+                if cell.glyph() == font::BLANK as usize || !(WIN_LO..=WIN_HI).contains(&col) {
+                    continue;
+                }
+                h[i as usize % cols] += u32::from(col <= hot);
+                n[i as usize % cols] += 1;
+            }
+            (0..cols)
+                .filter(|&cx| n[cx] >= 8)
+                .map(|cx| h[cx] * 100 / n[cx])
+                .collect()
+        };
+
+        let mut m = hot_share(&c);
+        m.sort_unstable();
+        assert!(m.len() > 20, "only {} columns to compare", m.len());
+        // Decile to decile, so a single odd column cannot carry it. Fifty
+        // points between the dim tenth of the skyline and the bright tenth; one
+        // global draw measures about twenty-five, all of it noise.
+        let (lo, hi) = (m[m.len() / 10], m[m.len() - 1 - m.len() / 10]);
+        assert!(
+            hi - lo >= 50,
+            "only {} points of hot-window share between the skyline's dim and bright ends",
+            hi - lo
+        );
+
+        for _ in 0..60_000 {
+            saver::frame(&mut c, &mut buf, &p);
+        }
+        // Every lit window still holds a colour its OWN profile can produce.
+        // The profiles overlap in the middle, so this is not a strong claim
+        // cell by cell — it is a strong claim over 1,800 of them, and a slot
+        // relit from the wrong table trips it within a few hundred frames.
+        for (k, &i) in c.windows.iter().enumerate() {
+            let cell = c.grid.cell(i as usize);
+            if cell.glyph() == font::BLANK as usize {
+                continue;
+            }
+            let draw = &DRAWS[c.slot[k].draw as usize];
+            assert!(
+                draw.contains(&(cell.colour() as u16)),
+                "slot {k} holds colour {} which its profile {} never draws",
+                cell.colour(),
+                c.slot[k].draw
+            );
+        }
+        // And the spread is still there: a twinkle that homogenised the city
+        // would leave every window inside its own profile and still flatten it.
+        let mut m2 = hot_share(&c);
+        m2.sort_unstable();
+        let (lo2, hi2) = (m2[m2.len() / 10], m2[m2.len() - 1 - m2.len() / 10]);
+        assert!(
+            hi2 - lo2 >= 50,
+            "the brightness spread collapsed to {} points over 60k frames",
+            hi2 - lo2
+        );
+    }
+
+    /// A dark service core: lifts and risers have no windows, so the facade is
+    /// split into two lit halves and the building carries an edge of its own
+    /// instead of only the two its neighbours give it.
+    ///
+    /// Two things pretend to be a core and both had to be ruled out, because
+    /// with either of them in the detector this test scored three panels out of
+    /// four with the core deleted from the generator:
+    ///
+    /// * The WIDE COLUMN PITCH leaves dark columns too. Looking two columns out
+    ///   separates them — at a pitch of 2 the column beyond the lit neighbour is
+    ///   dark again, at a pitch of 3 the neighbour itself is — so only a core
+    ///   has four built columns around one dark one.
+    /// * A SEAM between two buildings can also show four built columns around a
+    ///   dark one, by borrowing two of them from each neighbour. The five
+    ///   columns of a core are one facade, so they share a roof row; a seam's do
+    ///   not, and requiring that is what made the detector fire on 3 of 4 panels
+    ///   with the core and 0 of 4 without it.
+    ///
+    /// A slot is "built" only where its building still lights it: a cell an
+    /// overlapping building darkened keeps its entry at `lit_pct` 0, and
+    /// counting those as windows is the third way this measured the wrong thing.
+    #[test]
+    fn some_buildings_have_a_dark_service_core() {
+        // Over several geometries, not one seed. A core needs a cored style to
+        // land on a building wide enough to have a middle, which is a handful
+        // of the two dozen a panel generates — so one generation carries one or
+        // two and any unrelated change to the RNG stream can take those away.
+        let mut with_cores = 0;
+        for (w, h) in [(1920, 1080), (1600, 900), (1280, 720), (2560, 1440)] {
+            let c = City::new(&Panel::new(w, h, w), 30);
+            let (cols, rows) = (c.grid.cols(), c.grid.rows());
+
+            let mut built = vec![vec![false; rows]; cols];
+            let mut roof = vec![usize::MAX; cols];
+            for (k, &i) in c.windows.iter().enumerate() {
+                let (cx, cy) = (i as usize % cols, i as usize / cols);
+                if c.slot[k].lit_pct > 0 {
+                    built[cx][cy] = true;
+                    roof[cx] = roof[cx].min(cy);
+                }
+            }
+            // The core has to run a real distance, or one missing cell counts.
+            let core_rows = STEP_MIN_H;
+            let cores = (2..cols - 2)
+                .filter(|&cx| {
+                    [cx - 2, cx - 1, cx + 1, cx + 2]
+                        .iter()
+                        .all(|&o| roof[o] != usize::MAX && roof[o] == roof[cx - 1])
+                        && (0..rows - core_rows).any(|r0| {
+                            (r0..r0 + core_rows).all(|cy| {
+                                !built[cx][cy]
+                                    && [cx - 2, cx - 1, cx + 1, cx + 2]
+                                        .iter()
+                                        .all(|&o| built[o][cy])
+                            })
+                        })
+                })
+                .count();
+            // A minority wherever they appear, or it is not a core, it is the
+            // column pitch leaving every other column dark.
+            assert!(
+                cores < cols / 8,
+                "{cores} of {cols} columns are service cores ({w}x{h})"
+            );
+            with_cores += usize::from(cores > 0);
+        }
+        // Two of four, not three: a core is rare enough per panel that pinning
+        // the observed count would make any future change to the draw order a
+        // failure. Nought of four is the regression, and that is what this
+        // catches.
+        assert!(
+            with_cores >= 2,
+            "only {with_cores} of 4 panels has a dark service core: a column dark for \
+             {} rows inside a facade of five columns on one roofline",
+            STEP_MIN_H
         );
     }
 
@@ -1528,13 +2043,18 @@ mod tests {
                 .map(|&i| i as usize % cols)
                 .collect();
             on_top.sort_unstable();
-            // The contiguous group containing the beacon — a gap wider than the
-            // widest column pitch means a different building.
+            // The contiguous group containing the beacon. STRICTLY adjacent:
+            // an earlier cut allowed a gap of up to the widest column pitch, and
+            // swallowed a neighbouring tower's roof two columns away into a
+            // one-cell mast's "roof", which put the beacon off centre on a group
+            // it was never standing on. A pitched roof row then reads as a
+            // one-cell group and says nothing — which is what `widest` below is
+            // for: some roof in the set has to be wide enough to mean something.
             let mut lo = bx;
             let mut hi = bx;
             loop {
-                let l = on_top.iter().rev().find(|&&x| x < lo && lo - x <= 3);
-                let h = on_top.iter().find(|&&x| x > hi && x - hi <= 3);
+                let l = on_top.iter().rev().find(|&&x| x + 1 == lo);
+                let h = on_top.iter().find(|&&x| x == hi + 1);
                 match (l, h) {
                     (None, None) => break,
                     (l, h) => {
