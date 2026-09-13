@@ -117,6 +117,10 @@ pub struct Lissajous {
     hue: Vec<u8>,
     pens: Vec<Pen>,
     decay: u16,
+    /// The heat a cell stamped on the PREVIOUS frame has, after this frame's
+    /// decay. Below it, the cell's dots belong to an older pass — see `stamp`.
+    /// At least 1, so a dead cell still clears when one frame outlives the fade.
+    fresh: u16,
     /// Samples along each curve per frame. The trail is only continuous
     /// because consecutive samples land within a sub-cell of each other.
     samples: u32,
@@ -165,6 +169,8 @@ impl Lissajous {
             })
             .collect();
 
+        let decay = (HEAT_MAX as u32 * 1000 / (fade_ms * fps).max(1)).max(1) as u16;
+
         let mut me = Self {
             grid,
             cols,
@@ -173,7 +179,8 @@ impl Lissajous {
             dots: vec![0; cols * rows],
             hue: vec![0; cols * rows],
             pens,
-            decay: (HEAT_MAX as u32 * 1000 / (fade_ms * fps).max(1)).max(1) as u16,
+            decay,
+            fresh: HEAT_MAX.saturating_sub(decay).max(1),
             samples: (samples / fps).max(1),
             d_phase: speed * per_sample,
             d_morph: std::f32::consts::TAU / morph_s * per_sample,
@@ -193,14 +200,19 @@ impl Lissajous {
         me
     }
 
-    /// Light the cell containing sub-cell `(sx, sy)`. A cell arriving here cold
-    /// drops whatever dots it had: they belong to a pass that has already faded
-    /// out, and keeping them makes an old arm of the figure flash back on when
-    /// the pen returns.
+    /// Light the cell containing sub-cell `(sx, sy)`. A cell the pen was not
+    /// already sitting in drops whatever dots it had, because `heat` and `hue`
+    /// are about to become this pass's — so any dot kept from the last pass is
+    /// drawn in this pass's colour and dies on this pass's schedule, stranded
+    /// on a curve it never belonged to. That is the tick marks: a cell shared
+    /// with an older, nearly-faded pass keeps that pass's dots, which lie
+    /// across the new curve instead of along it. Worst where two passes run
+    /// close and near-parallel, and at a cusp, where the curve doubles back
+    /// into its own cells and the union fills to a blob.
     #[inline]
     fn stamp(&mut self, sx: usize, sy: usize, k: u8) {
         let i = (sy / 4) * self.cols + (sx / 2);
-        if self.heat[i] == 0 {
+        if self.heat[i] < self.fresh {
             self.dots[i] = 0;
         }
         self.dots[i] |= dot_bit(sx & 1, sy & 3);
@@ -466,6 +478,69 @@ mod tests {
             "a relit cell kept dots from a faded pass"
         );
         assert_eq!(c.hue[0], 1);
+    }
+
+    /// T6. The artifact: a pass that has faded must leave NOTHING in a cell a
+    /// later pass relights. It cannot — the cell is about to carry the new
+    /// pass's colour and the new pass's heat, so an inherited dot is drawn in
+    /// the wrong hue, lies across the new curve instead of along it, and
+    /// outlives the trail it belonged to. One frame of decay is one frame, so
+    /// subtracting `decay` ages the cell exactly as `step` would.
+    #[test]
+    fn a_faded_pass_leaves_no_dots_in_a_cell_a_later_pass_relights() {
+        let p = Panel::new(320, 200, 320);
+        let mut c = Lissajous::new(&p, 15);
+        c.heat[0] = 0;
+        c.dots[0] = 0;
+
+        // An older pass, going down the left column.
+        c.stamp(0, 0, 0);
+        c.stamp(0, 1, 0);
+        // Two frames old: no longer the cell the pen is sitting in.
+        c.heat[0] -= c.decay * 2;
+        // A later pass crosses it.
+        c.stamp(1, 2, 1);
+        assert_eq!(
+            c.dots[0],
+            dot_bit(1, 2),
+            "the relit cell kept a faded pass's dots: a tick across the new curve"
+        );
+        assert_eq!(c.heat[0], HEAT_MAX);
+        assert_eq!(c.hue[0], 1);
+
+        // The other side of the boundary, and the reason this is not simply
+        // "always clear": a cell the pen is still crossing must accumulate, or
+        // every curve breaks into dashes at the frame boundary.
+        c.heat[0] -= c.decay;
+        c.stamp(1, 3, 1);
+        assert_eq!(
+            c.dots[0],
+            dot_bit(1, 2) | dot_bit(1, 3),
+            "a cell relit on the very next frame lost the dots it just drew"
+        );
+    }
+
+    /// T7. The fade takes `LISSAJOUS_FADE_MS`. `decay` is what `fresh` is
+    /// derived from, so a change that widened the freshness window by slowing
+    /// the fade would pass T6 and quietly leave nine-second trails at eighteen.
+    #[test]
+    fn a_cell_fades_out_in_the_configured_time() {
+        let p = Panel::new(320, 200, 320);
+        let fps = 15u32;
+        let mut c = Lissajous::new(&p, fps);
+        c.heat[0] = HEAT_MAX;
+        let mut frames = 0u32;
+        while c.heat[0] > 0 {
+            c.heat[0] = c.heat[0].saturating_sub(c.decay);
+            frames += 1;
+            assert!(frames < 10_000, "the trail never fades");
+        }
+        // Default LISSAJOUS_FADE_MS.
+        let want = 9000 * fps / 1000;
+        assert!(
+            frames.abs_diff(want) * 100 <= want * 15,
+            "a full-heat cell took {frames} frames to fade, wanted ~{want}"
+        );
     }
 
     /// Every colour index a cell can address must exist: one off the end is an
