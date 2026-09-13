@@ -248,7 +248,15 @@
     let buf = new Uint8Array(0);
     for (;;) {
       const { value, done } = await reader.read();
-      if (done) throw new Error("stream ended");
+      // The server ends the stream when the epoch moves, which SAVER_ROTATE_SECS
+      // now makes a routine event rather than only a click. Treat it as a
+      // switch: reconnect at once and say nothing. Waiting out the 2s backoff
+      // would put an error banner on the page every rotation. A pod that really
+      // went away fails on the next /meta and gets the banner there.
+      if (done) {
+        switching = true;
+        throw new Error("stream ended");
+      }
       const next = new Uint8Array(buf.length + value.length);
       next.set(buf);
       next.set(value, buf.length);

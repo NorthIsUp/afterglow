@@ -1,5 +1,7 @@
 //! The one thing a screensaver is, and the one per-frame call around it.
 
+use std::time::{Duration, Instant};
+
 use crate::city::City;
 use crate::confetti::Confetti;
 use crate::dvd::Dvd;
@@ -20,6 +22,7 @@ use crate::toasters2::Toasters2;
 use crate::toasters3::Toasters3;
 use crate::warp::Warp;
 use crate::worms::Worms;
+use crate::{env_num, next_rand};
 
 /// A screensaver. One frame, one call. Dispatch happens here and NOWHERE below
 /// it: no `&dyn Palette`, no `fn cell(&self, x, y) -> Cell`, no `&mut dyn FnMut`
@@ -103,6 +106,74 @@ pub fn make(name: &str, panel: &Panel, fps: u32) -> Box<dyn Saver> {
     build(panel, fps)
 }
 
+/// Automatic rotation: move to another saver every `SAVER_ROTATE_SECS`.
+///
+/// Zero — the default — is off, so a deployment that does not ask for this
+/// behaves exactly as it did. Out of range falls back to the default rather
+/// than clamping, which is `env_num`'s contract everywhere else.
+///
+/// Order is RANDOM over the other rows rather than a walk down `SAVERS`. A walk
+/// is predictable in the wrong way: the same saver always follows the same
+/// saver forever, and the three toaster variants are adjacent in the table, so
+/// a walk shows them back to back to back. Excluding the current row by
+/// construction — rather than rolling again on a collision — makes "it never
+/// repeats itself" a property of the code instead of a probability.
+///
+/// Uniform turns for every saver, deliberately: the cheap ones do not get
+/// longer ones. That trades one number for a table of per-saver seconds to
+/// solve a problem nobody has — the expensive savers hold the target fps on
+/// this panel, so there is nothing to compensate for.
+pub struct Rotate {
+    every: Duration,
+    next: Instant,
+    rng: u32,
+}
+
+impl Rotate {
+    pub fn from_env(now: Instant) -> Self {
+        // Seeded off the clock so a restart does not replay the same order.
+        // Same trick sakura grows its tree from.
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
+            .unwrap_or(0x5EED_1234);
+        Self::new(
+            Duration::from_secs(env_num(&["SAVER_ROTATE_SECS"], 0, 0, 86_400) as u64),
+            now,
+            seed ^ std::process::id().wrapping_mul(0x9E37_79B9),
+        )
+    }
+
+    fn new(every: Duration, now: Instant, seed: u32) -> Self {
+        Self {
+            every,
+            next: now + every,
+            rng: seed,
+        }
+    }
+
+    /// The row to move to, or None when rotation is off or this saver's turn is
+    /// not up yet. `now` is the frame's OWN clock read, handed down rather than
+    /// taken here: with rotation off this is one compare per frame and no clock
+    /// read at all, and with it on it is no more than that. See CLAUDE.md on
+    /// the frame loop.
+    fn due(&mut self, now: Instant, cur: usize) -> Option<usize> {
+        if self.every.is_zero() || now < self.next {
+            return None;
+        }
+        self.restart(now);
+        // `1 + rand % (len - 1)` is a non-zero step, so the result is uniform
+        // over every row EXCEPT `cur`. A one-row table has nowhere to go.
+        let span = SAVERS.len().checked_sub(1).filter(|s| *s > 0)?;
+        Some((cur + 1 + next_rand(&mut self.rng) as usize % span) % SAVERS.len())
+    }
+
+    /// Give whatever is on screen now a full turn.
+    fn restart(&mut self, now: Instant) {
+        self.next = now + self.every;
+    }
+}
+
 /// Swap the saver if the mirror's selection moved. Shared verbatim by the DRM
 /// loop and the dump loop for the same reason `frame` is: a dump that ran its
 /// own copy of this would prove nothing about what runs on hardware.
@@ -110,24 +181,42 @@ pub fn make(name: &str, panel: &Panel, fps: u32) -> Box<dyn Saver> {
 /// Returns true when it switched, so the caller can log it on the thread that
 /// actually draws — the HTTP thread cannot know whether the render loop is
 /// running or parked in its no-monitor retry.
+///
+/// Rotation lands here rather than in either loop, for the same reason: a dump
+/// that rotated by its own rules would prove nothing about what the panel does.
+/// It moves the mirror's selection and then falls through the ordinary switch
+/// below, so an automatic move and a click are the same event from here down —
+/// including the `/meta` the page re-reads.
 pub fn switch(
     saver: &mut Box<dyn Saver>,
     selected: &mut usize,
+    rot: &mut Rotate,
+    now: Instant,
     mirror: &Mirror,
     panel: &Panel,
     fps: u32,
 ) -> bool {
+    if let Some(i) = rot.due(now, *selected) {
+        mirror.select_at(i);
+    }
     // One relaxed load per frame, same as the mirror's viewer count, and free
     // for the same reason: adjacent field, already-hot cache line, a plain load
     // with no barrier. Relaxed is right because the atomic publishes no data —
     // it indexes a const table that has existed since program start. Everything
     // a viewer observes travels through the meta and frame mutexes.
-    let now = mirror.selected();
-    if now == *selected {
+    let want = mirror.selected();
+    if want == *selected {
         return false;
     }
-    *selected = now;
-    *saver = make(name_at(now), panel, fps);
+    // A manual pick resets the interval, so clicking a saver buys it a WHOLE
+    // turn rather than however little was left of the last one's — being
+    // overridden a second after choosing is the infuriating version of this
+    // feature. It does not PAUSE rotation: a pause needs a resume, which is a
+    // second knob and a page that has to show which mode it is in, to save
+    // someone setting the interval to 0 in the deployment.
+    rot.restart(now);
+    *selected = want;
+    *saver = make(name_at(want), panel, fps);
     // The new grid geometry and palette differ, so this bumps the mirror's
     // epoch and every viewer reconnects onto the new /meta.
     announce(mirror, saver.as_ref());
@@ -177,5 +266,160 @@ mod tests {
         assert_eq!(index_of("nope"), None);
         // An unrecognised name must land on the first row, not panic.
         assert_eq!(make("nope", &panel, 30).name(), name_at(0));
+    }
+
+    /// The interval is the whole feature: a rotation that fires early is a
+    /// saver nobody gets to look at, and one that never fires is the knob doing
+    /// nothing. `Instant` is handed in rather than read, so this is exact
+    /// rather than a sleep that CI can lose a race to.
+    #[test]
+    fn a_turn_lasts_the_whole_interval_and_then_ends() {
+        let t0 = Instant::now();
+        let mut r = Rotate::new(Duration::from_secs(30), t0, 1);
+        assert_eq!(r.due(t0, 0), None);
+        assert_eq!(r.due(t0 + Duration::from_millis(29_999), 0), None);
+        assert!(r.due(t0 + Duration::from_secs(30), 0).is_some());
+        // And the next turn is a full interval from THERE, not from t0.
+        assert_eq!(r.due(t0 + Duration::from_secs(59), 0), None);
+        assert!(r.due(t0 + Duration::from_secs(60), 0).is_some());
+    }
+
+    /// Zero is the default and must be genuinely off — not a very short
+    /// interval, not a rotation on the first frame. A day of frames is well
+    /// past any interval this knob accepts.
+    #[test]
+    fn zero_never_rotates() {
+        let t0 = Instant::now();
+        let mut r = Rotate::new(Duration::ZERO, t0, 1);
+        for s in [0, 1, 30, 3600, 86_400, 172_800] {
+            assert_eq!(r.due(t0 + Duration::from_secs(s), 3), None, "at {s}s");
+        }
+    }
+
+    /// "Never the same saver twice in a row" is by construction, so check the
+    /// construction: from every row, over many rolls, the step is never zero
+    /// and never lands off the table.
+    #[test]
+    fn rotation_never_picks_the_saver_already_showing() {
+        let t0 = Instant::now();
+        let mut r = Rotate::new(Duration::from_secs(1), t0, 0xC0FF_EE01);
+        let mut steps = vec![false; SAVERS.len()];
+        let mut cur = 0;
+        for i in 1..=2000u32 {
+            let next = r.due(t0 + Duration::from_secs(i.into()), cur).unwrap();
+            assert_ne!(next, cur, "repeated {} at roll {i}", name_at(cur));
+            assert!(next < SAVERS.len());
+            steps[(next + SAVERS.len() - cur) % SAVERS.len()] = true;
+            cur = next;
+        }
+        // Every non-zero distance and no zero one. A fixed walk (always +1) and
+        // a roll too narrow to reach the far end of the table both pass the
+        // line above, and both are the wrong shuffle.
+        assert!(!steps[0], "a zero step is the repeat this test is about");
+        assert!(
+            steps[1..].iter().all(|&s| s),
+            "not every distance is reachable: {steps:?}"
+        );
+    }
+
+    /// A click must buy a full turn. Through `switch`, because the reset lives
+    /// on the path a click takes and not in the timer.
+    #[test]
+    fn a_manual_pick_restarts_the_interval() {
+        let panel = Panel::new(128, 128, 128);
+        let mirror = Mirror::new();
+        let t0 = Instant::now();
+        let mut rot = Rotate::new(Duration::from_secs(30), t0, 7);
+        let mut selected = mirror.selected();
+        let mut saver = make(name_at(selected), &panel, 30);
+
+        // 29 seconds in, someone picks something. One second of the turn left.
+        let at = t0 + Duration::from_secs(29);
+        assert!(mirror.select("dvd"));
+        assert!(switch(
+            &mut saver,
+            &mut selected,
+            &mut rot,
+            at,
+            &mirror,
+            &panel,
+            30
+        ));
+        assert_eq!(saver.name(), "dvd");
+
+        // The second that was left does not end their turn...
+        let at = t0 + Duration::from_secs(30);
+        assert!(!switch(
+            &mut saver,
+            &mut selected,
+            &mut rot,
+            at,
+            &mirror,
+            &panel,
+            30
+        ));
+        assert_eq!(saver.name(), "dvd");
+        // ...and neither does anything short of a full interval from the click.
+        let at = t0 + Duration::from_secs(58);
+        assert!(!switch(
+            &mut saver,
+            &mut selected,
+            &mut rot,
+            at,
+            &mirror,
+            &panel,
+            30
+        ));
+        assert_eq!(saver.name(), "dvd");
+        // 29 + 30: now it is up.
+        let at = t0 + Duration::from_secs(59);
+        assert!(switch(
+            &mut saver,
+            &mut selected,
+            &mut rot,
+            at,
+            &mirror,
+            &panel,
+            30
+        ));
+        assert_ne!(saver.name(), "dvd");
+    }
+
+    /// End to end through the call both loops make: the timer moves the
+    /// MIRROR's selection, so the picker and `/meta` follow the panel, and the
+    /// saver that is drawing actually changes.
+    #[test]
+    fn switch_rotates_the_panel_and_the_mirror_together() {
+        let panel = Panel::new(128, 128, 128);
+        let mirror = Mirror::new();
+        let t0 = Instant::now();
+        let mut rot = Rotate::new(Duration::from_secs(5), t0, 42);
+        let mut selected = mirror.selected();
+        let mut saver = make(name_at(selected), &panel, 30);
+        let first = saver.name();
+
+        assert!(!switch(
+            &mut saver,
+            &mut selected,
+            &mut rot,
+            t0 + Duration::from_secs(4),
+            &mirror,
+            &panel,
+            30
+        ));
+        assert_eq!(saver.name(), first);
+
+        assert!(switch(
+            &mut saver,
+            &mut selected,
+            &mut rot,
+            t0 + Duration::from_secs(5),
+            &mirror,
+            &panel,
+            30
+        ));
+        assert_ne!(saver.name(), first);
+        assert_eq!(name_at(mirror.selected()), saver.name());
+        assert_eq!(selected, mirror.selected());
     }
 }

@@ -44,6 +44,10 @@
 //!   `toasters3` or `city`. The
 //!   startup choice only: `POST /select?saver=<name>` on the web mirror
 //!   switches it live, and a restart goes back to this.
+//! * `SAVER_ROTATE_SECS` — seconds each saver holds the panel before another
+//!   one is picked at random, 0..=86400. **0, the default, is off.** Never the
+//!   saver already showing, and a `/select` gives the saver it picked a full
+//!   interval before rotation moves on again.
 //! * `SAVER_FPS`      — target frames/sec, 1..=120 (default 30)
 //! * `FIRE_CELL`      — ascii fire: character cell in px, 8..=64 (default 16)
 //! * `FIRE_SCALE`     — blocks fire: cell in px, 1..=16 (default 4)

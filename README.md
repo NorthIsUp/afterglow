@@ -31,7 +31,8 @@ falls back to `ascii` — a headless pod must never crash-loop on a typo.
 | `city`      | The After Dark night skyline — lit windows on a black silhouette, scattered stars, a beacon on the tallest tower and the odd shooting star.                                             | `CITY_WINDOW_PCT` (0..100, default 88), `CITY_TWINKLE` (window flips per second, default 40), `CITY_SKY_TWINKLE` (sky re-shades per second, default 12), `CITY_BEACON_MS` (beacon period, default 1500), `CITY_SHOOT_SECS` (mean seconds between shooting stars, 0 = off, default 60), `CITY_CELL_W` / `CITY_CELL_H` (12, 16) |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
-`DRM_DEVICE` (default `/dev/dri/card0`), `RETRY_SECONDS`.
+`SAVER_ROTATE_SECS` (0..86400, default 0 = off), `DRM_DEVICE` (default
+`/dev/dri/card0`), `RETRY_SECONDS`.
 
 All of these are plain deployment env changes — no image rebuild.
 
@@ -40,6 +41,36 @@ All of these are plain deployment env changes — no image rebuild.
 400 that changes nothing. The switch rebuilds the saver on the render thread and
 bumps the mirror's epoch, so viewers reconnect onto the new geometry exactly as
 they do for a modeset — and a restart goes back to whatever `SAVER` says.
+
+### Rotating on a timer
+
+`SAVER_ROTATE_SECS` moves the panel to another saver every N seconds. **0 is
+the default and means off**, so a deployment that does not set it behaves as it
+always did; anything outside 0..86400 falls back to 0 rather than being clamped,
+which is what every other numeric knob here does.
+
+`SAVER` still picks the STARTING saver — rotation moves on from there. The next
+one is drawn at random from the other rows, never the one already showing: a
+walk down the table is predictable in the wrong way (the three toaster variants
+are adjacent, so a walk shows them back to back to back), and excluding the
+current row by construction rather than re-rolling makes "it never repeats
+itself" a property of the code instead of a probability. Every saver gets the
+same length turn; there is no per-saver table of seconds, because the expensive
+ones hold the target fps on this panel and so there is nothing to compensate for.
+
+Clicking a saver on the mirror page **restarts the interval**, so a manual pick
+always gets a whole turn rather than the two seconds that happened to be left.
+It does not pause rotation: a pause needs a resume, which is a second knob plus
+a page that has to show which mode it is in, to save someone setting this to 0.
+
+A rotation is the same event as a click from `saver::switch` down, including the
+epoch bump — so every connected viewer's stream ends, it re-reads `/meta` and
+takes a keyframe. That is one keyframe per viewer per interval (32 KB for
+`matrix`, 1 MB for `blocks`, which is the widest grid here), on the viewer's own
+thread, and it is the cost a click has always had. The page used to sit out its
+two-second reconnect backoff and show an error banner on a stream that ended
+without a click; it now reconnects immediately and silently, because with this
+knob on that is a routine event rather than a fault.
 
 ### About the matrix saver
 

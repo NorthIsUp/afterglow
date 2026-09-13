@@ -108,6 +108,9 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
     // the mirror is told once and every frame after it is only cells.
     saver::announce(mirror, saver.as_ref());
     let mut selected = mirror.selected();
+    // Off unless SAVER_ROTATE_SECS says otherwise. Built here, not once in
+    // main, so a modeset retry gives the current saver a full turn.
+    let mut rot = saver::Rotate::from_env(Instant::now());
 
     let frame_dur = Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps));
     // simpledrm — the driver U-Boot hands over on a Pi5 — scans out of a SHADOW
@@ -124,7 +127,15 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
         let t0 = Instant::now();
         // One relaxed load per frame, same as the mirror's viewer count. The
         // new saver's grid geometry and palette differ, so announcing it bumps
-        if saver::switch(&mut saver, &mut selected, mirror, &panel, cfg.fps) {
+        if saver::switch(
+            &mut saver,
+            &mut selected,
+            &mut rot,
+            t0,
+            mirror,
+            &panel,
+            cfg.fps,
+        ) {
             eprintln!("[screensaver] now drawing {}", saver.name());
         }
         let damage = {

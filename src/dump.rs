@@ -76,6 +76,7 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
         (cfg.http != "off").then(|| Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps)));
     saver::announce(mirror, saver.as_ref());
     let mut selected = mirror.selected();
+    let mut rot = saver::Rotate::from_env(Instant::now());
 
     std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {dir}: {e}"))?;
     let log_path = format!("{dir}/damage.txt");
@@ -90,8 +91,19 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
 
     for n in 0..frames {
         let t0 = Instant::now();
-        // The same switch the DRM host honours, so /select is exercisable on a
-        saver::switch(&mut saver, &mut selected, mirror, &panel, cfg.fps);
+        // The same switch the DRM host honours, so /select and SAVER_ROTATE_SECS
+        // are both exercisable on a machine with no card.
+        if saver::switch(
+            &mut saver,
+            &mut selected,
+            &mut rot,
+            t0,
+            mirror,
+            &panel,
+            cfg.fps,
+        ) {
+            eprintln!("[dump] frame {n}: now drawing {}", saver.name());
+        }
         check.copy_from_slice(&buf);
         let damage = saver::frame(saver.as_mut(), &mut buf, &panel);
         mirror.publish(saver.grid().cells());

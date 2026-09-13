@@ -118,8 +118,16 @@ impl Mirror {
         let Some(i) = saver::index_of(name) else {
             return false;
         };
-        self.selected.store(i, Ordering::Relaxed);
+        self.select_at(i);
         true
+    }
+
+    /// Point the render loop at a row of `saver::SAVERS`. The by-index twin of
+    /// `select`, for the rotation timer — it picks a row rather than a name, so
+    /// there is nothing to validate. Every other caller must come through
+    /// `select`, which is where a user-supplied name is checked.
+    pub fn select_at(&self, i: usize) {
+        self.selected.store(i, Ordering::Relaxed);
     }
 
     /// Publish this frame's cells. Called from the render thread, once per
