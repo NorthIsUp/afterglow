@@ -67,6 +67,14 @@
     cursor: pointer;
     white-space: nowrap;
   }
+  #modes {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  #modes button {
+    margin-left: 0.2rem;
+  }
   #life {
     display: flex;
     flex-direction: column;
@@ -106,8 +114,10 @@
 <div id="pick"></div>
 <div id="status">connecting…</div>
 <div id="life">
-  <button id="lifetoggle" hidden>fit window</button>
-  <button id="calopen" hidden>calibrate</button>
+  <span id="modes" hidden
+    >actual <button id="mratio">ratio</button><button id="msize">size</button
+    ><button id="calopen">calibrate</button></span
+  >
   <div id="cal" hidden>
     <p>
       Hold a credit card against the screen and drag until the bar matches its
@@ -257,10 +267,53 @@
   // The panel is `panel_mm` wide and `panel_mm / ar` tall, `ar` already being
   // the shape the glass shows rather than the framebuffer's. Sized in CSS px
   // off the viewer's own measurement.
-  // ON by default. The panel is 190x59mm, which at any plausible px-per-mm is a
-  // few hundred CSS px — small enough that defaulting to it cannot produce a
-  // page that overflows someone's window.
-  let actual = true;
+  // Two ways to be faithful to the panel, and they are not the same thing:
+  //
+  //   ratio — the panel's SHAPE, scaled to fit the window. Always exactly
+  //           right, because it needs nothing the browser cannot know.
+  //   size  — the panel's SHAPE AND PHYSICAL SIZE. Needs px-per-mm, which
+  //           only the viewer can supply, so it is exact after `calibrate`
+  //           and a nominal-inch guess before.
+  //
+  // Remembered per device: someone who wants one of them usually wants it
+  // every time.
+  const MODEKEY = "mirror.mode";
+  let mode = "size";
+
+  function loadMode() {
+    try {
+      const m = localStorage.getItem(MODEKEY);
+      if (m === "ratio" || m === "size") mode = m;
+    } catch {
+      /* keep the default */
+    }
+  }
+
+  function setMode(m) {
+    mode = m;
+    try {
+      localStorage.setItem(MODEKEY, m);
+    } catch {
+      /* the choice just does not persist */
+    }
+    paintModes();
+    applyActualSize();
+  }
+
+  function paintModes() {
+    const r = document.getElementById("mratio");
+    const z = document.getElementById("msize");
+    if (!r) return;
+    r.setAttribute("aria-pressed", String(mode === "ratio"));
+    z.setAttribute("aria-pressed", String(mode === "size"));
+    // Say WHICH number `size` is using: uncalibrated it is the browser's
+    // nominal inch, a guess, and a viewer holding the page against the real
+    // panel deserves to know that before concluding the maths is wrong.
+    z.textContent = calibrated() ? "size ✓" : "size";
+    z.title = calibrated()
+      ? "matched to your screen"
+      : "using the browser's nominal 96dpi — calibrate to make it exact";
+  }
 
   function applyActualSize() {
     applyActualSizeWith(pxPerMm());
@@ -268,7 +321,10 @@
 
   function applyActualSizeWith(k) {
     const mm = meta && meta.panel_mm;
-    if (!actual || !mm || !k) {
+    // `ratio` is the CSS default path: clearing the inline sizes hands the
+    // canvas back to the max-width rule, which is driven by --ar and is
+    // therefore already the panel's shape.
+    if (mode !== "size" || !mm || !k) {
       canvas.style.width = "";
       canvas.style.height = "";
       canvas.style.maxWidth = "";
@@ -287,24 +343,27 @@
     canvas.style.width = w + "px";
     canvas.style.height = h + "px";
     fitScaling();
-    const over = w > innerWidth || h > innerHeight - 48;
-    // Say WHICH number is in use: an uncalibrated page is showing the browser's
-    // nominal inch, which is a guess, and a viewer comparing it to the real
-    // panel deserves to know that before concluding the maths is wrong.
-    document.getElementById("lifetoggle").textContent = over
-      ? "actual size — too big for this window"
-      : calibrated()
-        ? "actual size ✓"
-        : "actual size (uncalibrated)";
+    const z = document.getElementById("msize");
+    if (w > innerWidth || h > innerHeight - 48) {
+      z.textContent = "size — too big for this window";
+    }
   }
 
   function initActualSize(m) {
-    const t = document.getElementById("lifetoggle");
+    const box = document.getElementById("modes");
     const c = document.getElementById("calopen");
-    // No measurement on the server means nothing here can be honest about
-    // millimetres, so neither control appears at all.
-    t.hidden = c.hidden = !m.panel_mm;
-    if (!m.panel_mm) return;
+    const r = document.getElementById("mratio");
+    // Without a measured panel, `size` and `calibrate` cannot be honest about
+    // millimetres — but `ratio` needs nothing the browser does not already
+    // have, so it is always correct and the CSS default anyway. Hide the whole
+    // group rather than offer two buttons where one of them lies.
+    box.hidden = !m.panel_mm;
+    if (!m.panel_mm) {
+      mode = "ratio";
+      return;
+    }
+    loadMode();
+    paintModes();
     const cal = document.getElementById("cal");
     const slider = document.getElementById("slider");
     const card = document.getElementById("card");
@@ -315,13 +374,8 @@
       now.textContent = `${(k * 25.4).toFixed(0)} dpi · panel ${(meta.panel_mm * k) | 0}px wide`;
     };
 
-    t.setAttribute("aria-pressed", String(actual));
-    t.onclick = () => {
-      actual = !actual;
-      t.setAttribute("aria-pressed", String(actual));
-      if (!actual) t.textContent = "fit window";
-      applyActualSize();
-    };
+    r.onclick = () => setMode("ratio");
+    document.getElementById("msize").onclick = () => setMode("size");
     c.onclick = () => {
       cal.hidden = !cal.hidden;
       slider.value = pxPerMm();
@@ -339,20 +393,20 @@
       }
       slider.value = NOMINAL_PX_MM;
       draw();
+      paintModes();
       applyActualSize();
     };
     document.getElementById("caldone").onclick = () => {
       setPxPerMm(parseFloat(slider.value));
       cal.hidden = true;
-      actual = true;
-      t.setAttribute("aria-pressed", "true");
-      applyActualSize();
+      // Calibrating is only meaningful for `size`, so finishing implies it.
+      setMode("size");
     };
     // A live preview while dragging: the canvas resizes under the slider, so
     // the viewer sees the panel grow toward its real size rather than having to
     // commit and then judge.
     slider.addEventListener("input", () => {
-      if (actual) applyActualSizeWith(parseFloat(slider.value));
+      if (mode === "size") applyActualSizeWith(parseFloat(slider.value));
     });
   }
 

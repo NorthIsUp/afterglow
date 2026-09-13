@@ -111,18 +111,30 @@ default) meaning nobody has measured it. It is not discoverable — this monitor
 EDID is 0 bytes, so its physical size exists nowhere the Pi can read, and it has
 to be typed in by someone with a ruler. Nothing in the render path reads it.
 
-Set it and the mirror page grows an **actual size** button that sizes the canvas
-to the same physical rectangle as the panel, so a saver on the web page is the
-size it is on the wall.
+Set it and the mirror page grows three controls, labelled `actual`:
 
-**It is on by default.** CSS cannot supply the other half of the sum — how big
+|               |                                                                                                                       |
+| ------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **ratio**     | the panel's SHAPE, scaled to fit the window. Always exactly right — it needs nothing the browser cannot already know. |
+| **size**      | the panel's shape AND physical size, so a saver on the page is the size it is on the wall.                            |
+| **calibrate** | teaches the page how big your screen is, which is what makes `size` exact.                                            |
+
+`ratio` and `size` are modes, and the choice is remembered per device. Without
+`SAVER_PANEL_MM` the whole group is hidden: `ratio` is the CSS default anyway,
+and offering `size` next to it would be offering a button that lies.
+
+**`size` is the default.** CSS cannot supply the other half of the sum — how big
 the viewer's own monitor is — because `width: 200mm` is 200mm only when the
 browser's CSS inch is a real inch, which on a scaled or HiDPI display it is not.
-Uncalibrated, the page uses the nominal 96 CSS px to the inch, which is within a
-few per cent on an unscaled display and can be well out on a scaled one. The
-button says `actual size (uncalibrated)` when that is what it is doing, because a
-viewer holding the page up against the real panel deserves to know the number is
-a guess before concluding the maths is wrong.
+Uncalibrated, the page uses the nominal 96 CSS px to the inch: within a few per
+cent on an unscaled display, well out on a scaled one. The button reads `size ✓`
+only once calibrated, because a viewer holding the page up against the real panel
+deserves to know the number is a guess before concluding the maths is wrong. If
+the result is larger than the window it says `size — too big for this window`
+rather than shrinking, since a shrunk actual size is not one.
+
+`ratio` is the escape hatch for exactly that case, and for a small window: the
+shape is still exactly the panel's, it just fits.
 
 **calibrate** makes it exact, and can be reopened at any time to re-adjust:
 hold a credit card against the screen and drag the bar to match it. An ID-1 card
