@@ -40,6 +40,12 @@ use crate::{env_num, next_rand};
 const LEVELS: usize = 8;
 const MAX_CURVES: usize = 3;
 
+/// Total curve samples the constructor may pre-draw. Each one is two sines, so
+/// this is the constructor's whole cost: ~8k samples is ~170us here and under a
+/// millisecond on the Pi, against 13ms for an uncapped pre-draw at the top of
+/// the env ranges.
+const PREWARM_SAMPLES: u32 = 8_000;
+
 /// Full brightness in fixed point: the top of `LEVELS` 256-wide buckets, so a
 /// cell's level is `heat >> 8` with no divide.
 const HEAT_MAX: u16 = (LEVELS as u16) * 256 - 1;
@@ -192,9 +198,18 @@ impl Lissajous {
 
         // Draw the trail the pen would already have left. Without this the
         // panel opens on a single moving dot and takes a full fade to look
-        // like anything; the steady state is one fade's worth of frames, so
-        // running exactly that costs a few hundred microseconds once.
-        for _ in 0..(fade_ms * fps / 1000).max(1) {
+        // like anything.
+        //
+        // Capped at a sample budget rather than run for the whole fade. This
+        // runs on the RENDER thread every time the mirror switches saver, and
+        // a full fade at the top of the env ranges is 2.4M sines — 13ms on a
+        // laptop, well past a 15fps frame on the Pi. A short pre-draw opens on
+        // a short trail that grows to full length within one fade; a stall
+        // drops frames on whatever the viewer switched away from.
+        let frames = (fade_ms * fps / 1000)
+            .min(PREWARM_SAMPLES / me.samples.max(1))
+            .max(1);
+        for _ in 0..frames {
             me.step();
         }
         me
@@ -331,9 +346,15 @@ mod tests {
     }
 
     /// T2. Every scanline whose pixels changed is inside a damage run —
-    /// otherwise simpledrm scans out the previous frame there forever. The
-    /// companions keep this from being a bound nothing approaches: damage must
-    /// be non-empty and must stay under a full repaint.
+    /// otherwise simpledrm scans out the previous frame there forever.
+    ///
+    /// The frame count is the load-bearing part. This ran 200 frames and
+    /// asserted damage stayed UNDER a full repaint, which was true only inside
+    /// that window: the trail keeps growing, the first full repaint lands
+    /// around frame 663, and after that a frame damages 430-1072 rows with a
+    /// mean near 900. A bound that holds because the loop stops early is worse
+    /// than no bound. So the run reaches steady state, and the companions state
+    /// what steady state is — Model A, most of the panel, most frames.
     #[test]
     fn damage_covers_every_changed_scanline() {
         let p = panel();
@@ -345,7 +366,7 @@ mod tests {
 
         let mut worst = 0usize;
         let mut total = 0usize;
-        const FRAMES: usize = 200;
+        const FRAMES: usize = 1200;
         for n in 1..FRAMES {
             prev.copy_from_slice(&buf);
             let d = saver::frame(&mut c, &mut buf, &p);
@@ -364,10 +385,57 @@ mod tests {
             total += d.rows();
         }
         let mean = total / (FRAMES - 1);
-        assert!(mean > 0, "nothing moved: the coverage check proves nothing");
+        let full = c.grid.rows() * c.grid.cell_h();
+        // Model A, stated as an assertion rather than only in the module doc:
+        // the fade repaints the whole trail, so a full repaint is REACHED, and
+        // the typical frame is most of the panel. Measured here: full is first
+        // reached around frame 663, mean ~900 of 1072 rows. A change that made this
+        // genuinely sparse would fail both, and would be right to — but then
+        // the doc has to move too.
+        assert_eq!(worst, full, "a full repaint is never reached: {worst} rows");
         assert!(
-            worst < c.grid.rows() * c.grid.cell_h(),
-            "a full repaint every frame: {worst} rows"
+            mean * 2 > full,
+            "the typical frame damages {mean} of {full} rows — this is sparse \
+             now, and the module doc says it is not"
+        );
+    }
+
+    /// T6. The fade rate IS the effect: it sets how long the trail is, and
+    /// `LISSAJOUS_FADE_MS` is also the knob for cutting the saver's cost. A cell
+    /// lit to full must go dark in about the configured time and no other.
+    ///
+    /// Stated on `step`, not on `decay`, because the bug this catches is in the
+    /// per-frame subtraction — a `saturating_sub(1)` there is a 136-second
+    /// trail that saturates the panel, and every other test in this file passes
+    /// with it.
+    #[test]
+    fn a_cell_fades_out_in_the_configured_time() {
+        // The defaults, restated: `new` reads them from env and the test cannot
+        // set env without racing every other test in the binary.
+        const FADE_MS: usize = 9_000;
+        const FPS: u32 = 15;
+        let p = panel();
+        let mut c = Lissajous::new(&p, FPS);
+        // Every cell at full: the pen re-lights a few hundred a frame, so the
+        // MINIMUM is a cell it has not touched since, decaying untouched.
+        for h in c.heat.iter_mut() {
+            *h = HEAT_MAX;
+        }
+        let mut frames = 0usize;
+        while c.heat.iter().copied().min().unwrap() > 0 {
+            c.step();
+            frames += 1;
+            assert!(frames < 10_000, "nothing ever faded out");
+        }
+        let want = FADE_MS * FPS as usize / 1000;
+        // +/-15%: the decay is an integer per frame (15 of 2047 at the
+        // defaults), so the achievable time is quantised, and rounding costs
+        // ~1.5% here. Anything looser stops pinning the trail length.
+        assert!(
+            frames * 100 >= want * 85 && frames * 100 <= want * 115,
+            "a full cell took {frames} frames to fade, not ~{want}: the trail \
+             is {:.1}x the configured {FADE_MS}ms",
+            frames as f64 / want as f64
         );
     }
 
@@ -517,29 +585,6 @@ mod tests {
             c.dots[0],
             dot_bit(1, 2) | dot_bit(1, 3),
             "a cell relit on the very next frame lost the dots it just drew"
-        );
-    }
-
-    /// T7. The fade takes `LISSAJOUS_FADE_MS`. `decay` is what `fresh` is
-    /// derived from, so a change that widened the freshness window by slowing
-    /// the fade would pass T6 and quietly leave nine-second trails at eighteen.
-    #[test]
-    fn a_cell_fades_out_in_the_configured_time() {
-        let p = Panel::new(320, 200, 320);
-        let fps = 15u32;
-        let mut c = Lissajous::new(&p, fps);
-        c.heat[0] = HEAT_MAX;
-        let mut frames = 0u32;
-        while c.heat[0] > 0 {
-            c.heat[0] = c.heat[0].saturating_sub(c.decay);
-            frames += 1;
-            assert!(frames < 10_000, "the trail never fades");
-        }
-        // Default LISSAJOUS_FADE_MS.
-        let want = 9000 * fps / 1000;
-        assert!(
-            frames.abs_diff(want) * 100 <= want * 15,
-            "a full-heat cell took {frames} frames to fade, wanted ~{want}"
         );
     }
 
