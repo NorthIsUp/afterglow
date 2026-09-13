@@ -1,3 +1,72 @@
+//! Speeder — a first-person chase through the forest moon, low and fast between
+//! redwood trunks. The trunks are the obstacle and the scenery at once.
+//!
+//! # What it is, and what it is not
+//!
+//! `warp` is a point field streaming out of a vanishing point; this is a
+//! CORRIDOR of tall solid columns with a lit floor under it and a canopy over
+//! it. The near miss is the subject: the camera weaves on two incommensurate
+//! sines, and one spawn in [`NEAR_MISS_IN`] is placed by predicting where the
+//! camera WILL be when that trunk arrives, offset by a metre — so trunks really
+//! do graze the frame rather than happening to. A trunk whose screen position
+//! moved more than `blur_cols` in a frame is stamped in `SHADE` rather than
+//! `SOLID`, which is the stipple that reads as motion blur at the edges, where
+//! the parallax is fastest.
+//!
+//! # Geometry lives in CELLS, which is the aspect correction
+//!
+//! The grid is built square — `Grid::new(panel, cell, cell)` — so
+//! `SAVER_PIXEL_ASPECT` makes the cell as much taller in framebuffer pixels as
+//! the panel then squashes it, and one cell is SQUARE ON THE GLASS at any
+//! aspect. Every number here is therefore in cells (on screen) and metres (in
+//! the world), one focal length serves both axes, and nothing needs the
+//! explicit stretch `warp` and `moire` carry. What does change at 180 is that
+//! there are half as many ROWS: the vertical field of view is genuinely
+//! narrower on a 1280x400 panel, the horizon still sits at
+//! `rows * SPEEDER_HORIZON`, and trunks run off the top of the frame instead of
+//! ending under the canopy. `the_projection_is_square_pixel_derived` pins both
+//! halves of that.
+//!
+//! # The floor and the ceiling are the same trick
+//!
+//! One screen row is one depth. Below the horizon the row is a point on the
+//! ground plane `CAM_H` below the eye; above it, a point on the canopy
+//! underside `CANOPY_H - CAM_H` above. Either way `z = height * focal /
+//! |row - horizon|`, so a row costs one divide and a cell costs one multiply
+//! into a wrapping 64x64 light tile. That tile IS the dappled light: baked once
+//! from four integer harmonics so it wraps seamlessly, sampled in WORLD
+//! coordinates, so the pools of light stream toward the camera with the right
+//! parallax and drift sideways on their own as the canopy moves.
+//!
+//! # Per-frame cost
+//!
+//! Full repaint (`Grid::flush`, never `flush_sparse` — a hand-kept dirty list
+//! here would have to describe overlapping trunks, and would under-report the
+//! first time two of them crossed). The background is one pass over the cells
+//! with a divide per ROW; trunks are painted over it far-to-near, so the total
+//! is cells plus the overdraw of however many trunks are close enough to be
+//! wide. Nothing in `render` allocates: the trunk pools are sized in `new` and
+//! recycled as they pass the camera, and `order` is sorted in place.
+//!
+//! # Knobs
+//!
+//! * `SPEEDER_CELL` — cell side in px, 4..=32 (default 8). Square: see above.
+//! * `SPEEDER_SPEED` — metres per second, 10..=300 (default 58).
+//! * `SPEEDER_TRUNKS` — trunks alive in the corridor, 8..=400 (default 60).
+//! * `SPEEDER_FOV` — focal length as a per-cent of the panel's COLUMNS,
+//!   20..=200 (default 62). Smaller is wider-angle and faster-looking.
+//! * `SPEEDER_HORIZON` — eye line as a per-cent of rows, 10..=80 (default 44).
+//! * `SPEEDER_WEAVE` — how far the bike swings off the path, in DECIMETRES,
+//!   0..=200 (default 64). 0 flies straight and gives up the whole point.
+//! * `SPEEDER_DAPPLE` — per-cent of the forest floor lying in a pool of light,
+//!   0..=100 (default 34).
+//! * `SPEEDER_LOG_SECS` — mean seconds between fallen trunks to duck under,
+//!   0..=600 (default 16; 0 = off).
+//! * `SPEEDER_RIDER_SECS` — mean seconds between another bike crossing the
+//!   view, 0..=600 (default 12; 0 = off).
+//! * `SPEEDER_SEED` — 0 (default) rolls one from the clock and the pid; any
+//!   other value reproduces the ride exactly.
+
 use crate::font;
 use crate::grid::{bake, Cell, Grid};
 use crate::saver::Saver;

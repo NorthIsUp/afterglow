@@ -70,9 +70,17 @@ So the panel rescales our output **non-uniformly**: 1920→1280 is 1.5x, 1080→
 is 2.7x. Everything reaches the glass squashed vertically by 2.7/1.5 = **1.8x** —
 a circle is a wide ellipse, a square a wide rectangle.
 
-`SAVER_PIXEL_ASPECT` is that number in per-cent: "one framebuffer pixel is this
-much taller than it is wide once the panel has finished rescaling", so **180** on
-pine and **100** (the default) everywhere else. It is a **process-wide** knob, not
+`SAVER_PIXEL_ASPECT` is that number in per-cent: **how much taller a cell must
+be DRAWN so that it lands square on the glass** — so **180** on pine and **100**
+(the default) everywhere else.
+
+Read it that way round and nothing else. A framebuffer pixel lands _shorter_
+than it is wide on this panel, never taller; the stretch is the compensation,
+not the symptom. Stating it the other way is what made `xwing` multiply where it
+should have divided, composing a 1:1 picture onto 3.2:1 glass. Converting a
+`Grid` dimension back to square-glass units is therefore always a DIVISION by
+`pixel_aspect()`, because `Grid::new` has already multiplied — `marble.rs` and
+`xwing.rs` both do it and both say so. It is a **process-wide** knob, not
 a per-saver one, and 100 is a byte-for-byte no-op — proved by dumping all 25
 savers before and after and diffing the PPMs.
 

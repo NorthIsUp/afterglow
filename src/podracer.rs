@@ -1,3 +1,86 @@
+//! Podracer — the Boonta Eve course from inside the cockpit. Two engines hang
+//! ahead of you on their cables, the canyon rips past on both sides, and the
+//! Tatooine floor blurs underneath at a speed nothing else in the rotation is
+//! trying to convey.
+//!
+//! # What it is, and what it is not
+//!
+//! `warp` is a point field with a divide. This is a raster: every cell of the
+//! panel carries an ochre, rust or bone colour every frame, so there is no
+//! black anywhere except inside the engine bells. Three things carry it:
+//!
+//! * **The engines.** Always in frame, ahead and to the sides, cables running
+//!   back toward the viewer, exhaust bells flaring. They are the only
+//!   foreground object of their kind in the rotation and they are what makes a
+//!   still frame recognisable.
+//! * **The canyon.** Walls left and right, close enough to feel, on a route
+//!   that weaves and occasionally pinches into a slot barely wider than the
+//!   pod. Arches and rock spires come out of the haze and pass.
+//! * **Speed.** Transverse bands on the floor, striation on the walls, heat
+//!   shimmer over the horizon.
+//!
+//! # How the picture is built
+//!
+//! One ray per CELL COLUMN, marched forward in geometric depth steps until it
+//! leaves the corridor (`|X - centre(u)| > halfw(u)`), then three bisections to
+//! land the wall. That hit gives the column its wall span; below it the floor
+//! is the ordinary ground-plane solve `z = fy * CAM_H / (py - horizon)`, and
+//! above it is sky. Arches and spires are then painted far-to-near over that,
+//! and the engines and their cables over everything.
+//!
+//! `hit_z` IS the depth buffer, one entry per cell column: arches, spires and
+//! engine wash all test against it (`in_front_of_wall`) before they paint, so
+//! rock nearer than they are hides them. Without that test a hazy arch 400 m
+//! away cut a hard-edged pale rectangle through a wall ten metres from the
+//! camera — which is what the panel showed, and what
+//! `a_feature_behind_the_wall_is_hidden_by_it` now holds shut.
+//!
+//! Every cell is a SOLID glyph: `Grid` paints a glyph's unlit pixels BLACK, so
+//! a cell is one colour on black and a half-block would punch a hole in the
+//! desert rather than blend two colours. Detail therefore lives in the palette
+//! index, not in the glyph — which is also why the ramps are six steps deep per
+//! material rather than three.
+//!
+//! # Pixel aspect
+//!
+//! Every length here is a SQUARE-pixel length. The projection's vertical half,
+//! `fy`, is `f * SAVER_PIXEL_ASPECT / 100` — the same correction `warp` makes,
+//! for the same reason: this saver measures in framebuffer pixels, so the cell
+//! cannot carry the correction for it. A feature at fraction `q` of the panel
+//! height at aspect 100 therefore sits at `0.5 + (q - 0.5) * 1.8` at aspect
+//! 180, and the vertical field of view narrows to match the glass. That
+//! relation is what `the_picture_is_stretched_for_the_panel_not_squashed`
+//! asserts, in cell rows, at both aspects.
+//!
+//! # Per-frame cost
+//!
+//! Full repaint class (`Grid::flush`, never `flush_sparse`): nearly every cell
+//! changes every frame because the whole world is moving, so a hand-maintained
+//! dirty list would be the whole panel with extra bookkeeping. The arithmetic
+//! is per COLUMN (a ray of ~60 steps) plus per CELL (a handful of adds), and
+//! every buffer — rays, features, wash particles, draw order — is sized in
+//! `new`, so `render` allocates nothing.
+//!
+//! # Knobs
+//!
+//! * `PODRACER_CELL` — cell side in px, 4..=32, default 8.
+//! * `PODRACER_SPEED` — course metres per second, 40..=900, default 300.
+//! * `PODRACER_FOV` — focal length as a per-cent of panel width, 30..=200,
+//!   default 78.
+//! * `PODRACER_WIDTH` — canyon half-width in metres at its widest, 6..=90,
+//!   default 30.
+//! * `PODRACER_PINCH` — how far the canyon closes at a slot, per-cent of that
+//!   half-width, 0..=90, default 64.
+//! * `PODRACER_SPREAD` — engine separation, per-cent of panel width, 10..=90,
+//!   default 46.
+//! * `PODRACER_ENGINE` — engine radius, per-cent of panel width, 3..=30,
+//!   default 7, capped at 22% of the aspect-corrected panel height.
+//! * `PODRACER_SHIMMER` — heat shimmer over the horizon, 0..=100, default 70.
+//! * `PODRACER_FEATURES` — arches and spires alive at once, 0..=24, default 7.
+//! * `PODRACER_WASH_SECS` — mean seconds between a rival's engine wash crossing
+//!   the view, 0 (off)..=600, default 9.
+//! * `PODRACER_SEED` — 0 rolls one from the clock and the pid; any other value
+//!   reproduces the run exactly.
 use crate::font;
 use crate::grid::{bake, pixel_aspect, Cell, Grid};
 use crate::saver::Saver;
@@ -496,6 +579,26 @@ impl Podracer {
         }
     }
 
+    /// Is anything at `z` visible in this column, or is the canyon wall in
+    /// front of it?
+    ///
+    /// `hit_z` is where that column's ray leaves the corridor, so it IS the
+    /// depth buffer — one entry per cell column, already computed for the wall
+    /// span. Arches, spires and engine wash all sit in the same world as the
+    /// walls and every one of them was composited without asking: a hazy arch
+    /// 400 m away painted a hard-edged pale rectangle straight through a wall
+    /// that was ten metres from the camera. That is the "clipping on the
+    /// arches and the canyon walls" this exists to stop.
+    ///
+    /// A feature EMBEDDED in the rock (an arch springs from the walls, so its
+    /// outer third is inside them) is hidden by the same test, which is what
+    /// makes the springing look like it grows out of the wall instead of
+    /// standing in front of it.
+    #[inline]
+    fn in_front_of_wall(&self, cx: usize, z: f32) -> bool {
+        z < self.hit_z[cx]
+    }
+
     /// Paint a vertical run of one column, in PIXELS, clipped to the grid.
     /// Rows are claimed by their centre, which is what keeps a span that is
     /// thinner than a cell from disappearing and reappearing as it moves.
@@ -564,6 +667,9 @@ impl Podracer {
         let ground = self.py_of(0.0, z);
         let y_top = self.py_of(top, z);
         for cx in a..b.min(self.grid.cols()) {
+            if !self.in_front_of_wall(cx, z) {
+                continue;
+            }
             let px = (cx as f32 + 0.5) * cw;
             // Invert the projection for this column at the arch's depth.
             let x = self.cam_x + z * ((px - self.w * 0.5) / self.f + self.hdg);
@@ -601,6 +707,9 @@ impl Podracer {
         let ground = self.py_of(0.0, z);
         let cols = self.grid.cols();
         for cx in a..b.min(cols) {
+            if !self.in_front_of_wall(cx, z) {
+                continue;
+            }
             // A spire tapers: the outer columns are shorter than the axis.
             let q = if b > a + 1 {
                 (cx - a) as f32 / (b - 1 - a) as f32 * 2.0 - 1.0
@@ -662,6 +771,9 @@ impl Podracer {
             let a = ((cx0 - r * 2.2) / cw).max(0.0) as usize;
             let b = (((cx0 + r * 2.2) / cw).ceil().max(0.0) as usize).min(self.grid.cols());
             for cx in a..b {
+                if !self.in_front_of_wall(cx, z) {
+                    continue;
+                }
                 let dx = ((cx as f32 + 0.5) * cw - cx0) / (r * 2.2);
                 if dx.abs() >= 1.0 {
                     continue;
@@ -1198,6 +1310,90 @@ mod tests {
             sky_frames > 120,
             "only {sky_frames} of 240 frames showed any sky over the rim"
         );
+    }
+
+    /// A feature BEHIND the canyon wall must be hidden by it.
+    ///
+    /// This is the bug the panel showed: arches and spires are separate
+    /// geometry composited over the ray-cast walls, and for the first cut they
+    /// were composited with no depth test at all — so a hazy arch 400 m up the
+    /// course painted a hard-edged pale rectangle straight through a wall that
+    /// was ten metres away, cutting a notch out of the strata on both sides.
+    ///
+    /// Driven through the painters rather than through `render`, because the
+    /// whole point is to put geometry at a depth the course would rarely hand
+    /// out on its own: every feature and every wash blob is parked at 800 m,
+    /// behind every wall on the panel, and the frame must come back byte for
+    /// byte the same as the walls alone drew it.
+    #[test]
+    fn a_feature_behind_the_wall_is_hidden_by_it() {
+        let (p, mut s) = seeded(1920, 1080, 180, 4242);
+        let mut buf = vec![0u32; p.buf_len()];
+        for _ in 0..10 {
+            saver::frame(&mut s, &mut buf, &p);
+        }
+        let cells = s.grid.cols() * s.grid.rows();
+
+        s.fly();
+        s.cast();
+        s.paint_world();
+        let walls_only: Vec<Cell> = (0..cells).map(|i| s.grid.cell(i)).collect();
+        // The premise: on this frame every column really is walled in nearer
+        // than PARK, the depth the geometry below sits at. Without this the
+        // test passes by drawing nothing anywhere.
+        //
+        // PARK is as far as it can be while an engine-wash blob is still a
+        // whole cell tall there — parked at 800 m the wash covers no row and
+        // its missing depth test would go unnoticed.
+        const PARK: f32 = 400.0;
+        assert!(
+            s.hit_z.iter().all(|z| *z < PARK),
+            "a column sees past {PARK} m, so nothing parked there is behind every wall"
+        );
+
+        // One of each painter, all of it a long way behind the rock.
+        for i in 0..s.f_z.len() {
+            s.f_kind[i] = if i == 0 { ARCH } else { SPIRE };
+            s.f_z[i] = PARK + s.ds;
+        }
+        s.wash_in = 1.0e6;
+        for i in 0..s.w_z.len() {
+            s.w_z[i] = PARK + s.ds;
+            s.w_x[i] = 0.0;
+            s.w_y[i] = CAM_H;
+            s.w_vx[i] = 0.0;
+            s.w_life[i] = 5.0;
+        }
+        s.paint_features();
+        s.paint_wash();
+        let after: Vec<Cell> = (0..cells).map(|i| s.grid.cell(i)).collect();
+        let bled = walls_only
+            .iter()
+            .zip(&after)
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(
+            bled, 0,
+            "{bled} cells of wall were painted over from {PARK} m"
+        );
+
+        // ...and the painters are not simply no-ops: the same geometry in
+        // FRONT of the rock has to reach the panel.
+        assert!(
+            s.hit_z.iter().any(|z| *z > 60.0),
+            "no column is open far enough to put a feature in front of"
+        );
+        for i in 0..s.f_z.len() {
+            s.f_z[i] = 30.0 + s.ds;
+        }
+        for i in 0..s.w_z.len() {
+            s.w_z[i] = 30.0 + s.ds;
+            s.w_life[i] = 5.0;
+        }
+        s.paint_features();
+        s.paint_wash();
+        let drawn = (0..cells).filter(|&i| s.grid.cell(i) != after[i]).count();
+        assert!(drawn > 0, "nothing in front of the wall reached the panel");
     }
 
     /// Nothing in the palette may be green or blue: the whole point of this

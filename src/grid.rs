@@ -19,8 +19,16 @@ use std::sync::OnceLock;
 use crate::font;
 use crate::surface::{Panel, Surface};
 
-/// How much taller than wide one framebuffer pixel lands on the panel, in
-/// per-cent. 100 is square and is a byte-for-byte no-op; pine's panel is 180.
+/// How much taller a CELL must be drawn so it lands square on the glass, in
+/// per-cent. 100 is no correction and is a byte-for-byte no-op; pine's panel is
+/// 180.
+///
+/// NOT "how much taller a framebuffer pixel is" — it lands SHORTER than it is
+/// wide there, and the stretch is the compensation. Getting that backwards is
+/// what made `xwing` multiply where it should divide.
+///
+/// `Grid::new` applies it, so `cell_h()` is ALREADY multiplied. Converting a
+/// grid dimension back to square-glass units is a DIVISION by this.
 ///
 /// Read once per process, not per `Grid`: this is a property of the monitor,
 /// and a saver switch must not pay an env lookup on the render thread.
