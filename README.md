@@ -20,14 +20,13 @@ writes pixels straight into a DRM/KMS dumb buffer.
 Pick one with `SAVER` (older spelling: `FIRE_STYLE`). Anything unrecognised
 falls back to `ascii` — a headless pod must never crash-loop on a typo.
 
-| `SAVER`     | What                                                                                                                                                                                              | Knobs                                                                                                                                                                                                                        |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ascii`     | Doom fire as an ASCII ramp (`" .:-=+*#%@"`), one heat sample per character cell, coloured by the 37-step fire palette. The default.                                                               | `FIRE_CELL` (px, 8..64, default 16)                                                                                                                                                                                          |
-| `blocks`    | The same fire drawn as chunky pixels — a solid glyph per cell.                                                                                                                                    | `FIRE_SCALE` (px, 1..16, default 4)                                                                                                                                                                                          |
-| `matrix`    | Digital rain.                                                                                                                                                                                     | `MATRIX_CELL_W` (8..64, default 16), `MATRIX_CELL_H` (8..128, default 32)                                                                                                                                                    |
-| `toasters`  | Flying toasters, after After Dark's.                                                                                                                                                              | `TOASTER_DENSITY` (per 1000 cells, 1..60, default 4), `TOASTER_SPEED` (px/sec, 8..2000, default 170), `TOASTER_TOAST_PCT` (0..100, default 25), `TOASTER_FLAP_FPS` (1..120, default 15), `TOASTER_CELL_W` / `TOASTER_CELL_H` |
-| `toasters3` | The same flock drawn with BRAILLE (U+2800..28FF): a 2x4 dot matrix per cell, so one 16x6-cell toaster is a 32x24 bitmap — real slot openings, a dial, a lever, barbed wings. One model, not four. | `TOASTER3_DENSITY` (per 1000 cells, 1..60, default 2), `TOASTER3_SPEED`, `TOASTER3_TOAST_PCT`, `TOASTER3_FLAP_FPS`, `TOASTER3_CELL_W` / `TOASTER3_CELL_H`                                                                    |
-| `city`      | The After Dark night skyline — lit windows on a black silhouette, scattered lights in the sky, everything twinkling in place.                                                                     | `CITY_WINDOW_PCT` (0..100, default 88), `CITY_TWINKLE` (window flips per second, default 40), `CITY_SKY_TWINKLE` (sky re-shades per second, default 12), `CITY_CELL_W` / `CITY_CELL_H` (12, 16)                              |
+| `SAVER`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | What                                                                                                                                | Knobs                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ascii`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Doom fire as an ASCII ramp (`" .:-=+*#%@"`), one heat sample per character cell, coloured by the 37-step fire palette. The default. | `FIRE_CELL` (px, 8..64, default 16)                                                                                                                                                                                          |
+| `blocks`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | The same fire drawn as chunky pixels — a solid glyph per cell.                                                                      | `FIRE_SCALE` (px, 1..16, default 4)                                                                                                                                                                                          |
+| `matrix`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Digital rain.                                                                                                                       | `MATRIX_CELL_W` (8..64, default 16), `MATRIX_CELL_H` (8..128, default 32)                                                                                                                                                    |
+| `toasters`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Flying toasters, after After Dark's.                                                                                                | `TOASTER_DENSITY` (per 1000 cells, 1..60, default 4), `TOASTER_SPEED` (px/sec, 8..2000, default 170), `TOASTER_TOAST_PCT` (0..100, default 25), `TOASTER_FLAP_FPS` (1..120, default 15), `TOASTER_CELL_W` / `TOASTER_CELL_H` |
+| `(8, (U+2800..28FF): ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ 1), 16x6-cell 2x4 32x24 BLOCK BRAILLE One `TOASTER2_CELL_H` `TOASTER2_CELL_W` `TOASTER2_DENSITY` `TOASTER2_FLAP_FPS` `TOASTER2_SPEED` `TOASTER2_TOAST_PCT` `TOASTER3_CELL_H` `TOASTER3_CELL_W` `TOASTER3_DENSITY` `TOASTER3_FLAP_FPS`, `TOASTER3_SPEED`, `TOASTER3_TOAST_PCT`, `toasters2` `toasters3` art, barbed bitmap characters chassis dial, dot filled flock four. half instead lever, model, not of olive openings, outline, real size. slot wings. with city` | The After Dark night skyline — lit windows on a black silhouette, scattered lights in the sky, everything twinkling in place.       | `CITY_WINDOW_PCT` (0..100, default 88), `CITY_TWINKLE` (window flips per second, default 40), `CITY_SKY_TWINKLE` (sky re-shades per second, default 12), `CITY_CELL_W` / `CITY_CELL_H` (12, 16)                              |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
 `DRM_DEVICE` (default `/dev/dri/card0`), `RETRY_SECONDS`.
@@ -215,6 +214,55 @@ by area under sprite (~22% of the screen) and this sprite is 96 cells where the
 classic is 56. Nine bigger objects at nine heights merge into fewer damage runs
 than fifteen smaller ones.
 
+### About the toasters2 saver
+
+Same scene, different brush: `image/src/toasters2.rs` flies the flock above
+drawn in Block Elements — `█ ▀ ▄ ▒ ▛ ▜ ▙ ▟` — instead of in `/`, `|` and `=`.
+Every behavioural number is `toasters`' and is not re-argued there: the 2.5:1
+diagonal, the shared step vector, the six-step ping-pong, a quarter of the
+flock as toast.
+
+Three things are the difference:
+
+- **The olive is a fill, not an outline.** Line art can only put the chassis
+  colour on the strokes that outline it; a filled block puts it on the whole
+  top face and the whole turned-away side, with the two slots punched out of it
+  in the dark olive. Olive is **half the toaster's lit cells** — 63 of 125 in
+  level flight, and within a cell of that in all four wing frames — where the
+  line-art version could only outline it. That is the whole reason this saver
+  exists, and `each_region_is_its_own_colour` asserts the figure so the claim
+  cannot rot. (Across a whole panel it measures lower, 40%: the toast and the
+  wings dilute it. The sprite is the population the claim is about.)
+- **Half the cell, twice the resolution.** 8x16 against the line-art version's
+  16x32, so a half block is a square 8x8 pixel and the toaster is 30x7 cells
+  where the classic is 14x4 — the same 240 px on the panel, at twice the
+  detail. Wing diagonals use the three-quarter blocks at their joints, without
+  which a wing is a flight of steps 16 px to a tread.
+- **One toaster, four slices.** The original flew one machine; `toasters` flies
+  four models as an acknowledged departure. At this resolution the flap and the
+  four doneness sprites already carry the variety, so this one is the
+  original's — and the slices' scorch is drawn as a 50% shade creeping up from
+  the bottom a row a level, not only tinted.
+
+The flock's mix is COUNTED, not rolled per object. A 25% coin flip over sixteen
+objects lands on a single slice about one seed in twenty, and nothing re-rolls
+an object's kind, so that seed's sky holds one slice for the life of the pod.
+
+Cost scales with the OBJECTS and never with the grid: the scene lives in the
+grid's own buffer between frames, each object clears the rectangle it last
+stamped and stamps a new one, and `Grid::flush_sparse` blits exactly the cells
+named. The dirty list is sorted and deduped before the blit — row-major order is
+what lets `Damage` merge marks into runs (out of order it reported 2832
+scanlines of a 1072-line grid), and the dedup drops the second blit of every
+cell an object cleared and then repainted. It is not literally O(objects): that
+sort is `k log k` over the 4237 cells the objects touched, deduping to 2701
+blits, and is the largest single cost in the renderer. `k` follows the object
+count, not the panel. Measured over 599 frames at 1920x1080: median 800
+damaged scanlines of the 1072 the grid owns, against `toasters`' 672 of 1056 —
+more because sixteen sprites at a 16 px row pitch make more distinct bands than
+`MAX_RUNS` can hold apart — and against 1056 for `ascii` and `matrix`, which
+repaint everything every frame.
+
 ## Gotchas
 
 - **The mirror looks perfect while the panel is wrong** — the mirror publishes `saver.grid().cells()`, the frame we just _wrote_, not a read-back of the scanout. Anything that clobbers the panel downstream of that write (fbcon, another DRM client) is invisible to it, which is why it sat green for four days while the monitor showed console text. Fix: trust the mirror for "is the renderer running", never for "is this what the screen shows".
@@ -338,9 +386,7 @@ Glyphs are 8x16, one byte per row, from a vendored 6 KB subset of GNU Unifont's
 OFL 1.1 arm of Unifont's dual licence is elected explicitly (`tools/LICENSE.unifont`);
 the derived table is not called Unifont. Fire's ten ramp glyphs are this repo's
 own 8x8 bitmaps, row-doubled, which is why fire renders pixel-identically to the
-pre-refactor build, and the 256 braille cells are this repo's own filled 2x4
-quadrants rather than Unifont's reading pips — see the toasters3 section for
-why. `ASCII` indexes U+0020..=U+007E by `c - 0x20`, which is what
+pre-refactor build. `ASCII` indexes U+0020..=U+007E by `c - 0x20`, which is what
 lets a saver write its sprites as plain string literals; identical bitmaps are
 interned, so a character another set already pulled in costs no extra slot.
 

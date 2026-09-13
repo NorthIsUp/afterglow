@@ -130,6 +130,37 @@ def braille_rows(pattern: int) -> list[int]:
     return rows
 
 
+# The Block Elements this repo draws chunky pixel art with — exactly the ones a
+# sprite here uses, since an unused glyph is a row of table nothing blits.
+# Computed, not taken
+# from the .hex: on an 8x16 cell every one of them is an exact rectangle, so
+# there is nothing the font file could say that the geometry does not — and a
+# Unifont bump cannot nudge a half-block by a pixel. U+2588 FULL BLOCK is
+# already SOLID and is deliberately absent here rather than interned twice.
+#
+# `(name, char, rows)`. The order is the order of the emitted consts and
+# nothing else indexes it.
+def _halves(top: int, bottom: int) -> list[int]:
+    """Rows 0..7 at `top`, rows 8..15 at `bottom` — the halves and quadrants."""
+    return [top] * 8 + [bottom] * 8
+
+
+def _dither(even: int, odd: int) -> list[int]:
+    """The shade, as a row-parity dither rather than a solid area."""
+    return [even if r % 2 == 0 else odd for r in range(16)]
+
+
+BLOCK_ELEMENTS = [
+    ("UPPER", "\u2580", _halves(0xFF, 0x00)),
+    ("LOWER", "\u2584", _halves(0x00, 0xFF)),
+    ("SHADE", "\u2592", _dither(0xAA, 0x55)),
+    ("NO_LR", "\u259b", _halves(0xFF, 0xF0)),
+    ("NO_LL", "\u259c", _halves(0xFF, 0x0F)),
+    ("NO_UR", "\u2599", _halves(0xF0, 0xFF)),
+    ("NO_UL", "\u259f", _halves(0x0F, 0xFF)),
+]
+
+
 @dataclass(frozen=True)  # no slots=True: README's `python3` is 3.9 on macOS
 class HexFont:
     """A parsed .hex file: codepoint -> its hex digits, unvalidated."""
@@ -236,6 +267,10 @@ def main() -> None:
     # whose shape happens to be close.
     braille = [add(braille_rows(n), f"braille U+{0x2800 + n:04X}") for n in range(256)]
 
+    block_elements = [
+        (name, ch, add(rows, f"block U+{ord(ch):04X} {ch!r}")) for name, ch, rows in BLOCK_ELEMENTS
+    ]
+
     with contextlib.ExitStack() as stack:
         w: TextIO = (
             sys.stdout if out == "-" else stack.enter_context(open(out, "w", encoding="utf-8"))
@@ -275,6 +310,14 @@ def main() -> None:
         p("/// A small centred square, U+25AA. One lit lamp with dark margin all")
         p("/// round, so a run of adjacent cells reads as separate lights.")
         p(f"pub const BLOCK: u16 = {block};")
+        p()
+        p("/// Block Elements — two halves, four three-quarters and a 50% shade,")
+        p("/// this repo's own bitmaps rather than the .hex's: on an 8x16 cell each")
+        p("/// is an exact rectangle. U+2588 FULL BLOCK is `SOLID` above. A sprite")
+        p("/// drawn from these reads as pixel art, not line art, and a half block")
+        p("/// is a square 8x8 pixel in an 8x16 cell.")
+        for name, ch, idx in block_elements:
+            p(f"pub const {name}: u16 = {idx}; // U+{ord(ch):04X} {ch}")
         p()
         p('/// Fire\'s intensity ramp, " .:-=+*#%@", cool to hot.')
         p("#[rustfmt::skip]")

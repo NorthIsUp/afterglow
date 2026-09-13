@@ -84,6 +84,7 @@ mod mirror;
 mod saver;
 mod surface;
 mod toasters;
+mod toasters2;
 mod toasters3;
 
 use std::sync::atomic::{AtomicBool, Ordering};
