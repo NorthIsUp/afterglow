@@ -196,7 +196,7 @@ impl Mirror {
         let mut json = String::with_capacity(8 << 10);
         json.push_str(&format!(
             "{{\"saver\":\"{saver}\",\"savers\":[{savers}],\"epoch\":{epoch},\
-             \"panel_w\":{pw},\"panel_h\":{ph},\"pixel_aspect\":{pa},\
+             \"panel_w\":{pw},\"panel_h\":{ph},\"pixel_aspect\":{pa},\"panel_mm\":{pmm},\
              \"cols\":{cols},\"rows\":{rows},\
              \"cell_w\":{cw},\"cell_h\":{ch},\
              \"glyph_w\":{gw},\"glyph_h\":{gh},\"palette\":[",
@@ -205,6 +205,7 @@ impl Mirror {
             pw = panel.w,
             ph = panel.h,
             pa = crate::grid::pixel_aspect(),
+            pmm = crate::grid::panel_mm(),
             cols = g.cols(),
             rows = g.rows(),
             cw = g.cell_w(),
@@ -539,6 +540,9 @@ mod tests {
         // And the grid is still reported, since the cells are addressed by it.
         assert!(head.contains("\"cols\":120,\"rows\":33"), "{head}");
         assert!(head.contains("\"cell_w\":16,\"cell_h\":32"), "{head}");
+        // 0 when nobody has measured the panel, which is what makes the page
+        // hide its actual-size control rather than offer a wrong millimetre.
+        assert!(head.contains("\"panel_mm\":0"), "{head}");
         // The page squashes its canvas by this to show what the wall shows.
         // Without it in /meta the browser renders the pre-distorted picture.
         assert!(head.contains("\"pixel_aspect\":100"), "{head}");

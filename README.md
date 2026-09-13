@@ -104,6 +104,29 @@ pixels are the framebuffer's, untouched.
 drifting apart: a `/meta` aspect the renderer did not use is invisible in review
 and surfaces only as "the web version does not match the screen".
 
+### Actual size in the browser
+
+`SAVER_PANEL_MM` is the panel's **visible glass width in millimetres**, 0 (the
+default) meaning nobody has measured it. It is not discoverable — this monitor's
+EDID is 0 bytes, so its physical size exists nowhere the Pi can read, and it has
+to be typed in by someone with a ruler. Nothing in the render path reads it.
+
+Set it and the mirror page grows an **actual size** button that sizes the canvas
+to the same physical rectangle as the panel, so a saver on the web page is the
+size it is on the wall.
+
+That needs one thing CSS cannot supply: how big the viewer's own monitor is.
+`width: 200mm` is 200mm only when the browser's CSS inch is a real inch, which on
+a scaled or HiDPI display it is not. So the first click asks the viewer to hold a
+credit card against the screen and drag a bar to match it — an ID-1 card
+(ISO/IEC 7810) is 85.60mm to a tenth of a millimetre, and it is the one ruler
+everybody already owns. The resulting px-per-mm is kept in `localStorage`, per
+viewer and per device; it never reaches the server.
+
+At actual size the canvas deliberately ignores the fit-to-window limits — the
+point is a fixed physical size, so a panel bigger than the browser window
+overflows and the button says so rather than quietly shrinking it.
+
 ### Rotating on a timer
 
 `SAVER_ROTATE_SECS` moves the panel to another saver every N seconds. **0 is

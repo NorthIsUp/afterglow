@@ -33,6 +33,18 @@ pub fn pixel_aspect() -> usize {
     *ASPECT.get_or_init(|| crate::env_num(&["SAVER_PIXEL_ASPECT"], 100, 25, 400) as usize)
 }
 
+/// The panel's VISIBLE width in millimetres, or 0 when nobody has measured it.
+///
+/// Not discoverable: this monitor's EDID is 0 bytes, so the physical size exists
+/// nowhere the Pi can read. It has to be typed in by someone with a ruler.
+///
+/// Only the mirror page uses it, to offer a canvas the same physical size as the
+/// panel. Nothing in the render path reads it.
+pub fn panel_mm() -> usize {
+    static MM: OnceLock<usize> = OnceLock::new();
+    *MM.get_or_init(|| crate::env_num(&["SAVER_PANEL_MM"], 0, 0, 5000) as usize)
+}
+
 #[cfg(test)]
 thread_local! {
     static TEST_ASPECT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };

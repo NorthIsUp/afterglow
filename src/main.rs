@@ -49,6 +49,10 @@
 //!   saver already showing, and a `/select` gives the saver it picked a full
 //!   interval before rotation moves on again.
 //! * `SAVER_FPS`      — target frames/sec, 1..=120 (default 30)
+//! * `SAVER_PANEL_MM`   — the panel's visible width in mm, 0 (default) = unknown.
+//!   Not discoverable (this monitor's EDID is 0 bytes); someone measures it. Only
+//!   the mirror page reads it, to offer a canvas the same PHYSICAL size as the
+//!   panel. Nothing in the render path touches it.
 //! * `SAVER_PIXEL_ASPECT` — how much taller than wide one framebuffer pixel
 //!   lands on the panel, in per-cent, 25..=400. **100, the default, is off and
 //!   is a byte-for-byte no-op.** Pine's monitor is a 1280x400 panel the firmware

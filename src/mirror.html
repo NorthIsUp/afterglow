@@ -67,6 +67,28 @@
     cursor: pointer;
     white-space: nowrap;
   }
+  #life {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  #life p {
+    max-width: 34rem;
+    margin: 0;
+    text-align: center;
+    line-height: 1.5;
+  }
+  #card {
+    height: 1.6rem;
+    border: 1px solid #3a6;
+    border-radius: 3px;
+    background: repeating-linear-gradient(90deg, #132 0 8px, #0a1a0a 8px 16px);
+  }
+  #slider {
+    width: 20rem;
+    accent-color: #3a6;
+  }
   #pick button[aria-pressed="true"] {
     color: #7cf65d;
     border-color: #3a6;
@@ -75,6 +97,18 @@
 <canvas id="screen" width="16" height="16"></canvas>
 <div id="pick"></div>
 <div id="status">connecting…</div>
+<div id="life">
+  <button id="lifetoggle" hidden>actual size</button>
+  <div id="cal" hidden>
+    <p>
+      Hold a credit card against the screen and drag until the bar matches its
+      long edge. Every card is 85.6 mm — it is the one ruler everyone owns.
+    </p>
+    <div id="card"></div>
+    <input id="slider" type="range" min="1.0" max="12.0" step="0.01" />
+    <button id="caldone">done</button>
+  </div>
+</div>
 <script>
   const canvas = document.getElementById("screen");
   const status = document.getElementById("status");
@@ -165,6 +199,104 @@
   // disappear completely. Smoothing averages instead of dropping, which is the
   // honest rendering when the mirror cannot show every pixel. Above 1:1 we want
   // hard edges back, because that is what the panel itself looks like.
+  // ACTUAL SIZE
+  //
+  // CSS cannot know how big the viewer's monitor is. `width: 200mm` is 200mm
+  // only if the browser's CSS inch happens to be a real inch, which on a scaled
+  // or HiDPI display it is not — so the viewer calibrates once, against the one
+  // ruler everybody owns: an ID-1 card (ISO/IEC 7810) is 85.60mm, to a tenth of
+  // a millimetre, in every wallet on earth.
+  //
+  // Per-viewer and per-device, so it lives in localStorage and never travels.
+  // Wrapped because a private window or blocked site data throws on access
+  // rather than returning null.
+  const CARD_MM = 85.6;
+  const PXMM = "mirror.pxPerMm";
+
+  function pxPerMm() {
+    try {
+      const v = parseFloat(localStorage.getItem(PXMM));
+      return v > 0 ? v : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function setPxPerMm(v) {
+    try {
+      localStorage.setItem(PXMM, String(v));
+    } catch {
+      /* calibration just does not persist; the session still works */
+    }
+  }
+
+  // The panel is `panel_mm` wide and `panel_mm / ar` tall, `ar` already being
+  // the shape the glass shows rather than the framebuffer's. Sized in CSS px
+  // off the viewer's own measurement.
+  let actual = false;
+
+  function applyActualSize() {
+    const mm = meta && meta.panel_mm;
+    const k = pxPerMm();
+    if (!actual || !mm || !k) {
+      canvas.style.width = "";
+      canvas.style.height = "";
+      canvas.style.maxWidth = "";
+      canvas.style.maxHeight = "";
+      fitScaling();
+      return;
+    }
+    const ar = (canvas.width * meta.pixel_aspect) / (canvas.height * 100);
+    const w = mm * k;
+    const h = w / ar;
+    // Deliberately overriding the max-width/height that normally fit the canvas
+    // to the window: at actual size the whole point is a fixed physical size,
+    // so an oversized panel must overflow and say so rather than be shrunk.
+    canvas.style.maxWidth = "none";
+    canvas.style.maxHeight = "none";
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    fitScaling();
+    const over = w > innerWidth || h > innerHeight - 48;
+    document.getElementById("lifetoggle").textContent = over
+      ? "actual size (too big for this window)"
+      : "actual size ✓";
+  }
+
+  function initActualSize(m) {
+    const t = document.getElementById("lifetoggle");
+    // No measurement on the server means nothing here can be honest about
+    // millimetres, so the control does not appear at all.
+    t.hidden = !m.panel_mm;
+    if (!m.panel_mm) return;
+    const cal = document.getElementById("cal");
+    const slider = document.getElementById("slider");
+    const card = document.getElementById("card");
+    const draw = () => (card.style.width = CARD_MM * slider.value + "px");
+
+    t.onclick = () => {
+      if (!pxPerMm()) {
+        // First use: measure before there is anything to apply.
+        cal.hidden = false;
+        slider.value = pxPerMm() || 3.78; // 96dpi nominal, a starting point
+        draw();
+        return;
+      }
+      actual = !actual;
+      t.setAttribute("aria-pressed", String(actual));
+      if (!actual) t.textContent = "actual size";
+      applyActualSize();
+    };
+    slider.oninput = draw;
+    document.getElementById("caldone").onclick = () => {
+      setPxPerMm(parseFloat(slider.value));
+      cal.hidden = true;
+      actual = true;
+      t.setAttribute("aria-pressed", "true");
+      applyActualSize();
+    };
+  }
+
   function fitScaling() {
     const shown = canvas.clientWidth;
     if (!shown) return;
@@ -172,7 +304,10 @@
     const crisp = ratio >= 1 || Number.isInteger(1 / ratio);
     canvas.style.imageRendering = crisp ? "pixelated" : "auto";
   }
-  addEventListener("resize", fitScaling);
+  addEventListener("resize", () => {
+    applyActualSize();
+    fitScaling();
+  });
 
   function applyMeta(m) {
     meta = m;
@@ -193,6 +328,8 @@
       (canvas.width * m.pixel_aspect) / (canvas.height * 100),
     );
     ctx.imageSmoothingEnabled = false;
+    initActualSize(m);
+    applyActualSize();
     fitScaling();
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
