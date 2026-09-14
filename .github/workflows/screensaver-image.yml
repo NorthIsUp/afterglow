@@ -133,7 +133,7 @@ jobs:
           '
 
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: k8s/apps/screensaver/image
           platforms: linux/arm64
