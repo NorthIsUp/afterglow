@@ -7,7 +7,7 @@
 //! What the look actually IS — the colour families, the window styles and
 //! silhouettes that keep neighbouring buildings apart, the four roof classes,
 //! the band densities and how far this drifts from them on purpose — is written
-//! up once, in `k8s/apps/screensaver/README.md`, under "About the city saver".
+//! up once, in `README.md`, under "About the city saver".
 //! It is not repeated here: the two copies had already drifted from each other
 //! and from the measurement inside a single commit.
 //!

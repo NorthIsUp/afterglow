@@ -74,7 +74,7 @@
 //!   display, then exit. Also honours `SAVER_DUMP_FRAMES`, `SAVER_DUMP_EVERY`,
 //!   `SAVER_WIDTH`, `SAVER_HEIGHT`.
 //!
-//! Per-saver knobs are documented in `k8s/apps/screensaver/README.md`, one row
+//! Per-saver knobs are documented in `README.md`, one row
 //! per saver — it is the only complete list, and a second copy here goes stale.
 //!
 //! `FIRE_FPS` and `FIRE_STYLE` remain accepted as the older spellings of

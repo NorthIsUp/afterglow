@@ -1,4 +1,4 @@
-name: screensaver-image
+name: image
 
 # The screensaver image was built and pushed BY HAND until 2026-09-06, which is
 # how it ended up with a renderer nobody noticed had stopped working: the Talos
@@ -6,19 +6,16 @@ name: screensaver-image
 # and the pod sat idle logging "framebuffer not present" while the monitor showed
 # a bare Linux console. A hand-built image has no CI to notice any of that.
 #
-# Builds on any change to the image sources. Pushes only from main — a PR gets a
-# build (so a broken renderer fails review) without publishing anything.
+# Builds on any change but docs. Pushes only from main — a PR gets a build (so
+# a broken renderer fails review) without publishing anything. The image keeps
+# its homelab-era name so the deployment and its pull secret need no change.
 
 on:
   push:
     branches: [main]
-    paths:
-      - "k8s/apps/screensaver/image/**"
-      - ".github/workflows/screensaver-image.yml"
+    paths-ignore: ["**.md"]
   pull_request:
-    paths:
-      - "k8s/apps/screensaver/image/**"
-      - ".github/workflows/screensaver-image.yml"
+    paths-ignore: ["**.md"]
   workflow_dispatch:
 
 jobs:
@@ -55,7 +52,6 @@ jobs:
       # `cargo build --locked` with no Python in the build stage. Regenerating
       # here is what stops the table drifting from the .hex it claims to be from.
       - name: font table matches its source
-        working-directory: k8s/apps/screensaver/image
         run: |
           python3 tools/genfont.py tools/unifont-subset.hex -o src/font.rs
           git --no-pager diff --exit-code -- src/font.rs
@@ -90,7 +86,6 @@ jobs:
       # it or not. Include it and a saver that paints nothing at all still scores
       # a full panel, which is the one failure this check exists to catch.
       - name: fmt, clippy, tests, render check
-        working-directory: k8s/apps/screensaver/image
         run: |
           docker run --rm -v "$PWD":/src -w /src rust:1-alpine sh -eu -c '
             apk add --no-cache musl-dev >/dev/null
@@ -135,7 +130,7 @@ jobs:
       - id: build
         uses: docker/build-push-action@v7
         with:
-          context: k8s/apps/screensaver/image
+          context: .
           platforms: linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -143,9 +138,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # The digest deployment.yaml pins. Reading it back needs read:packages,
-      # which neither CI nor a local gh has — so print it here, or it exists in
-      # no reachable place.
+      # The digest homelab-gitops pins in k8s/apps/screensaver/deployment.yaml.
+      # Reading it back needs read:packages, which neither CI nor a local gh has
+      # — so print it here, or it exists in no reachable place.
       - name: digest
         if: steps.build.outputs.digest != ''
         run: |

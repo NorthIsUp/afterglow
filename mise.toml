@@ -1,0 +1,43 @@
+[tools]
+rust = { version = "stable", components = "rustfmt,clippy" }
+hk   = "latest"
+pkl  = "latest"
+
+[settings]
+experimental = true
+
+# --release --locked everywhere, matching CI and the Dockerfile: a debug build
+# hides the frame-rate bugs, and an unlocked one tests a dependency set the
+# image never ships.
+
+[tasks.build]
+description = "Build release"
+run         = "cargo build --release --locked"
+
+[tasks.test]
+description = "Run tests"
+run         = "cargo test --release --locked"
+
+[tasks.lint]
+description = "Run linters"
+run         = "hk check"
+
+[tasks.fix]
+description = "Auto-fix lint issues"
+run         = "hk fix"
+
+[tasks.clippy]
+description = "Run clippy"
+run         = "cargo clippy --release --locked --all-targets -- -D warnings"
+
+[tasks.fmt]
+description = "Format code"
+run         = "cargo fmt --all"
+
+[tasks.fmt-check]
+description = "Check formatting"
+run         = "cargo fmt --all -- --check"
+
+[tasks.font]
+description = "Regenerate src/font.rs from the vendored Unifont subset"
+run         = "python3 tools/genfont.py tools/unifont-subset.hex -o src/font.rs && cargo fmt"

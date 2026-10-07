@@ -1,0 +1,94 @@
+# A minimal Kubernetes deployment, trimmed from the one this runs as in the
+# author's homelab (Talos on a Raspberry Pi 5). Label the node that has the
+# monitor: kubectl label node <node> hardware.homelab/display=true
+#
+# No liveness probe, on purpose: the frame loop is the product, and a restart
+# is the outage. The renderer idles instead of crash-looping when there is no
+# display, so `kubectl logs` is the first stop.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: screensaver
+spec:
+  replicas: 1
+  # Two pods cannot both own the DRM master on one card.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: screensaver
+  template:
+    metadata:
+      labels:
+        app: screensaver
+    spec:
+      nodeSelector:
+        hardware.homelab/display: "true"
+      # fbcon owns the panel at boot and repaints over every frame the renderer
+      # flips in, while every DRM ioctl still succeeds. Unbinding it hands the
+      # panel to userspace until the next reboot (no HDMI console meanwhile).
+      initContainers:
+        - name: release-fbcon
+          image: busybox:1.36
+          securityContext:
+            privileged: true
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              for d in /host-sys/class/vtconsole/*/; do
+                case "$(cat "$d/name" 2>/dev/null)" in
+                  *"frame buffer device"*) echo 0 > "$d/bind" ;;
+                esac
+              done
+          volumeMounts:
+            - name: sys
+              mountPath: /host-sys
+      containers:
+        - name: screensaver
+          # linux/arm64. Pin a digest (or :sha-<commit>) for anything you care about.
+          image: ghcr.io/northisup/screensaver:latest
+          securityContext:
+            privileged: true
+          env:
+            - name: DRM_DEVICE
+              value: /dev/dri/card0
+            - name: SAVER
+              value: toasters
+            # The web mirror; put it behind your own auth before exposing it.
+            - name: SAVER_HTTP
+              value: 127.0.0.1:8080
+          volumeMounts:
+            - name: host-dev
+              mountPath: /dev
+            - name: sys-class-graphics
+              mountPath: /sys/class/graphics
+              readOnly: true
+            - name: sys-class-drm
+              mountPath: /sys/class/drm
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+      volumes:
+        - name: sys
+          hostPath:
+            path: /sys
+            type: Directory
+        - name: host-dev
+          hostPath:
+            path: /dev
+            type: Directory
+        - name: sys-class-graphics
+          hostPath:
+            path: /sys/class/graphics
+            type: Directory
+        - name: sys-class-drm
+          hostPath:
+            path: /sys/class/drm
+            type: Directory

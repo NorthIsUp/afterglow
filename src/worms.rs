@@ -378,7 +378,7 @@ mod tests {
     }
 
     /// The rate the pod actually runs at (`SAVER_FPS=15` in
-    /// `k8s/apps/screensaver/deployment.yaml`). It is not a free parameter:
+    /// homelab-gitops' `k8s/apps/screensaver/deployment.yaml`). It is not a free parameter:
     /// halving fps doubles `subs`, so every substep-shaped claim — damage,
     /// frame cost — has to be made here or it is a claim about a config
     /// nothing runs.

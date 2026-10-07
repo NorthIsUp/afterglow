@@ -1,19 +1,24 @@
----
-title: screensaver
-kind: app
-namespace: screensaver
-url: https://screensaver.<tailnet>.ts.net
-icon: monitor
-source: k8s/apps/screensaver/
-verify: cd k8s/apps/screensaver/image && SAVER_DUMP=/tmp/ss SAVER_DUMP_FRAMES=100000 SAVER_HTTP=127.0.0.1:8099 cargo run --release
----
-
-# screensaver — HDMI screensavers on whichever Pi5 holds the monitor
+# afterglow — HDMI screensavers on whichever Pi5 holds the monitor
 
 A deliberately thin workload that paints an animation onto the HDMI display of
 the Talos Pi5 carrying the `hardware.homelab/display: "true"` label. Renderer:
-`image/` — a static musl Rust binary on a `FROM scratch` image, ~230 KB, which
-writes pixels straight into a DRM/KMS dumb buffer.
+a static musl Rust binary on a `FROM scratch` image, ~230 KB, which writes
+pixels straight into a DRM/KMS dumb buffer. It grew up inside the author's
+private homelab GitOps repo, which still deploys it; `homelab-gitops#N` in
+older commit messages refers to that repo's PRs.
+
+## Install
+
+```sh
+docker pull ghcr.io/northisup/screensaver:latest   # linux/arm64; also :sha-<commit>
+```
+
+It needs a node with a monitor on HDMI, `/dev/dri/card0`, and a privileged
+container. [`examples/deployment.yaml`](examples/deployment.yaml) is a minimal
+Kubernetes deployment: the privileged container, the `release-fbcon`
+initContainer that takes the panel from the kernel console, and a display
+`nodeSelector`. Pick a saver with the `SAVER` env var, below. The web mirror on
+`SAVER_HTTP` has no auth of its own; put it behind yours.
 
 ## Savers
 
@@ -270,7 +275,7 @@ if the pixels were square and let the knob do the rest.
 It copies the _Reloaded/Revolutions_ look, not the literal 1999 one: the first
 film's on-screen code is flat-brightness with only the cursor lit, which on a
 glyph grid reads as a rendering bug. Three details are what separate it from the
-usual imitation, and all three are in `image/src/matrix.rs`:
+usual imitation, and all three are in `src/matrix.rs`:
 
 - **The glyphs are mirrored left to right.** The production designer drew them
   back to front, "as if we were in the code looking at a screen of code from the
@@ -308,7 +313,7 @@ sooner — measured 5s against 19s. With it, a doodle is ~16s at 1280x400 and
 
 ### About the city saver
 
-`image/src/city.rs` is the After Dark night skyline, and its palette and layout
+`src/city.rs` is the After Dark night skyline, and its palette and layout
 are sampled off a reference frame rather than invented. What makes the look:
 
 - **Sky, windows and the warm light are different colour families, not one ramp
@@ -489,7 +494,7 @@ u32 compare per cell and reports no damage.
 
 ### About the marble saver
 
-`image/src/marble.rs` is Atari's Marble Madness, not a marble run: an isometric
+`src/marble.rs` is Atari's Marble Madness, not a marble run: an isometric
 course seen from a fixed three-quarter view, a marble worked down it by a very
 simple autopilot, and the void underneath everything.
 
@@ -563,7 +568,7 @@ moves, so every visible tile is redrawn every frame.
 
 ### About the toasters saver
 
-The art in `image/src/toasters.rs` is this repo's own ASCII, drawn from a
+The art in `src/toasters.rs` is this repo's own ASCII, drawn from a
 description — no Berkeley Systems bitmap is copied or transcribed. What is
 copied is the behaviour, and the research behind each number is in the module
 doc. The three that matter:
@@ -657,7 +662,7 @@ frames — 3,553 of 3,599 in a two-minute run — top out at 64.
 
 ### About the tactiles saver
 
-`image/src/tactiles.rs` reports the WHOLE panel as damaged every frame, and
+`src/tactiles.rs` reports the WHOLE panel as damaged every frame, and
 that is not a bug on the list above. The three waves cross the entire tile
 grid, so every 48px band of scanlines has some tile flipping in it and the runs
 merge into one. What stays small is the blit: about 1% of cells a frame, since
@@ -676,7 +681,7 @@ than fifteen smaller ones.
 
 ### About the toasters2 saver
 
-Same scene, different brush: `image/src/toasters2.rs` flies the flock above
+Same scene, different brush: `src/toasters2.rs` flies the flock above
 drawn in Block Elements — `█ ▀ ▄ ▒ ▛ ▜ ▙ ▟` — instead of in `/`, `|` and `=`.
 Every behavioural number is `toasters`' and is not re-argued there: the 2.5:1
 diagonal, the shared step vector, the six-step ping-pong, a quarter of the
@@ -726,7 +731,7 @@ panel forever; damage derived by diffing cannot.
 
 ### About the strings saver
 
-`image/src/strings.rs` is After Dark's "String Theory": a polygon whose corners
+`src/strings.rs` is After Dark's "String Theory": a polygon whose corners
 each bounce around the panel on their own heading, redrawn every frame while the
 outlines behind it fade, so the stack reads as one ribbon sweeping and folding
 through space. Three independent ribbons, one hue each.
@@ -769,7 +774,7 @@ the Pi — `matrix` is the saver to compare it to there, not a number derived fr
 
 ### About the hardrain saver
 
-`image/src/hardrain.rs` is the storm; `image/src/rain.rs` is the drizzle. They
+`src/hardrain.rs` is the storm; `src/rain.rs` is the drizzle. They
 share the braille sub-cell trick and nothing else, because two savers that are
 hard to tell apart in a rotation are one saver that shows up twice.
 
@@ -813,7 +818,7 @@ interleaved at 1920x1080: `hardrain` is 4.8x `rain`, 2.3x `matrix` and 1.0x
 
 ### About the xwing saver
 
-`image/src/xwing.rs` is the only saver here with a beginning, a middle and an
+`src/xwing.rs` is the only saver here with a beginning, a middle and an
 end. The other forward-motion savers are steady states you can join at any
 moment; this one builds — open space, then a surface, then a trench that closes
 in — and then cuts back and does it again.
@@ -880,7 +885,7 @@ in — and then cuts back and does it again.
 
 ### About the zot saver
 
-`image/src/zot.rs` is a bolt and then a gap, and the gap is most of it: the
+`src/zot.rs` is a bolt and then a gap, and the gap is most of it: the
 saver's whole shape is the duty cycle. What it does with the lit part is fire
 the SAME channel more than once.
 
@@ -925,7 +930,7 @@ re-strike reuses the buffers a strike already filled.
 ### About the ascii.rest ports
 
 Twenty-two pieces from [ascii.rest](https://ascii.rest) ([source](https://github.com/bas3line/ascii),
-MIT, by @bas3line), ported line for line to `image/src/ascii_rest/`. Upstream a piece
+MIT, by @bas3line), ported line for line to `src/ascii_rest/`. Upstream a piece
 is `frame(t) -> string` over a fixed grid; here it writes cells, and one generic
 saver, `Play<P: Piece>`, does the rest — the clock, upstream's own frame rate (a
 15 fps scene shades 15 times a second at `SAVER_FPS=30`), centring, the ground
@@ -950,7 +955,6 @@ libm (`Math.hypot`, `Math.round`, integer `Math.pow`):
 
 ```sh
 git clone https://github.com/bas3line/ascii /tmp/ascii
-cd k8s/apps/screensaver/image
 bun tools/ascii-rest-golden.ts /tmp/ascii /tmp/golden night-coast plasma   # any slugs
 ASCII_REST_GOLDEN=/tmp/golden cargo test --release ascii_rest -- --ignored --nocapture
 ```
@@ -970,7 +974,7 @@ Cost: night-coast measures 2.3x matrix per panel frame, plasma 1.0x.
 
 ## How it works
 
-`image/src/main.rs` opens `/dev/dri/card0`, modesets the connector's preferred
+`src/main.rs` opens `/dev/dri/card0`, modesets the connector's preferred
 mode, creates an XRGB8888 dumb buffer, and maps it. Each frame the active saver
 draws into that mapping and the host tells the driver which scanlines changed.
 
@@ -985,7 +989,7 @@ fallback path is worse than none.
 **Why the dirty call is load-bearing:** simpledrm — the driver U-Boot hands over
 on a Pi 5 — scans out of a _shadow_ buffer. A pixel written into the mapping
 reaches the panel only if the driver is told its scanline changed. That is what
-`image/src/surface.rs` is about, and its module doc is the contract every saver
+`src/surface.rs` is about, and its module doc is the contract every saver
 is held to; read it before writing a new one. A region written but never reported
 shows the previous frame forever, and that bug reproduces on hardware and
 nowhere else.
@@ -1000,7 +1004,7 @@ opposite ends of the panel touch every scanline between them and still copy
 almost nothing, which is why the scanline tables further up understate how
 cheap the sparse savers now are.
 
-**Layout** (`image/src/`): `surface.rs` (the mapped frame + damage), `grid.rs`
+**Layout** (`src/`): `surface.rs` (the mapped frame + damage), `grid.rs`
 and `font.rs` (character grid + the one glyph blitter), `fire.rs`, `matrix.rs`
 `toasters.rs`, `toasters3.rs` and `city.rs` (the savers), `saver.rs` (the trait and the name → saver
 dispatch), `host.rs` (DRM), `dump.rs` (headless PPM rendering). Adding a saver
@@ -1060,7 +1064,6 @@ modeset forever.
 `SAVER_DUMP` renders to PPM files and exits, on any machine, with no display:
 
 ```sh
-cd k8s/apps/screensaver/image
 cargo build --release
 SAVER=matrix SAVER_DUMP=/tmp/mx SAVER_DUMP_FRAMES=30 ./target/release/screensaver
 ```
@@ -1087,11 +1090,10 @@ View with `magick frame-00000.ppm out.png`, or
 
 ## The glyph table
 
-`image/src/font.rs` is **generated and committed** so the image build stays a
+`src/font.rs` is **generated and committed** so the image build stays a
 pure `cargo build --locked` with no Python in the build stage. Regenerate with:
 
 ```sh
-cd k8s/apps/screensaver/image
 python3 tools/genfont.py tools/unifont-subset.hex -o src/font.rs && cargo fmt
 ```
 
@@ -1107,30 +1109,14 @@ interned, so a character another set already pulled in costs no extra slot.
 
 ## Building / publishing the image
 
-Built and pushed by CI (`.github/workflows/screensaver-image.yml`) on any change
-under `image/`: arm64-native, running `cargo fmt --check`, `clippy -D warnings`,
-the tests and a dump render, then publishing as `latest` and `sha-<commit>`. The
-image is **private**; the `ghcr` pull secret is delivered to the `screensaver`
-namespace via `k8s/secrets/ghcr-screensaver.sops.yaml`.
+Built and pushed by CI (`.github/workflows/image.yml`) on any non-docs change:
+arm64-native, running `cargo fmt --check`, `clippy -D warnings`, the tests and a
+dump render, then publishing `ghcr.io/northisup/screensaver` as `latest` and
+`sha-<commit>`. The image is public; pulling it needs no credentials.
 
-Then bump the `image:` digest in `deployment.yaml` — in its own commit, with no
+Then bump the `image:` digest in homelab-gitops'
+`k8s/apps/screensaver/deployment.yaml` — in its own commit, with no
 env changes in it, so the new binary always runs against the old env block first.
-
-<!-- gen:facts -->
-
-|              |                                                                                                                                                                    |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Namespace    | screensaver                                                                                                                                                        |
-| Image        | `busybox:1.36`, `ghcr.io/northisup/screensaver@sha256:59754af4cc71e110cc3075ee53c4c79b713dc83cd349f54ddc36ebbee674d092`, `nginxinc/nginx-unprivileged:1.27-alpine` |
-| Ports        | `screensaver 8080`, `ts-auth 8085`                                                                                                                                 |
-| Storage      | —                                                                                                                                                                  |
-| Memory limit | `screensaver 128Mi`, `ts-auth 64Mi`                                                                                                                                |
-| Strategy     | `Recreate`                                                                                                                                                         |
-| nodeSelector | `hardware.homelab/display=true`                                                                                                                                    |
-| Components   | `tailscale-auth`                                                                                                                                                   |
-| Depends on   | —                                                                                                                                                                  |
-
-<!-- /gen:facts -->
 
 ## Debugging
 
