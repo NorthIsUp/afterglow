@@ -1,7 +1,7 @@
 # afterglow — agent notes
 
 The HDMI screensavers for the `talos-pi5` cluster, published as
-`ghcr.io/northisup/screensaver` (public). Deployed from the private
+`ghcr.io/northisup/afterglow` (public). Deployed from the private
 NorthIsUp/homelab-gitops (`k8s/apps/screensaver/`), which pins the image by
 digest; `homelab-gitops#N` in old commit messages points at its PRs. This repo
 is public: no tailnet names, LAN IPs or secrets in code, docs or commits.

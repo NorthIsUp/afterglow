@@ -10,7 +10,7 @@ older commit messages refers to that repo's PRs.
 ## Install
 
 ```sh
-docker pull ghcr.io/northisup/screensaver:latest   # linux/arm64; also :sha-<commit>
+docker pull ghcr.io/northisup/afterglow:latest   # linux/arm64; also :sha-<commit>
 ```
 
 It needs a node with a monitor on HDMI, `/dev/dri/card0`, and a privileged
@@ -1111,7 +1111,7 @@ interned, so a character another set already pulled in costs no extra slot.
 
 Built and pushed by CI (`.github/workflows/image.yml`) on any non-docs change:
 arm64-native, running `cargo fmt --check`, `clippy -D warnings`, the tests and a
-dump render, then publishing `ghcr.io/northisup/screensaver` as `latest` and
+dump render, then publishing `ghcr.io/northisup/afterglow` as `latest` and
 `sha-<commit>`. The image is public; pulling it needs no credentials.
 
 Then bump the `image:` digest in homelab-gitops'

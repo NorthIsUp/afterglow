@@ -42,7 +42,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/northisup/screensaver
+          images: ghcr.io/northisup/afterglow
           tags: |
             type=ref,event=branch
             type=sha,format=long
@@ -144,5 +144,5 @@ jobs:
       - name: digest
         if: steps.build.outputs.digest != ''
         run: |
-          echo "ghcr.io/northisup/screensaver@${{ steps.build.outputs.digest }}" \
+          echo "ghcr.io/northisup/afterglow@${{ steps.build.outputs.digest }}" \
             | tee -a "$GITHUB_STEP_SUMMARY"

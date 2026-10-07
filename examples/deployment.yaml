@@ -48,7 +48,7 @@ spec:
       containers:
         - name: screensaver
           # linux/arm64. Pin a digest (or :sha-<commit>) for anything you care about.
-          image: ghcr.io/northisup/screensaver:latest
+          image: ghcr.io/northisup/afterglow:latest
           securityContext:
             privileged: true
           env:
