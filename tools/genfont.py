@@ -161,6 +161,79 @@ BLOCK_ELEMENTS = [
 ]
 
 
+# Every non-ASCII character an ascii.rest text piece prints. A piece's frame is
+# a string, so the saver needs char -> glyph for exactly these; block elements
+# the repo already draws itself resolve to those bitmaps, not Unifont's.
+# Codepoints, not a literal: half of these are confusable with ASCII.
+TEXT_CHARS = "".join(
+    chr(c)
+    for c in (
+        0x00B0,
+        0x00B7,
+        0x2500,
+        0x2502,
+        0x250A,
+        0x250C,
+        0x2510,
+        0x2514,
+        0x2518,
+        0x251C,
+        0x2524,
+        0x252C,
+        0x2534,
+        0x253C,
+        0x2550,
+        0x2551,
+        0x255D,
+        0x2565,
+        0x2568,
+        0x256A,
+        0x256D,
+        0x256E,
+        0x256F,
+        0x2570,
+        0x2571,
+        0x2572,
+        0x2580,
+        0x2581,
+        0x2584,
+        0x2588,
+        0x258C,
+        0x2590,
+        0x2591,
+        0x2592,
+        0x2593,
+        0x2594,
+        0x2596,
+        0x2597,
+        0x2598,
+        0x2599,
+        0x259D,
+        0x259F,
+    )
+)
+
+
+def _halftone_dot(cover: float) -> list[int]:
+    """An ascii.rest halftone dot whose AREA is `cover` of the largest. Scenes
+    draw in cells that are square on the glass, where one 8x16 source pixel is
+    twice as wide as tall, so a round dot is an ellipse twice as tall here."""
+    rx = 3.6 * cover**0.5
+    ry = 2 * rx
+    rows: list[int] = []
+    for y in range(16):
+        b = 0
+        for x in range(8):
+            if ((x + 0.5 - 4) / rx) ** 2 + ((y + 0.5 - 8) / ry) ** 2 <= 1:
+                b |= 0x80 >> x
+        rows.append(b)
+    return rows
+
+
+# ascii.rest's `COVER` for " ·•●".
+HALFTONE_COVER = (0.3, 0.6, 1.0)
+
+
 @dataclass(frozen=True)  # no slots=True: README's `python3` is 3.9 on macOS
 class HexFont:
     """A parsed .hex file: codepoint -> its hex digits, unvalidated."""
@@ -271,6 +344,20 @@ def main() -> None:
         (name, ch, add(rows, f"block U+{ord(ch):04X} {ch!r}")) for name, ch, rows in BLOCK_ELEMENTS
     ]
 
+    by_char = {ch: idx for _, ch, idx in block_elements}
+    by_char["\u2588"] = solid
+    text = sorted(
+        (
+            ch,
+            by_char[ch]
+            if ch in by_char
+            else add(font.rows(ord(ch), mirror=False)[0], f"text U+{ord(ch):04X} {ch!r}"),
+        )
+        for ch in TEXT_CHARS
+    )
+
+    halftone = [blank] + [add(_halftone_dot(c), f"halftone dot, cover {c}") for c in HALFTONE_COVER]
+
     with contextlib.ExitStack() as stack:
         w: TextIO = (
             sys.stdout if out == "-" else stack.enter_context(open(out, "w", encoding="utf-8"))
@@ -340,6 +427,18 @@ def main() -> None:
         p("/// faithful, not a bug.")
         p("#[rustfmt::skip]")
         p(f"pub const MATRIX: [u16; {len(matrix)}] = {matrix!r};")
+
+        p()
+        p("/// Every non-ASCII character an ascii.rest text piece prints, sorted by")
+        p("/// char so `text::glyph` can binary-search it.")
+        p("#[rustfmt::skip]")
+        body = ", ".join(f"({ch!r}, {idx})" for ch, idx in text)
+        p(f"pub const TEXT: [(char, u16); {len(text)}] = [{body}];")
+        p()
+        p('/// ascii.rest\'s halftone " ·•●" as round dots whose areas are its')
+        p("/// `COVER` (0, 0.3, 0.6, 1), indexed by dot step.")
+        p("#[rustfmt::skip]")
+        p(f"pub const HALFTONE: [u16; {len(halftone)}] = {halftone!r};")
 
     print(
         f"{len(glyphs)} glyphs, {len(glyphs) * 16} bytes of table "

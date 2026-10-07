@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::ascii_rest::{Piece, Play};
 use crate::city::City;
 use crate::confetti::Confetti;
 use crate::doodles::Doodles;
@@ -74,37 +75,45 @@ pub trait Saver {
 /// the shape every row shares.
 type Build = fn(&Panel, u32) -> Box<dyn Saver>;
 
-const SAVERS: &[(&str, Build)] = &[
-    ("ascii", |p, _| Box::new(Fire::ascii(p))),
-    ("blocks", |p, _| Box::new(Fire::blocks(p))),
-    ("matrix", |p, fps| Box::new(Matrix::new(p, fps))),
-    ("toasters", |p, fps| Box::new(Toasters::new(p, fps))),
-    ("toasters2", |p, fps| Box::new(Toasters2::new(p, fps))),
-    ("toasters3", |p, fps| Box::new(Toasters3::new(p, fps))),
-    ("dvd", |p, fps| Box::new(Dvd::new(p, fps))),
-    ("lissajous", |p, fps| Box::new(Lissajous::new(p, fps))),
-    ("satori", |p, fps| Box::new(Satori::new(p, fps))),
-    ("warp", |p, fps| Box::new(Warp::new(p, fps))),
-    ("sakura", |p, fps| Box::new(Sakura::new(p, fps))),
-    ("fractal", |p, fps| Box::new(Fractal::new(p, fps))),
-    ("hypercube", |p, fps| Box::new(Hypercube::new(p, fps))),
-    ("moire", |p, fps| Box::new(Moire::new(p, fps))),
-    ("rain", |p, fps| Box::new(Rain::new(p, fps))),
-    ("worms", |p, fps| Box::new(Worms::new(p, fps))),
-    ("confetti", |p, fps| Box::new(Confetti::new(p, fps))),
-    ("city", |p, fps| Box::new(City::new(p, fps))),
-    ("life", |p, fps| Box::new(Life::new(p, fps))),
-    ("doodles", |p, fps| Box::new(Doodles::new(p, fps))),
-    ("strings", |p, fps| Box::new(Strings::new(p, fps))),
-    ("tactiles", |p, fps| Box::new(Tactiles::new(p, fps))),
-    ("pov", |p, fps| Box::new(Pov::new(p, fps))),
-    ("podracer", |p, fps| Box::new(Podracer::new(p, fps))),
-    ("speeder", |p, fps| Box::new(Speeder::new(p, fps))),
-    ("marble", |p, fps| Box::new(Marble::new(p, fps))),
-    ("xwing", |p, fps| Box::new(XWing::new(p, fps))),
-    ("hardrain", |p, fps| Box::new(HardRain::new(p, fps))),
-    ("zot", |p, fps| Box::new(Zot::new(p, fps))),
-];
+// A macro only so the ascii.rest rows come from `ascii_rest::each_piece`, the
+// one list of ports, instead of a second copy here.
+macro_rules! savers {
+    ($($m:ident::$t:ident),* $(,)?) => {
+        const SAVERS: &[(&str, Build)] = &[
+        ("ascii", |p, _| Box::new(Fire::ascii(p))),
+        ("blocks", |p, _| Box::new(Fire::blocks(p))),
+        ("matrix", |p, fps| Box::new(Matrix::new(p, fps))),
+        ("toasters", |p, fps| Box::new(Toasters::new(p, fps))),
+        ("toasters2", |p, fps| Box::new(Toasters2::new(p, fps))),
+        ("toasters3", |p, fps| Box::new(Toasters3::new(p, fps))),
+        ("dvd", |p, fps| Box::new(Dvd::new(p, fps))),
+        ("lissajous", |p, fps| Box::new(Lissajous::new(p, fps))),
+        ("satori", |p, fps| Box::new(Satori::new(p, fps))),
+        ("warp", |p, fps| Box::new(Warp::new(p, fps))),
+        ("sakura", |p, fps| Box::new(Sakura::new(p, fps))),
+        ("fractal", |p, fps| Box::new(Fractal::new(p, fps))),
+        ("hypercube", |p, fps| Box::new(Hypercube::new(p, fps))),
+        ("moire", |p, fps| Box::new(Moire::new(p, fps))),
+        ("rain", |p, fps| Box::new(Rain::new(p, fps))),
+        ("worms", |p, fps| Box::new(Worms::new(p, fps))),
+        ("confetti", |p, fps| Box::new(Confetti::new(p, fps))),
+        ("city", |p, fps| Box::new(City::new(p, fps))),
+        ("life", |p, fps| Box::new(Life::new(p, fps))),
+        ("doodles", |p, fps| Box::new(Doodles::new(p, fps))),
+        ("strings", |p, fps| Box::new(Strings::new(p, fps))),
+        ("tactiles", |p, fps| Box::new(Tactiles::new(p, fps))),
+        ("pov", |p, fps| Box::new(Pov::new(p, fps))),
+        ("podracer", |p, fps| Box::new(Podracer::new(p, fps))),
+        ("speeder", |p, fps| Box::new(Speeder::new(p, fps))),
+        ("marble", |p, fps| Box::new(Marble::new(p, fps))),
+        ("xwing", |p, fps| Box::new(XWing::new(p, fps))),
+        ("hardrain", |p, fps| Box::new(HardRain::new(p, fps))),
+        ("zot", |p, fps| Box::new(Zot::new(p, fps))),
+            $((crate::ascii_rest::$m::$t::NAME, Play::<crate::ascii_rest::$m::$t>::build),)*
+        ];
+    };
+}
+crate::ascii_rest::each_piece!(savers);
 
 /// How many savers there are, for `Rotate`'s bag. A const because the bag is a
 /// fixed-size array: adding a row to the table above resizes it, and no refill

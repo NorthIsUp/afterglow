@@ -33,6 +33,8 @@
 //! * `grid` / `font` — the character grid and the one glyph blitter.
 //! * `fire` / `matrix` / `toasters` / `toasters3` / `city` — the savers. `saver` is the trait and the name -> saver
 //!   dispatch; adding one is a module plus a row in `saver::SAVERS`.
+//! * `ascii_rest` — ports of ascii.rest's pieces: one generic `Play` saver,
+//!   each piece only its drawing code.
 //! * `host` — DRM: modeset, mapping, dirty, teardown.
 //! * `dump` — the same frame code rendered to PPM on a machine with no display,
 //!   with the damage self-check that no monitor can perform.
@@ -80,6 +82,7 @@
 //! is bumped in a separate commit, so a new binary always runs against the old
 //! env block first.
 
+mod ascii_rest;
 #[cfg(test)]
 mod bench;
 mod city;

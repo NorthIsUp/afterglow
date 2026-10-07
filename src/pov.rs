@@ -125,7 +125,7 @@ const SHADES: usize = 16;
 /// The golden ratio, `(1 + sqrt(5)) / 2`. The dodecahedron and the icosahedron
 /// are the two solids whose coordinates are easy to get subtly wrong, so it is
 /// named once and `phi_is_the_golden_ratio` pins it.
-const PHI: f32 = 1.618_034;
+const PHI: f32 = std::f32::consts::GOLDEN_RATIO;
 
 const SOLIDS: usize = 5;
 

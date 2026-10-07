@@ -199,7 +199,7 @@ impl Mirror {
     pub fn set_rotate_secs(&self, secs: u64) {
         let _ = self
             .rotate
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
                 Some((v >> 32).wrapping_add(1) << 32 | (secs & ROTATE_SECS))
             });
     }
@@ -248,7 +248,7 @@ impl Mirror {
             "{{\"saver\":\"{saver}\",\"savers\":[{savers}],\"epoch\":{epoch},\
              \"panel_w\":{pw},\"panel_h\":{ph},\"pixel_aspect\":{pa},\"panel_mm\":{pmm},\
              \"cols\":{cols},\"rows\":{rows},\
-             \"cell_w\":{cw},\"cell_h\":{ch},\
+             \"cell_w\":{cw},\"cell_h\":{ch},\"ground\":{ground},\
              \"glyph_w\":{gw},\"glyph_h\":{gh},\"palette\":[",
             gw = font::GLYPH_W,
             gh = font::GLYPH_H,
@@ -260,6 +260,7 @@ impl Mirror {
             rows = g.rows(),
             cw = g.cell_w(),
             ch = g.cell_h(),
+            ground = g.ground() & 0xFF_FFFF,
             savers = crate::saver::names()
                 .map(|n| format!("\"{n}\""))
                 .collect::<Vec<_>>()

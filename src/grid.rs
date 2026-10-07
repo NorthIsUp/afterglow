@@ -125,6 +125,9 @@ pub struct Grid {
     /// frame out, so frame 0 must paint every cell. An explicit flag rather
     /// than a sentinel in `prev`, so a saver may use any glyph or colour index.
     first: bool,
+    /// What unlit glyph pixels and the margins paint. `BG` unless a saver
+    /// draws over a coloured ground.
+    ground: u32,
 }
 
 impl Grid {
@@ -170,7 +173,19 @@ impl Grid {
                 .map(|px| 0x80u8 >> (px * font::GLYPH_W / cell_w))
                 .collect(),
             first: true,
+            ground: BG,
         }
+    }
+
+    #[inline]
+    pub fn ground(&self) -> u32 {
+        self.ground
+    }
+
+    /// Paint unlit pixels `ground` (XRGB8888) instead of black.
+    pub fn with_ground(mut self, ground: u32) -> Self {
+        self.ground = ground;
+        self
     }
 
     #[inline]
@@ -236,6 +251,7 @@ impl Grid {
         let c = self.cur[i];
         let bits = &font::GLYPHS[c.glyph()];
         let fg = pal[c.colour()];
+        let bg = self.ground;
         let (cx, cy) = (i % self.cols, i / self.cols);
         for (row, &sr) in s
             .cell_rows(cx * self.cell_w, cy * self.cell_h, self.cell_w, self.cell_h)
@@ -244,7 +260,7 @@ impl Grid {
             // & 15 is free and lets the bounds check fold away.
             let line = bits[(sr & (font::GLYPH_H as u8 - 1)) as usize];
             for (out, &m) in row.iter_mut().zip(self.mask.iter()) {
-                *out = if line & m != 0 { fg } else { BG };
+                *out = if line & m != 0 { fg } else { bg };
             }
         }
     }
@@ -257,7 +273,11 @@ impl Grid {
     /// panel. That is the bottom "error line" on matrix/toasters/city.
     #[inline]
     fn paint_margins(&self, s: &mut Surface<'_>) {
-        s.fill_outside(self.cols * self.cell_w, self.rows * self.cell_h, BG);
+        s.fill_outside(
+            self.cols * self.cell_w,
+            self.rows * self.cell_h,
+            self.ground,
+        );
     }
 
     /// Blit every changed cell (every cell on frame 0), report exactly the rows

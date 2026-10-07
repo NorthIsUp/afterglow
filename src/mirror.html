@@ -517,7 +517,7 @@
     initActualSize(m);
     applyActualSize();
     fitScaling();
-    ctx.fillStyle = "#000";
+    ctx.fillStyle = hex(m.ground);
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     buildAtlases(m);
   }
@@ -541,7 +541,7 @@
         ctx.fillRect(x, y, cw, ch);
         continue;
       }
-      ctx.fillStyle = "#000";
+      ctx.fillStyle = hex(meta.ground);
       ctx.fillRect(x, y, cw, ch);
       if (!blank[glyph])
         ctx.drawImage(atlas[colour], glyph * gw, 0, gw, gh, x, y, cw, ch);

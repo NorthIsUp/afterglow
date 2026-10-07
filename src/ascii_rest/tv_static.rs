@@ -1,0 +1,288 @@
+//! tv-static: an old set showing snow, with a hum bar rolling through it. The
+//! dial clicks over, a test card rolls into place and holds, then is lost.
+//!
+//! Upstream's `set` option is on by default and always on here.
+
+use super::math::{js_round, smooth};
+use super::{hex, text, Piece};
+use crate::grid::Cell;
+
+const COLS: usize = 58;
+const ROWS: usize = 26;
+const FPS: u32 = 20;
+const RAMP: [Cell; 8] = text::cells([' ', '.', ':', '+', '░', '▒', '▓', '█']);
+const DIAL: [Cell; 4] = text::cells(['╱', '─', '╲', '│']);
+/// Seconds: snow, tuning in, the card, losing it, snow.
+const LOOP: f64 = 10.0;
+/// Ramp levels, brightest bar first.
+const BARS: [i32; 7] = [7, 6, 5, 4, 3, 2, 1];
+/// The reversed strip under the bars.
+const CASTLE: [i32; 7] = [1, 0, 3, 0, 5, 0, 7];
+const BOTTOM: [(f64, i32); 8] = [
+    (0.17, 5),
+    (0.34, 7),
+    (0.51, 3),
+    (0.68, 0),
+    (0.73, 1),
+    (0.78, 0),
+    (0.83, 2),
+    (1.0, 0),
+];
+/// Where the snow steps up a level.
+const SNOW: [f64; 7] = [0.36, 0.48, 0.6, 0.7, 0.8, 0.9, 0.98];
+/// The picture area inside the set.
+const X0: usize = 4;
+const Y0: usize = 7;
+const SW: usize = 39;
+const SH: usize = 15;
+const N: i32 = RAMP.len() as i32 - 1;
+
+/// This piece's own hash: three inputs and murmur-style finalising, unlike
+/// `math::hash`.
+#[inline]
+fn hash(a: i32, b: i32, c: i32) -> f64 {
+    let mut h = (a as u32).wrapping_mul(0x27d4_eb2d)
+        ^ (b as u32).wrapping_mul(0x1656_67b1)
+        ^ (c as u32).wrapping_mul(0x2545_f491);
+    h = (h ^ (h >> 15)).wrapping_mul(0x85eb_ca6b);
+    h = (h ^ (h >> 13)).wrapping_mul(0xc2b2_ae35);
+    f64::from(h ^ (h >> 16)) / 4_294_967_296.0
+}
+
+/// The set: cabinet, rounded screen bezel, two knobs, a grille, legs and ears.
+fn draw_set() -> Vec<Vec<char>> {
+    let mut g = vec![vec![' '; COLS]; ROWS];
+    let mut boxed = |x0: usize, y0: usize, x1: usize, y1: usize, c: [char; 6]| {
+        g[y0][x0 + 1..x1].fill(c[4]);
+        g[y1][x0 + 1..x1].fill(c[4]);
+        for row in &mut g[y0 + 1..y1] {
+            row[x0] = c[5];
+            row[x1] = c[5];
+        }
+        g[y0][x0] = c[0];
+        g[y0][x1] = c[1];
+        g[y1][x0] = c[2];
+        g[y1][x1] = c[3];
+    };
+    let round = ['╭', '╮', '╰', '╯', '─', '│'];
+    boxed(1, 5, 56, 23, round);
+    boxed(3, 6, 43, 22, round);
+    boxed(46, 8, 52, 10, round); // the channel knob
+    boxed(46, 12, 52, 14, round); // the volume knob
+    boxed(45, 16, 53, 21, ['┌', '┐', '└', '┘', '─', '│']); // the speaker
+    for row in &mut g[17..=20] {
+        row[46..=52].fill('═');
+    }
+    g[13][49] = '╲';
+    let mut put = |x: usize, y: usize, s: &str| {
+        for (i, ch) in s.chars().enumerate() {
+            g[y][x + i] = ch;
+        }
+    };
+    put(25, 4, "▄▄███▄▄");
+    put(5, 24, "╱");
+    put(4, 25, "╱");
+    put(52, 24, "╲");
+    put(53, 25, "╲");
+    for k in 1..=4 {
+        g[4 - k][25 - k] = '╲';
+        g[4 - k][31 + k] = '╱';
+    }
+    g[0][21] = 'o';
+    g[0][35] = 'o';
+    g
+}
+
+#[derive(Clone, Copy)]
+enum Px {
+    Level(i32),
+    Glyph(Cell),
+}
+
+/// The test card: bars over a reversed strip and a bottom strip of hard-edged
+/// blocks, with a circle and a crosshair drawn across the middle.
+fn draw_card() -> Vec<Px> {
+    let mut card: Vec<Px> = (0..SW * SH)
+        .map(|i| {
+            let (r, c) = (i / SW, i % SW);
+            let u = (c as f64 + 0.5) / SW as f64;
+            let v = (r as f64 + 0.5) / SH as f64;
+            let bar = ((u * 7.0).floor() as usize).min(6);
+            Px::Level(if v < 0.67 {
+                BARS[bar]
+            } else if v < 0.75 {
+                CASTLE[bar]
+            } else {
+                BOTTOM.iter().find(|&&(end, _)| u < end).unwrap().1
+            })
+        })
+        .collect();
+    let mut set =
+        |r: usize, c: i64, ch: char| card[r * SW + c as usize] = Px::Glyph(text::cell(ch));
+    // The circle, row by row: its span in each row, outlined in box drawing.
+    let rad = (SH as f64 * 0.43).min(SW as f64 * 0.22) * 2.0;
+    let (cx, cy) = (SW as f64 / 2.0, SH as f64 / 2.0);
+    let span: Vec<Option<(i64, i64)>> = (0..SH)
+        .map(|r| {
+            let y = (r as f64 + 0.5 - cy) * 2.0;
+            let w = rad * rad - y * y;
+            (w >= 0.0).then(|| {
+                (
+                    (cx - w.sqrt() - 0.5).ceil() as i64,
+                    (cx + w.sqrt() - 0.5).floor() as i64,
+                )
+            })
+        })
+        .collect();
+    let (mid, mc) = (SH / 2, (SW / 2) as i64);
+    for r in 0..SH {
+        let Some((a, b)) = span[r] else { continue };
+        let up = r < mid;
+        let near = if up {
+            r.checked_sub(1).and_then(|i| span[i])
+        } else {
+            span.get(r + 1).copied().flatten()
+        };
+        // The run out to the row nearer the middle's edge, stepped with corners.
+        let (na, nb) = near.unwrap_or((mc + 1, mc - 1));
+        for c in a..=b {
+            if (c > a && c < na && c < nb) || (c < b && c > nb && c > na) {
+                set(r, c, '─');
+            }
+        }
+        if a < na {
+            set(r, a, if up { '╭' } else { '╰' });
+            set(r, na, if up { '╯' } else { '╮' });
+            set(r, b, if up { '╮' } else { '╯' });
+            set(r, nb, if up { '╰' } else { '╭' });
+        } else {
+            set(r, a, '│');
+            set(r, b, '│');
+        }
+        if near.is_none() {
+            for c in a + 1..b {
+                set(r, c, '─');
+            }
+        }
+    }
+    // The crosshair, meeting the circle in tees.
+    let (a, b) = span[mid].unwrap();
+    for c in a + 1..b {
+        set(mid, c, '─');
+    }
+    for (r, sp) in span.iter().enumerate() {
+        if sp.is_some() {
+            set(r, mc, '│');
+        }
+    }
+    set(mid, a, '├');
+    set(mid, b, '┤');
+    set(mid, mc, '┼');
+    set(span.iter().position(Option::is_some).unwrap(), mc, '┬');
+    set(span.iter().rposition(Option::is_some).unwrap(), mc, '┴');
+    card
+}
+
+pub struct TvStatic {
+    set: Vec<Cell>,
+    card: Vec<Px>,
+    /// Which picture cells the curved tube leaves in.
+    inside: Vec<bool>,
+}
+
+impl Piece for TvStatic {
+    const NAME: &'static str = "tv-static";
+    const COLS: usize = COLS;
+    const ROWS: usize = ROWS;
+    const FPS: u32 = FPS;
+    const CELL: usize = 2;
+    const PALETTE: &'static [u32] = &[hex("#cfe6ff")];
+    const GROUND: u32 = 0;
+
+    fn new() -> Self {
+        let inside = (0..SW * SH)
+            .map(|i| {
+                let (r, c) = ((i / SW) as f64, (i % SW) as f64);
+                let half = (SW as f64 / 2.0, SH as f64 / 2.0);
+                let x = (c + 0.5 - half.0) / half.0;
+                let y = (r + 0.5 - half.1) / half.1;
+                x.powi(6) + y.powi(6) <= 1.02
+            })
+            .collect();
+        Self {
+            set: draw_set().into_iter().flatten().map(text::cell).collect(),
+            card: draw_card(),
+            inside,
+        }
+    }
+
+    fn frame(&mut self, t: f64, out: &mut [Cell]) {
+        let u = ((t % LOOP) + LOOP) % LOOP;
+        // The snow is new every frame.
+        let k = (t * f64::from(FPS)).floor() as i32;
+        // How firmly the set holds the signal. Just before it locks, and just
+        // before it is lost, the dial clicks through three stops.
+        let lock = smooth(1.6, 3.4, u) * (1.0 - smooth(6.6, 7.8, u));
+        let dial = ((u - 1.1) * 8.0)
+            .floor()
+            .min(3.0 - ((u - 6.4) * 8.0).floor())
+            .clamp(0.0, 3.0);
+        let snow = 1.0 - 0.97 * lock;
+        // Unlocked, the picture rolls (with its blanking bar) and its lines tear.
+        let roll = (1.0 - lock).powi(2) * (SH + 2) as f64 * 2.5;
+        let tear = (1.0 - lock) * 9.0;
+        // The hum bar's middle row, once a loop.
+        let hum = ((u / LOOP + 0.45) % 1.0) * (SH + 6) as f64 - 3.0;
+        let lock6 = lock.powi(6);
+
+        out.copy_from_slice(&self.set);
+        out[9 * COLS + 49] = DIAL[dial as usize];
+        for r in 0..SH {
+            let (ri, rf) = (r as i32, r as f64);
+            let dim = 1.0 - 0.45 * (-((rf - hum) / 2.2).powi(2)).exp();
+            // Each scan line a little brighter or darker.
+            let line = 0.9 + 0.2 * hash(k, ri, 9);
+            let shift = js_round(tear * (rf * 0.8 + u * 9.0).sin() * hash(k >> 2, ri, 3)) as i64;
+            // The card row shown here.
+            let pr = ((rf + roll) % (SH + 2) as f64).floor() as usize;
+            let mut prev = hash(k, ri, 1);
+            for c in 0..SW {
+                let o = (Y0 + r) * COLS + X0 + c;
+                if !self.inside[r * SW + c] {
+                    out[o] = RAMP[0];
+                    continue;
+                }
+                // Snow is fine grain streaked along the line, as it is on a real
+                // tube, mostly dots with now and then a brighter fleck.
+                let id = ri * 97 + c as i32;
+                let n = hash(k, id, 2);
+                prev = 0.6 * n + 0.4 * prev;
+                let noisy = hash(k, id, 5) < snow;
+                out[o] = if noisy && hash(k, id, 6) >= lock6 {
+                    let v = prev * line * dim;
+                    let mut level = 0;
+                    while level < SNOW.len() && v > SNOW[level] {
+                        level += 1;
+                    }
+                    RAMP[level]
+                } else {
+                    let sw = SW as i64;
+                    let pc = (((c as i64 + shift) % sw) + sw) % sw;
+                    let mut x = if pr < SH {
+                        self.card[pr * SW + pc as usize]
+                    } else {
+                        Px::Level(0)
+                    };
+                    // Once locked, what noise is left only nudges the card a shade.
+                    if let (true, Px::Level(l)) = (noisy, x) {
+                        x = Px::Level((l + if n < 0.5 { -1 } else { 1 }).clamp(0, N));
+                    }
+                    match x {
+                        Px::Level(l) => RAMP[l as usize],
+                        Px::Glyph(g) => g,
+                    }
+                };
+            }
+        }
+    }
+}
