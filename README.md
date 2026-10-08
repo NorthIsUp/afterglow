@@ -966,6 +966,15 @@ or the Taj's dome stays in frame; on pine's 3.2:1 glass that is about 60% of
 each scene's height. Text pieces keep `Fit::Contain` and sit whole over their
 ground, since a cropped one loses words.
 
+`-wide` variants recompose a scene for a 320x100 canvas, pine's 3.2:1, so it
+fills the glass with nothing cropped. They are ours, not upstream's, so they
+have no golden; the original beside each stays exact.
+
+- `ocean-sunset-wide`: a larger headland, a wider sea and a far island beyond the sun.
+- `storm-plains-wide`: the storm stands further east, its anvil streaming on across the extra sky.
+- `taj-dawn-wide`: the whole garden front, the jawab answering the mosque across the canal.
+- `varanasi-ghats-wide`: longer ghats with more spires and priests, and a broad reach past the glow.
+
 Every port is checked cell for cell against upstream's own output — glyph and
 palette index, four frames each, stateful pieces stepped through every tick
 between. All 22 match exactly. The math is f64 like JavaScript, `Float32Array`
