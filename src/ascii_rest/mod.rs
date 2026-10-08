@@ -19,6 +19,10 @@
 //! dither. Pine's panel is 3.2:1 and the scenes 2:1, so scenes fill it and crop
 //! the rows each scene can spare ([`Fit::Cover`]); text pieces stay whole.
 //! Cover pieces then tour: [`tour`] zooms by cell size, never by resampling.
+//!
+//! A text piece's `-wide` twin is this repo's own: a [`Canvas`] sized to the
+//! panel's grid rather than a fixed picture, drawn by [`Fill`]. It shares its
+//! original's module and drawing code, parameterised by size.
 
 // Ports keep upstream's literals (`6.28`, `3.14`) rather than TAU/PI: the
 // golden test compares against what upstream computes, not what it meant.
@@ -44,12 +48,14 @@ pub mod tour;
 /// `saver::SAVERS` rows and its tests all come from this list. A row names every
 /// piece its module builds, so a `-wide` recomposition sits beside its original.
 /// `#[no_upstream]` marks this repo's own pieces (the `-wide` recompositions),
-/// which get no golden test: upstream has no output for them.
+/// which get no golden test: upstream has no output for them. `#[fill]` marks
+/// a [`Canvas`] drawn at the panel's size by [`Fill`]; it has no upstream
+/// either.
 macro_rules! each_piece {
     ($cb:ident) => {
         $cb! {
             alpine_dawn::{AlpineDawn, #[no_upstream] AlpineDawnWide},
-            aurora::{Aurora},
+            aurora::{Aurora, #[fill] AuroraWide},
             aurora_fjord::{AuroraFjord, #[no_upstream] AuroraFjordWide},
             deep_reef::{DeepReef, #[no_upstream] DeepReefWide},
             desert_night::{DesertNight, #[no_upstream] DesertNightWide},
@@ -87,11 +93,7 @@ macro_rules! declare {
                         mod $t {
                             use crate::ascii_rest::tests;
 
-                            #[test]
-                            fn exercise() {
-                                tests::exercise::<crate::ascii_rest::$m::$t>();
-                            }
-
+                            exercise!($($no)? $m::$t);
                             golden!($($no)? $m::$t);
                         }
                     )+
@@ -102,8 +104,28 @@ macro_rules! declare {
 }
 
 #[cfg(test)]
+macro_rules! exercise {
+    (fill $m:ident::$t:ident) => {
+        #[test]
+        fn exercise() {
+            tests::exercise_fill::<crate::ascii_rest::$m::$t>();
+        }
+    };
+    (no_upstream $m:ident::$t:ident) => {
+        exercise!($m::$t);
+    };
+    ($m:ident::$t:ident) => {
+        #[test]
+        fn exercise() {
+            tests::exercise::<crate::ascii_rest::$m::$t>();
+        }
+    };
+}
+
+#[cfg(test)]
 macro_rules! golden {
     (no_upstream $m:ident::$t:ident) => {};
+    (fill $m:ident::$t:ident) => {};
     ($m:ident::$t:ident) => {
         #[test]
         #[ignore = "needs ASCII_REST_GOLDEN; see tools/ascii-rest-golden.ts"]
@@ -113,6 +135,20 @@ macro_rules! golden {
     };
 }
 each_piece!(declare);
+
+/// The `saver::SAVERS` builder for an `each_piece!` row.
+macro_rules! builder {
+    (fill $m:ident::$t:ident) => {
+        crate::ascii_rest::Fill::<crate::ascii_rest::$m::$t>::build
+    };
+    (no_upstream $m:ident::$t:ident) => {
+        crate::ascii_rest::builder!($m::$t)
+    };
+    ($m:ident::$t:ident) => {
+        crate::ascii_rest::Play::<crate::ascii_rest::$m::$t>::build
+    };
+}
+pub(crate) use builder;
 
 use crate::grid::{pixel_aspect, Cell, Grid};
 use crate::saver::Saver;
@@ -145,6 +181,111 @@ pub trait Piece: Sized + 'static {
     fn frame(&mut self, t: f64, out: &mut [Cell]);
 }
 
+/// A text piece recomposed for whatever grid the panel has: `cols x rows`
+/// is the grid's, every cell is the picture's, and there is nothing to fit.
+pub trait Canvas: Sized + 'static {
+    const NAME: &'static str;
+    const FPS: u32;
+    /// A text cell, two widths tall; here so the mirror groups it with its
+    /// original.
+    const CELL: usize = 2;
+    const PALETTE: &'static [u32];
+    const GROUND: u32 = 0;
+
+    fn new(cols: usize, rows: usize) -> Self;
+
+    /// Write every one of the `cols * rows` cells of the picture at `t`.
+    fn frame(&mut self, t: f64, out: &mut [Cell]);
+}
+
+/// Upstream's frame rate on the panel's: which tick of a piece's own clock
+/// a panel frame shows.
+struct Clock {
+    frames: u64,
+    fps: u64,
+    tick: u64,
+}
+
+impl Clock {
+    fn new(fps: u32) -> Self {
+        Self {
+            frames: 0,
+            fps: u64::from(fps.max(1)),
+            tick: u64::MAX,
+        }
+    }
+
+    /// The piece's `t` when this panel frame lands on a new tick of its
+    /// `piece_fps` clock, else None: the last picture still stands.
+    #[inline]
+    fn next(&mut self, piece_fps: u32) -> Option<f64> {
+        let tick = self.frames * u64::from(piece_fps) / self.fps;
+        self.frames += 1;
+        (tick != self.tick).then(|| {
+            self.tick = tick;
+            tick as f64 / f64::from(piece_fps)
+        })
+    }
+}
+
+/// The saver for any [`Canvas`]: one grid the size of the panel, in text
+/// cells of `ASCII_REST_TEXT_CELL_W x _H` glass pixels.
+pub struct Fill<P: Canvas> {
+    piece: P,
+    pic: Vec<Cell>,
+    grid: Grid,
+    title: Option<Title>,
+    clock: Clock,
+}
+
+impl<P: Canvas> Fill<P> {
+    pub fn new(panel: &Panel, fps: u32) -> Self {
+        let w = crate::env_num(&["ASCII_REST_TEXT_CELL_W"], 12, 4, 64) as usize;
+        let h = crate::env_num(&["ASCII_REST_TEXT_CELL_H"], 24, 8, 128) as usize;
+        let grid = Grid::new(panel, w, h).with_ground(P::GROUND);
+        let (cols, rows) = (grid.cols(), grid.rows());
+        let title = (crate::env_num(&["ASCII_REST_TITLE"], 0, 0, 1) == 1)
+            .then(|| Title::new(P::NAME, P::CELL, P::PALETTE));
+        Self {
+            piece: P::new(cols, rows),
+            pic: vec![Cell::CLEAR; cols * rows],
+            grid,
+            title,
+            clock: Clock::new(fps),
+        }
+    }
+
+    pub fn build(panel: &Panel, fps: u32) -> Box<dyn Saver> {
+        Box::new(Self::new(panel, fps))
+    }
+}
+
+impl<P: Canvas> Saver for Fill<P> {
+    fn render(&mut self, s: &mut Surface<'_>) {
+        if let Some(t) = self.clock.next(P::FPS) {
+            self.piece.frame(t, &mut self.pic);
+        }
+        let (pic, cols) = (&self.pic, self.grid.cols());
+        self.grid.fill(|c, r| pic[r * cols + c]);
+        if let Some(title) = &self.title {
+            title.stamp(&mut self.grid);
+        }
+        self.grid.flush(s, P::PALETTE);
+    }
+
+    fn name(&self) -> &'static str {
+        P::NAME
+    }
+
+    fn grid(&self) -> &Grid {
+        &self.grid
+    }
+
+    fn palette(&self) -> &[u32] {
+        P::PALETTE
+    }
+}
+
 /// How a piece's fixed `COLS x ROWS` picture meets the panel.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Fit {
@@ -167,9 +308,7 @@ pub struct Play<P: Piece> {
     /// `ASCII_REST_TITLE`: stamped over the camera's grid after the picture
     /// is mapped onto it.
     title: Option<Title>,
-    frames: u64,
-    fps: u64,
-    tick: u64,
+    clock: Clock,
 }
 
 /// One grid looking at the picture through a [`View`].
@@ -262,8 +401,7 @@ impl<P: Piece> Play<P> {
             x0: origin(P::COLS, s.cols, spare(P::COLS, s.cols) * 0.5),
             y0: origin(P::ROWS, s.rows, spare(P::ROWS, s.rows) * anchor),
         };
-        let fps = fps.max(1);
-        let tour = knobs.map(|k| Touring::new::<P>(panel, aspect, base, fps, k));
+        let tour = knobs.map(|k| Touring::new::<P>(panel, aspect, base, fps.max(1), k));
         let widths = tour.as_ref().map_or((w, w), Touring::widths);
         Self {
             piece: P::new(),
@@ -271,9 +409,7 @@ impl<P: Piece> Play<P> {
             cam: Camera::new::<P>(panel, aspect, base, widths),
             tour,
             title: None,
-            frames: 0,
-            fps: u64::from(fps),
-            tick: u64::MAX,
+            clock: Clock::new(fps),
         }
     }
 
@@ -360,12 +496,8 @@ fn follow_into(out: &mut Vec<u32>, n: usize, size: usize, of: usize, map: &[u32]
 
 impl<P: Piece> Saver for Play<P> {
     fn render(&mut self, s: &mut Surface<'_>) {
-        let tick = self.frames * u64::from(P::FPS) / self.fps;
-        self.frames += 1;
-        if tick != self.tick {
-            self.tick = tick;
-            self.piece
-                .frame(tick as f64 / f64::from(P::FPS), &mut self.pic);
+        if let Some(t) = self.clock.next(P::FPS) {
+            self.piece.frame(t, &mut self.pic);
         }
         if let Some(t) = &mut self.tour {
             t.steer::<P>(&self.pic, &mut self.cam);
@@ -531,6 +663,63 @@ pub(crate) mod tests {
             }
         });
         assert_eq!(n, 0, "{}: render allocated", P::NAME);
+    }
+
+    /// A [`Canvas`]'s checks, on every panel shape down to the 128px square
+    /// the saver tests build at: its grid covers the panel, the picture is
+    /// in range and not blank, it moves, and steady-state frames never
+    /// allocate. On the two full panels it must also reach both sides: a
+    /// `-wide` twin that left the edges empty would be its original again.
+    pub fn exercise_fill<P: Canvas>() {
+        use crate::grid::with_test_aspect;
+        for (w, h, aspect) in [
+            (1920, 1080, 180),
+            (1920, 1080, 100),
+            (1280, 400, 100),
+            (800, 1280, 100),
+            (128, 128, 100),
+        ] {
+            let panel = Panel::new(w, h, w);
+            let mut fill = with_test_aspect(aspect, || Fill::<P>::new(&panel, P::FPS));
+            let mut buf = vec![0u32; panel.buf_len()];
+            let mut frame = |fill: &mut Fill<P>| {
+                let mut s = Surface::new(&mut buf, &panel);
+                fill.render(&mut s);
+                s.finish();
+            };
+            let at = format!("{} {w}x{h}@{aspect}", P::NAME);
+            let (cols, cw) = (fill.grid.cols(), fill.grid.cell_w());
+            let (rows, ch) = (fill.grid.rows(), fill.grid.cell_h());
+            assert!(cols * cw + cw > w && rows * ch + ch > h, "{at}: grid short");
+            frame(&mut fill);
+            let first = fill.pic.clone();
+            for c in &first {
+                assert!(c.glyph() < crate::font::GLYPHS.len(), "{at}: glyph");
+                assert!(c.colour() < P::PALETTE.len(), "{at}: colour");
+            }
+            assert!(first.iter().any(|c| *c != Cell::CLEAR), "{at}: blank");
+            let blank = text::cell(' ');
+            let mut reach = [false; 2];
+            for _ in 0..P::FPS * 4 {
+                frame(&mut fill);
+                for r in 0..rows {
+                    let row = &fill.pic[r * cols..(r + 1) * cols];
+                    let edge = cols / 8 + 1;
+                    reach[0] |= row[..edge].iter().any(|c| *c != blank);
+                    reach[1] |= row[cols - edge..].iter().any(|c| *c != blank);
+                }
+            }
+            assert_ne!(first, fill.pic, "{at}: nothing moved in four seconds");
+            if w == 1920 {
+                assert_eq!(reach, [true; 2], "{at}: a side stays empty");
+            }
+            let n = allocs_during(|| {
+                for _ in 0..P::FPS {
+                    frame(&mut fill);
+                }
+            });
+            assert_eq!(n, 0, "{at}: render allocated");
+        }
     }
 
     /// Compare the port with upstream's own output, written by

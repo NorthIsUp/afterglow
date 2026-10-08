@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::ascii_rest::{Piece, Play};
+use crate::ascii_rest::{Canvas, Piece};
 use crate::city::City;
 use crate::confetti::Confetti;
 use crate::doodles::Doodles;
@@ -119,7 +119,7 @@ macro_rules! savers {
         ("hardrain", |p, fps| Box::new(HardRain::new(p, fps))),
         ("zot", |p, fps| Box::new(Zot::new(p, fps))),
         ("plasma", |p, fps| Box::new(Plasma::new(p, fps))),
-            $($((crate::ascii_rest::$m::$t::NAME, Play::<crate::ascii_rest::$m::$t>::build),)+)*
+            $($((crate::ascii_rest::$m::$t::NAME, crate::ascii_rest::builder!($($no)? $m::$t)),)+)*
         ];
     };
 }
@@ -844,8 +844,10 @@ mod tests {
         assert_eq!(group_at(index_of("night-coast").unwrap()), SCENES);
         assert_eq!(group_at(index_of("night-coast-wide").unwrap()), SCENES);
         assert_eq!(group_at(index_of("vinyl").unwrap()), ASCII_REST);
+        assert_eq!(group_at(index_of("aurora-wide").unwrap()), ASCII_REST);
         assert_eq!(wide_of("night-coast"), Some("night-coast-wide"));
-        assert_eq!(wide_of("vinyl"), None);
+        assert_eq!(wide_of("aurora"), Some("aurora-wide"));
+        assert_eq!(wide_of("plasma"), None);
     }
 
     /// The pool narrows rotation without breaking its rules: only pooled rows,
@@ -967,8 +969,9 @@ mod tests {
             picked = (0..NSAVERS).filter(|&i| m.pickable(i)).count();
         });
         assert_eq!(n, 0);
-        // Every row but the 13 `-wide` halves, which wait for `expanded`.
-        assert_eq!(picked, NSAVERS - 13);
+        // Every row but the `-wide` halves, which wait for `expanded`.
+        let wide = names().filter(|n| n.ends_with("-wide")).count();
+        assert_eq!(picked, NSAVERS - wide);
     }
 
     /// A scene's pair takes one turn, and which half is the viewer's

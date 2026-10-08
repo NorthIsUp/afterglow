@@ -94,7 +94,16 @@ is no upstream output to compare against.
 
 ## Character pieces
 
-ascii.rest's character pieces, one ink each. Knobs: none.
+ascii.rest's character pieces, one ink each. Knobs: `ASCII_REST_TITLE`.
+
+## Full-screen twins
+
+Each character piece has a `-wide` twin that fills the whole panel at any size or shape, with no bars. A twin is not a fixed picture fitted to the panel, the way a scene's `-wide` variant is. It is a `Canvas`: it is given the grid's own `cols x rows` and draws every cell, and `Fill` is its saver, as `Play` is a piece's. The grid's cells stay glyph-shaped, twice as tall as wide. Each twin keeps its original's ink, motion and frame rate, and shares its original's module and drawing code, parameterised by size. The original stays golden-exact. The twin is marked `#[fill]` in `each_piece!`, which gives it its own exercise test (every panel shape down to 128px, both sides reached, no allocation) and no golden test. The mirror page pairs each piece with its twin behind the same `expanded` toggle the scenes use.
+
+What full screen means for each is on its page. Knobs:
+
+- `ASCII_REST_TEXT_CELL_W` / `ASCII_REST_TEXT_CELL_H` (glass px, 4..64 / 8..128, default 12 / 24): 160x25 cells on pine, 160x45 at 1080p
+- `ASCII_REST_TITLE` (0..1, default 0)
 
 ## `plasma`
 
