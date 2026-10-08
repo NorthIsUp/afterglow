@@ -11,7 +11,7 @@ use std::f64::consts::PI;
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, mix, noise, smooth};
-use super::{hex, Piece};
+use super::{Fit, Piece, hex};
 use crate::grid::Cell;
 
 const W: usize = 200;
@@ -93,6 +93,7 @@ impl Piece for MistyForest {
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
+    const FIT: Fit = Fit::Cover { anchor: 0.5 };
     const GROUND: u32 = hex("#090f0e");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[

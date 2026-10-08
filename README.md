@@ -943,9 +943,12 @@ colour and the flush. A port is only its drawing code.
   picked to suit it. Their box-drawing and block characters are in the glyph
   table as `font::TEXT`.
 
-Pictures are drawn 1:1, one piece cell per grid cell, in the largest cell that
-fits: resampling would smear the dither. Pine's glass is 3.2:1 and the scenes
-2:1, so they sit centred over their own ground rather than cropped or stretched.
+Pictures are drawn 1:1, one piece cell per grid cell, never resampled: that
+would smear the dither. Scenes fill the panel and crop the overflow, keeping a
+band of rows chosen per scene (`Fit::Cover { anchor }`) so the horizon, the moon
+or the Taj's dome stays in frame; on pine's 3.2:1 glass that is about 60% of
+each scene's height. Text pieces keep `Fit::Contain` and sit whole over their
+ground, since a cropped one loses words.
 
 Every port is checked cell for cell against upstream's own output — glyph and
 palette index, four frames each, stateful pieces stepped through every tick

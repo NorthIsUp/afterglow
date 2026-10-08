@@ -16,8 +16,8 @@
 //!
 //! The picture is drawn 1:1, one piece cell per grid cell, in the largest cell
 //! that fits it on the glass: resampling would smear the scenes' ordered
-//! dither. Pine's panel is 3.2:1 and the scenes 2:1, so they sit centred over
-//! their own ground rather than cropped or stretched.
+//! dither. Pine's panel is 3.2:1 and the scenes 2:1, so scenes fill it and crop
+//! the rows each scene can spare ([`Fit::Cover`]); text pieces stay whole.
 
 // Ports keep upstream's literals (`6.28`, `3.14`) rather than TAU/PI: the
 // golden test compares against what upstream computes, not what it meant.
@@ -106,11 +106,25 @@ pub trait Piece: Sized + 'static {
     const PALETTE: &'static [u32];
     /// What shows between dots and around the picture.
     const GROUND: u32;
+    /// How the picture meets a panel of another shape.
+    const FIT: Fit = Fit::Contain;
 
     fn new() -> Self;
 
     /// Write every one of the `COLS * ROWS` cells of the picture at `t`.
     fn frame(&mut self, t: f64, out: &mut [Cell]);
+}
+
+/// How a piece's fixed `COLS x ROWS` picture meets the panel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fit {
+    /// All of it, centred over the ground. Text pieces: crop one and words go
+    /// missing.
+    Contain,
+    /// Fill the panel and crop the overflow. The width always crops evenly;
+    /// `anchor` places the kept band of rows, 0.0 the top of the picture, 1.0
+    /// the bottom, so a scene keeps its horizon rather than empty sky.
+    Cover { anchor: f64 },
 }
 
 /// The saver for any [`Piece`].
@@ -128,18 +142,34 @@ pub struct Play<P: Piece> {
 
 impl<P: Piece> Play<P> {
     pub fn new(panel: &Panel, fps: u32) -> Self {
-        // The largest square-glass cell width that fits the picture; Grid
-        // stretches the height by the panel's pixel aspect itself.
+        // Cell widths are square-glass units; Grid stretches the height by the
+        // panel's pixel aspect itself.
         let aspect = pixel_aspect();
-        let by_h = panel.h * 100 / (aspect * P::CELL * P::ROWS);
-        let w = (panel.w / P::COLS).min(by_h).max(1);
-        let grid = Grid::new(panel, w, w * P::CELL).with_ground(P::GROUND);
+        let rows_h = aspect * P::CELL * P::ROWS;
+        let (mut w, anchor) = match P::FIT {
+            Fit::Contain => ((panel.w / P::COLS).min(panel.h * 100 / rows_h), 0.5),
+            Fit::Cover { anchor } => (
+                panel
+                    .w
+                    .div_ceil(P::COLS)
+                    .max((panel.h * 100).div_ceil(rows_h)),
+                anchor,
+            ),
+        };
+        w = w.max(1);
+        let mut grid = Grid::with_aspect(panel, w, w * P::CELL, aspect);
+        // Grid rounds the stretched height, which can leave cover one row
+        // short of the panel's last row.
+        while matches!(P::FIT, Fit::Cover { .. }) && grid.rows() > P::ROWS {
+            w += 1;
+            grid = Grid::with_aspect(panel, w, w * P::CELL, aspect);
+        }
         Self {
             piece: P::new(),
             pic: vec![Cell::CLEAR; P::COLS * P::ROWS],
-            xmap: centre(grid.cols(), P::COLS),
-            ymap: centre(grid.rows(), P::ROWS),
-            grid,
+            xmap: place(grid.cols(), P::COLS, 0.5),
+            ymap: place(grid.rows(), P::ROWS, anchor),
+            grid: grid.with_ground(P::GROUND),
             frames: 0,
             fps: u64::from(fps.max(1)),
             tick: u64::MAX,
@@ -152,10 +182,10 @@ impl<P: Piece> Play<P> {
     }
 }
 
-/// Map `n` grid slots onto a picture `len` wide, centred; a picture wider
-/// than the grid loses its edges equally.
-fn centre(n: usize, len: usize) -> Vec<u32> {
-    let off = (n as isize - len as isize) / 2;
+/// Map `n` grid slots onto a picture `len` wide. A narrower picture is padded
+/// and a wider one cropped, `anchor` of the difference going before it.
+fn place(n: usize, len: usize, anchor: f64) -> Vec<u32> {
+    let off = ((n as f64 - len as f64) * anchor) as isize;
     (0..n as isize)
         .map(|i| {
             let p = i - off;
@@ -234,9 +264,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn centre_pads_and_crops_evenly() {
-        assert_eq!(centre(5, 3), [u32::MAX, 0, 1, 2, u32::MAX]);
-        assert_eq!(centre(3, 5), [1, 2, 3]);
+    fn place_pads_and_crops_around_the_anchor() {
+        assert_eq!(place(5, 3, 0.5), [u32::MAX, 0, 1, 2, u32::MAX]);
+        assert_eq!(place(3, 5, 0.5), [1, 2, 3]);
+        assert_eq!(place(3, 5, 0.0), [0, 1, 2]);
+        assert_eq!(place(3, 5, 1.0), [2, 3, 4]);
     }
 
     /// The checks every piece gets: it fills its picture with in-range glyphs
