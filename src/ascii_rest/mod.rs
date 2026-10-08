@@ -210,6 +210,15 @@ impl Camera {
         map_into(&mut self.ymap, self.grid.rows(), P::ROWS, v.y0);
     }
 
+    /// Show what `cam` shows, in this camera's own geometry: each cell takes
+    /// the picture cell under its centre on `cam`'s grid, ground where that
+    /// is `cam`'s margin or off the picture. Allocates nothing.
+    fn follow(&mut self, cam: &Camera) {
+        let (me, it) = (self.grid.shape_of(), cam.grid.shape_of());
+        follow_into(&mut self.xmap, me.cols, me.cell_w, it.cell_w, &cam.xmap);
+        follow_into(&mut self.ymap, me.rows, me.cell_h, it.cell_h, &cam.ymap);
+    }
+
     #[inline]
     fn draw<P: Piece>(&mut self, pic: &[Cell]) {
         let (xmap, ymap) = (&self.xmap, &self.ymap);
@@ -337,6 +346,18 @@ fn map_into(out: &mut Vec<u32>, n: usize, len: usize, x0: isize) {
     }));
 }
 
+/// `n` slots of `size` pixels, each mapped as the slot of `map`'s `of`-pixel
+/// grid under its centre maps. Both grids start at the panel's edge, so equal
+/// sizes copy `map`.
+fn follow_into(out: &mut Vec<u32>, n: usize, size: usize, of: usize, map: &[u32]) {
+    out.clear();
+    out.extend((0..n).map(|i| {
+        map.get((2 * i + 1) * size / (2 * of))
+            .copied()
+            .unwrap_or(u32::MAX)
+    }));
+}
+
 impl<P: Piece> Saver for Play<P> {
     fn render(&mut self, s: &mut Surface<'_>) {
         let tick = self.frames * u64::from(P::FPS) / self.fps;
@@ -366,7 +387,7 @@ impl<P: Piece> Saver for Play<P> {
 
     fn mirror(&mut self) -> &Grid {
         match &mut self.tour {
-            Some(t) => t.mirror::<P>(&self.pic, self.title.as_ref()),
+            Some(t) => t.mirror::<P>(&self.pic, &self.cam, self.title.as_ref()),
             None => &self.cam.grid,
         }
     }
