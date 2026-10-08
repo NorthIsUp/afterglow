@@ -40,43 +40,45 @@ pub mod text;
 pub mod tour;
 
 /// The one list of pieces. A port is a row here plus its file: its module, its
-/// `saver::SAVERS` row and its tests all come from this list.
+/// `saver::SAVERS` row and its tests all come from this list. `#[no_upstream]`
+/// marks this repo's own pieces (the `-wide` recompositions), which get no
+/// golden test: upstream has no output for them.
 macro_rules! each_piece {
     ($cb:ident) => {
         $cb! {
             alpine_dawn::AlpineDawn,
-            alpine_dawn_wide::AlpineDawnWide,
+            #[no_upstream] alpine_dawn_wide::AlpineDawnWide,
             aurora::Aurora,
             aurora_fjord::AuroraFjord,
-            aurora_fjord_wide::AuroraFjordWide,
+            #[no_upstream] aurora_fjord_wide::AuroraFjordWide,
             deep_reef::DeepReef,
-            deep_reef_wide::DeepReefWide,
+            #[no_upstream] deep_reef_wide::DeepReefWide,
             desert_night::DesertNight,
-            desert_night_wide::DesertNightWide,
+            #[no_upstream] desert_night_wide::DesertNightWide,
             double_pendulum::DoublePendulum,
             earthrise::Earthrise,
-            earthrise_wide::EarthriseWide,
+            #[no_upstream] earthrise_wide::EarthriseWide,
             fractal_tree::FractalTree,
             kyoto_dusk::KyotoDusk,
-            kyoto_dusk_wide::KyotoDuskWide,
+            #[no_upstream] kyoto_dusk_wide::KyotoDuskWide,
             lighthouse::Lighthouse,
             marine_drive::MarineDrive,
-            marine_drive_wide::MarineDriveWide,
+            #[no_upstream] marine_drive_wide::MarineDriveWide,
             misty_forest::MistyForest,
-            misty_forest_wide::MistyForestWide,
+            #[no_upstream] misty_forest_wide::MistyForestWide,
             night_coast::NightCoast,
-            night_coast_wide::NightCoastWide,
+            #[no_upstream] night_coast_wide::NightCoastWide,
             ocean_sunset::OceanSunset,
-            ocean_sunset_wide::OceanSunsetWide,
+            #[no_upstream] ocean_sunset_wide::OceanSunsetWide,
             reaction_diffusion::ReactionDiffusion,
             storm_plains::StormPlains,
-            storm_plains_wide::StormPlainsWide,
+            #[no_upstream] storm_plains_wide::StormPlainsWide,
             synthwave::Synthwave,
             taj_dawn::TajDawn,
-            taj_dawn_wide::TajDawnWide,
+            #[no_upstream] taj_dawn_wide::TajDawnWide,
             tv_static::TvStatic,
             varanasi_ghats::VaranasiGhats,
-            varanasi_ghats_wide::VaranasiGhatsWide,
+            #[no_upstream] varanasi_ghats_wide::VaranasiGhatsWide,
             vinyl::Vinyl,
         }
     };
@@ -84,7 +86,7 @@ macro_rules! each_piece {
 pub(crate) use each_piece;
 
 macro_rules! declare {
-    ($($m:ident::$t:ident),* $(,)?) => {
+    ($($(#[$no:ident])? $m:ident::$t:ident),* $(,)?) => {
         $(pub mod $m;)*
 
         #[cfg(test)]
@@ -98,13 +100,21 @@ macro_rules! declare {
                         tests::exercise::<crate::ascii_rest::$m::$t>();
                     }
 
-                    #[test]
-                    #[ignore = "needs ASCII_REST_GOLDEN; see tools/ascii-rest-golden.ts"]
-                    fn golden() {
-                        tests::golden::<crate::ascii_rest::$m::$t>();
-                    }
+                    golden!($($no)? $m::$t);
                 }
             )*
+        }
+    };
+}
+
+#[cfg(test)]
+macro_rules! golden {
+    (no_upstream $m:ident::$t:ident) => {};
+    ($m:ident::$t:ident) => {
+        #[test]
+        #[ignore = "needs ASCII_REST_GOLDEN; see tools/ascii-rest-golden.ts"]
+        fn golden() {
+            tests::golden::<crate::ascii_rest::$m::$t>();
         }
     };
 }
@@ -133,11 +143,6 @@ pub trait Piece: Sized + 'static {
     const GROUND: u32;
     /// How the picture meets a panel of another shape.
     const FIT: Fit = Fit::Contain;
-    /// False for this repo's own pieces (the `-wide` recompositions), which
-    /// have no upstream output for the golden test to compare against. Only
-    /// the test build reads it.
-    #[cfg_attr(not(test), allow(dead_code))]
-    const UPSTREAM: bool = true;
 
     fn new() -> Self;
 
@@ -643,9 +648,6 @@ pub(crate) mod tests {
     /// Exact, cell for cell: `math` reproduces JavaScriptCore wherever libm
     /// differs, so one stray cell is a port bug, not rounding noise.
     pub fn golden<P: Piece>() {
-        if !P::UPSTREAM {
-            return;
-        }
         let dir = std::env::var("ASCII_REST_GOLDEN").expect("set ASCII_REST_GOLDEN");
         let path = format!("{dir}/{}.golden", P::NAME);
         let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));

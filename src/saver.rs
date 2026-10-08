@@ -94,7 +94,7 @@ type Build = fn(&Panel, u32) -> Box<dyn Saver>;
 // A macro only so the ascii.rest rows come from `ascii_rest::each_piece`, the
 // one list of ports, instead of a second copy here.
 macro_rules! savers {
-    ($($m:ident::$t:ident),* $(,)?) => {
+    ($($(#[$no:ident])? $m:ident::$t:ident),* $(,)?) => {
         const SAVERS: &[(&str, Build)] = &[
         ("ascii", |p, _| Box::new(Fire::ascii(p))),
         ("blocks", |p, _| Box::new(Fire::blocks(p))),

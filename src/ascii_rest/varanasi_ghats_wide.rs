@@ -260,7 +260,6 @@ impl Piece for VaranasiGhatsWide {
     const FPS: u32 = 15;
     const CELL: usize = 1;
     const FIT: Fit = Fit::Cover { anchor: 0.3 };
-    const UPSTREAM: bool = false;
     const GROUND: u32 = hex("#0b0812");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[

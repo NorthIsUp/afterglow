@@ -177,7 +177,6 @@ impl Piece for DeepReefWide {
     const FPS: u32 = 15;
     const CELL: usize = 1;
     const FIT: Fit = Fit::Cover { anchor: 0.5 };
-    const UPSTREAM: bool = false;
     const GROUND: u32 = hex("#03101a");
     // A dot is never drawn darker than about half brightness (dot size carries
     // the darkness), so the palette starts at mid tones.
