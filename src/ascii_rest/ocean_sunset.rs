@@ -6,6 +6,10 @@
 //! The land and clear sky are built once, the clouds are wrapping fields that
 //! drift, and the sea is shaded each frame. A small sloop sits dark against
 //! the glow just left of the sun.
+//!
+//! `ocean-sunset-wide` is the same evening on a 3.2:1 canvas: the headland is
+//! drawn larger to hold its weight across the wider sea, the sun and the sloop
+//! move out with the frame, and a far, low island sits right of the sun.
 
 use std::f64::consts::PI;
 
@@ -14,17 +18,12 @@ use super::math::{clamp, fbm, hash, js_round, mix, noise, smooth};
 use super::{Fit, Piece, hex};
 use crate::grid::Cell;
 
-const W: usize = 200;
 const H: usize = 100;
 /// The horizon.
 const HZ: usize = 56;
 const HZF: f64 = HZ as f64;
-const SUN: [f64; 2] = [134.0, HZF - 4.5];
 /// The sun's radius.
 const SR: f64 = 8.5;
-/// The sloop's mast.
-const BOAT: usize = 112;
-const BOATF: f64 = BOAT as f64;
 /// Wind chop on the swell: [dir x, dir z, wavenumber, slope, speed, offset].
 const CHOP: [[f64; 6]; 4] = [
     [-0.45, 0.89, 22.0, 0.07, 2.1, 0.4],
@@ -52,10 +51,7 @@ const STOPS: [[f64; 4]; 6] = [
     [0.88, 0.8, 0.32, 0.4],
     [1.0, 0.88, 0.4, 0.4],
 ];
-const LANDW: usize = 60;
 const LANDH: usize = HZ + 10;
-/// The cloud deck's plane.
-const U: usize = 640;
 const V: usize = 128;
 /// The low bars' wrap.
 const CW: usize = 720;
@@ -63,6 +59,7 @@ const CW: usize = 720;
 const ROCK: u8 = 1;
 const PINE: u8 = 2;
 const SLOOP: u8 = 3;
+const ISLE: u8 = 4;
 
 fn gradient(v: f64) -> [f64; 3] {
     let mut i = 1;
@@ -74,32 +71,17 @@ fn gradient(v: f64) -> [f64; 3] {
     [mix(a[1], b[1], k), mix(a[2], b[2], k), mix(a[3], b[3], k)]
 }
 
-/// The headland's skyline row at x.
-fn ridge(x: f64) -> f64 {
-    HZF + 2.5
-        - 11.0 * smooth(54.0, 32.0, x).powf(0.7)
-        - 2.4 * (-((x - 19.0) / 9.0).powi(2)).exp()
-        - 2.0 * fbm(x * 0.21, 3.3, 3, 0.0)
-}
-
-/// The row where the headland's foot meets the sea.
-fn shore(x: f64) -> f64 {
-    HZF + 1.5 + 5.0 * smooth(54.0, 4.0, x)
-}
-
-/// A sea stack off the point.
-fn stack(x: f64) -> f64 {
-    if x > 52.0 && x < 58.0 {
-        HZF - 3.5 - 1.6 * fbm(x * 0.6, 8.1, 2, 0.0) + 2.5 * ((x - 55.0) / 3.0).powf(4.0)
+/// A far, low island spanning columns `span`: its skyline row at x.
+fn isle(x: f64, span: [usize; 2]) -> f64 {
+    let (a, b) = (span[0] as f64, span[1] as f64);
+    if x > a && x < b {
+        let u = (x - a) / (b - a);
+        HZF + 0.8
+            - 5.5 * (PI * u).sin().powf(0.7) * (0.75 + 0.5 * fbm(x * 0.12, 2.7, 3, 0.0))
+            - 3.0 * (-((x - (a + 20.0)) / 7.0).powi(2)).exp()
     } else {
         1e9
     }
-}
-
-fn deck_at(u: f64, v: f64) -> f64 {
-    let q = fbm(u * 0.0125, v * 0.06, 2, 8.0);
-    let patch = fbm(u * 0.00625, v * 0.03 + 7.0, 2, 4.0);
-    fbm(u * 0.040625 + q * 1.6, v * 0.3, 5, 26.0) + 0.25 * (patch - 0.5)
 }
 
 /// Long thin bars low over the horizon.
@@ -125,7 +107,57 @@ fn halftone(dots: &mut Dots, r: usize, x: usize, rgb: [f64; 3], floor: f64, fade
     dots.dot(step, rgb, s)
 }
 
-pub struct OceanSunset {
+/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+struct Layout {
+    name: &'static str,
+    w: usize,
+    sun: [f64; 2],
+    /// The sloop's mast.
+    boat: usize,
+    /// The headland's scale, across and up: 1.0 for upstream's, where `x / 1.0`
+    /// and `1.0 * v` are exact.
+    hs: f64,
+    vs: f64,
+    /// How far the headland's grid reaches.
+    landw: usize,
+    /// The cloud deck plane's width.
+    u: usize,
+    /// Its noise periods: the deck wraps at [`Layout::u`].
+    deck_periods: [f64; 3],
+    /// The far island's span.
+    isle: Option<[usize; 2]>,
+}
+
+const ORIGINAL: Layout = Layout {
+    name: "ocean-sunset",
+    w: 200,
+    sun: [134.0, HZF - 4.5],
+    boat: 112,
+    hs: 1.0,
+    vs: 1.0,
+    landw: 60,
+    u: 640,
+    deck_periods: [8.0, 4.0, 26.0],
+    isle: None,
+};
+
+const WIDE: Layout = Layout {
+    name: "ocean-sunset-wide",
+    w: 320,
+    sun: [212.0, HZF - 4.5],
+    boat: 188,
+    hs: 1.3,
+    vs: 1.15,
+    landw: 78,
+    u: 1280,
+    deck_periods: [16.0, 8.0, 52.0],
+    isle: Some([246, 316]),
+};
+
+pub type OceanSunset = Scene<false>;
+pub type OceanSunsetWide = Scene<true>;
+
+pub struct Scene<const IS_WIDE: bool> {
     dots: Dots,
     sky: Vec<f32>,
     land: Vec<u8>,
@@ -143,9 +175,53 @@ pub struct OceanSunset {
     skb: Vec<f32>,
 }
 
-impl Piece for OceanSunset {
-    const NAME: &'static str = "ocean-sunset";
-    const COLS: usize = W;
+impl<const IS_WIDE: bool> Scene<IS_WIDE> {
+    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
+    const W: usize = Self::L.w;
+    const BOAT: usize = Self::L.boat;
+    const BOATF: f64 = Self::BOAT as f64;
+    const HS: f64 = Self::L.hs;
+    const VS: f64 = Self::L.vs;
+    const LANDW: usize = Self::L.landw;
+    /// The cloud deck's plane.
+    const U: usize = Self::L.u;
+
+    /// The headland's skyline row at x.
+    fn ridge(x: f64) -> f64 {
+        let x = x / Self::HS;
+        HZF + 2.5
+            - Self::VS * 11.0 * smooth(54.0, 32.0, x).powf(0.7)
+            - Self::VS * 2.4 * (-((x - 19.0) / 9.0).powi(2)).exp()
+            - 2.0 * fbm(x * 0.21, 3.3, 3, 0.0)
+    }
+
+    /// The row where the headland's foot meets the sea.
+    fn shore(x: f64) -> f64 {
+        let x = x / Self::HS;
+        HZF + 1.5 + 5.0 * smooth(54.0, 4.0, x)
+    }
+
+    /// A sea stack off the point.
+    fn stack(x: f64) -> f64 {
+        let x = x / Self::HS;
+        if x > 52.0 && x < 58.0 {
+            HZF - 3.5 - 1.6 * fbm(x * 0.6, 8.1, 2, 0.0) + 2.5 * ((x - 55.0) / 3.0).powf(4.0)
+        } else {
+            1e9
+        }
+    }
+
+    fn deck_at(u: f64, v: f64) -> f64 {
+        let [p0, p1, p2] = Self::L.deck_periods;
+        let q = fbm(u * 0.0125, v * 0.06, 2, p0);
+        let patch = fbm(u * 0.00625, v * 0.03 + 7.0, 2, p1);
+        fbm(u * 0.040625 + q * 1.6, v * 0.3, 5, p2) + 0.25 * (patch - 0.5)
+    }
+}
+
+impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
+    const NAME: &'static str = Self::L.name;
+    const COLS: usize = Self::W;
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
@@ -166,15 +242,15 @@ impl Piece for OceanSunset {
     ];
 
     fn new() -> Self {
-        let n = W * H;
+        let n = Self::W * H;
 
         // the clear sky, built once
-        let mut sky = vec![0f32; HZ * W * 3];
+        let mut sky = vec![0f32; HZ * Self::W * 3];
         for r in 0..HZ {
-            for xi in 0..W {
+            for xi in 0..Self::W {
                 let x = xi as f64;
                 let y = r as f64 + 0.5;
-                let (dx, dy) = (x + 0.5 - SUN[0], (y - SUN[1]) * 1.6);
+                let (dx, dy) = (x + 0.5 - Self::L.sun[0], (y - Self::L.sun[1]) * 1.6);
                 let d = (dx * dx + dy * dy).sqrt();
                 // rose and violet everywhere, burning gold only toward the sun
                 let near = (-dx.abs() / 62.0).exp();
@@ -188,8 +264,8 @@ impl Piece for OceanSunset {
                 let glow = (-d / 40.0).exp() * 0.15 + (-d / 9.0).exp() * 0.1;
                 // high haze in long thin bands, so no stretch of sky is one flat tone
                 let haze = 0.82 + 0.36 * fbm(x * 0.03, y * 0.12, 3, 0.0);
-                let k = (r * W + xi) * 3;
-                let vig = (1.0 - 0.08 * ((x + 0.5 - 100.0).abs() / 100.0).powf(2.0)) * haze * fall;
+                let k = (r * Self::W + xi) * 3;
+                let vig = (1.0 - 0.08 * ((x + 0.5 - Self::W as f64 / 2.0).abs() / (Self::W as f64 / 2.0)).powf(2.0)) * haze * fall;
                 sky[k] = (g[0] * (0.85 + 0.15 * near) * vig + glow) as f32;
                 sky[k + 1] = (g[1] * (0.65 + 0.35 * near) * vig + glow * 0.7) as f32;
                 sky[k + 2] = (g[2] * (1.1 - 0.2 * near) * vig + glow * 0.3) as f32;
@@ -203,23 +279,23 @@ impl Piece for OceanSunset {
         let mut edge = [-1f32; LANDH];
         for (r, e) in edge.iter_mut().enumerate() {
             let y = r as f64 + 0.5;
-            for x in 0..LANDW {
+            for x in 0..Self::LANDW {
                 let xc = x as f64 + 0.5;
-                if y >= ridge(xc) && y < shore(xc) {
+                if y >= Self::ridge(xc) && y < Self::shore(xc) {
                     *e = x as f32;
                 }
             }
         }
-        let pine_foot = PINES.map(|p| ridge(p[0]));
+        let pine_foot = PINES.map(|p| Self::ridge(p[0] * Self::HS));
         for (r, &er) in edge.iter().enumerate() {
             let y = r as f64 + 0.5;
-            for xi in 0..LANDW {
-                let k = r * W + xi;
+            for xi in 0..Self::LANDW {
+                let k = r * Self::W + xi;
                 let x = xi as f64;
                 let xc = x + 0.5;
-                let (t0, st) = (ridge(xc), stack(xc));
+                let (t0, st) = (Self::ridge(xc), Self::stack(xc));
                 let (mut cr, mut cg, mut cb) = (0.0, 0.0, 0.0);
-                let main = y >= t0 && y < shore(xc);
+                let main = y >= t0 && y < Self::shore(xc);
                 if main || (y >= st && y < HZF + 1.2) {
                     land[k] = ROCK;
                     let is_stack = !main;
@@ -232,7 +308,7 @@ impl Piece for OceanSunset {
                         0.4 + if is_stack {
                             0.5
                         } else {
-                            (ridge(xc + 1.2) - ridge(xc - 1.2)) * 0.45
+                            (Self::ridge(xc + 1.2) - Self::ridge(xc - 1.2)) * 0.45
                         },
                     );
                     let rim = smooth(top + 2.4, top + 0.4, y) * facing;
@@ -240,8 +316,8 @@ impl Piece for OceanSunset {
                     let crag = smooth(0.35, 0.75, fbm(x * 0.4 + 3.0, y * 0.5, 3, 0.0));
                     let er = f64::from(er);
                     let face = if is_stack {
-                        smooth(53.5, 57.5, xc) * 0.7
-                    } else if er > 30.0 {
+                        smooth(53.5 * Self::HS, 57.5 * Self::HS, xc) * 0.7
+                    } else if er > 30.0 * Self::HS {
                         (-(er - x) / 4.0).exp() * smooth(HZF + 5.0, HZF - 4.0, y)
                     } else {
                         0.0
@@ -252,6 +328,7 @@ impl Piece for OceanSunset {
                     cb = mix(cb, 0.3, lit * 0.9);
                 }
                 for (&[tx, th, tw], &tb) in PINES.iter().zip(&pine_foot) {
+                    let (tx, th, tw) = (tx * Self::HS, th * Self::VS, tw * Self::HS);
                     let dy = y - (tb - th);
                     // a conifer: a spire that widens in tiers of branches
                     let tier = (dy + th * 0.3) / 2.4;
@@ -280,9 +357,9 @@ impl Piece for OceanSunset {
         // a small sloop out on the water, dark against the glow left of the sun
         for r in HZ - 10..HZ + 4 {
             let y = r as f64 + 0.5;
-            for x in BOAT - 6..=BOAT + 6 {
-                let k = r * W + x;
-                let ex = x as f64 + 0.5 - BOATF;
+            for x in Self::BOAT - 6..=Self::BOAT + 6 {
+                let k = r * Self::W + x;
+                let ex = x as f64 + 0.5 - Self::BOATF;
                 let hull = (HZF + 1.0..HZF + 3.0).contains(&y)
                     && (ex - 0.3).abs() < 4.6 - (y - HZF - 1.0) * 1.3;
                 let mast = ex.abs() < 0.5 && (HZF - 9.0..HZF + 1.0).contains(&y);
@@ -307,22 +384,44 @@ impl Piece for OceanSunset {
             }
         }
 
+        // the far island, hazy with distance, its sunward slopes rimmed
+        if let Some([i0, i1]) = Self::L.isle {
+            let isle = |x: f64| isle(x, [i0, i1]);
+            for r in HZ - 12..HZ + 1 {
+                let y = r as f64 + 0.5;
+                for xi in i0..i1 {
+                    let xc = xi as f64 + 0.5;
+                    let top = isle(xc);
+                    if y >= top && y < HZF + 0.8 {
+                        let k = r * Self::W + xi;
+                        land[k] = ISLE;
+                        let s = 0.8 + 0.4 * fbm(xc * 0.3, y * 0.6, 2, 0.0);
+                        let facing = clamp(0.3 + (isle(xc - 1.2) - isle(xc + 1.2)) * 0.5);
+                        let rim = smooth(top + 1.8, top + 0.3, y) * facing;
+                        lr[k] = mix(0.15 * s, 0.85, rim * 0.7) as f32;
+                        lg[k] = mix(0.07 * s, 0.34, rim * 0.6) as f32;
+                        lb[k] = mix(0.2 * s, 0.34, rim * 0.6) as f32;
+                    }
+                }
+            }
+        }
+
         // The cloud deck: a sheet of heaped cloud seen from below, laid out on
         // its own plane so it shrinks and flattens toward the horizon.
-        let mut deck = vec![0f32; U * V];
-        let mut deck_lit = vec![0f32; U * V];
+        let mut deck = vec![0f32; Self::U * V];
+        let mut deck_lit = vec![0f32; Self::U * V];
         for v in 0..V {
-            for u in 0..U {
+            for u in 0..Self::U {
                 let (uf, vf) = (u as f64, v as f64);
-                let d = deck_at(uf, vf);
-                deck[v * U + u] = d as f32;
+                let d = Self::deck_at(uf, vf);
+                deck[v * Self::U + u] = d as f32;
                 // the side of each heap that faces the horizon, and the sun, is lit
-                deck_lit[v * U + u] = clamp(0.5 + (d - deck_at(uf, vf + 2.5)) * 9.0) as f32;
+                deck_lit[v * Self::U + u] = clamp(0.5 + (d - Self::deck_at(uf, vf + 2.5)) * 9.0) as f32;
             }
         }
         // thinning toward the zenith, ragged rather than a ruled line
-        let thin_top = (0..W * HZ)
-            .map(|k| fbm((k % W) as f64 * 0.05 + 11.0, (k / W) as f64 * 0.15, 2, 0.0) as f32)
+        let thin_top = (0..Self::W * HZ)
+            .map(|k| fbm((k % Self::W) as f64 * 0.05 + 11.0, (k / Self::W) as f64 * 0.15, 2, 0.0) as f32)
             .collect();
 
         // low bars over the horizon: a wrapping field that drifts
@@ -350,9 +449,9 @@ impl Piece for OceanSunset {
             thin_top,
             lo_cover,
             lo_lit,
-            skr: vec![0f32; HZ * W],
-            skg: vec![0f32; HZ * W],
-            skb: vec![0f32; HZ * W],
+            skr: vec![0f32; HZ * Self::W],
+            skg: vec![0f32; HZ * Self::W],
+            skb: vec![0f32; HZ * Self::W],
         }
     }
 
@@ -364,17 +463,17 @@ impl Piece for OceanSunset {
 
         for r in 0..HZ {
             let y = r as f64 + 0.5;
-            for xi in 0..W {
+            for xi in 0..Self::W {
                 let x = xi as f64;
-                let k = r * W + xi;
+                let k = r * Self::W + xi;
                 let s = k * 3;
                 let (mut cr, mut cg, mut cb) = (
                     f64::from(self.sky[s]),
                     f64::from(self.sky[s + 1]),
                     f64::from(self.sky[s + 2]),
                 );
-                let dx = x + 0.5 - SUN[0];
-                let dy = y - SUN[1];
+                let dx = x + 0.5 - Self::L.sun[0];
+                let dy = y - Self::L.sun[1];
                 let mut disc = 0.0;
                 let ds = (dx * dx + (dy / 0.9).powi(2)).sqrt();
                 if ds < SR + 0.6 {
@@ -399,10 +498,10 @@ impl Piece for OceanSunset {
                     let iuf = su.floor();
                     let (fu, ivf) = (su - iuf, sv.floor());
                     let fv = sv - ivf;
-                    let iu = iuf as usize % U;
-                    let iu1 = (iu + 1) % U;
-                    let a0 = ivf as usize * U;
-                    let a1 = a0 + U;
+                    let iu = iuf as usize % Self::U;
+                    let iu1 = (iu + 1) % Self::U;
+                    let a0 = ivf as usize * Self::U;
+                    let a1 = a0 + Self::U;
                     let dk = |i: usize| f64::from(self.deck[i]);
                     let d0 = dk(a0 + iu) + (dk(a0 + iu1) - dk(a0 + iu)) * fu;
                     let d1 = dk(a1 + iu) + (dk(a1 + iu1) - dk(a1 + iu)) * fu;
@@ -443,7 +542,7 @@ impl Piece for OceanSunset {
                 // thinned over the sun and kept off the sky behind the headland
                 let c = (c0 + (c1 - c0) * fx)
                     * (1.0 - 0.75 * (-(dx / 13.0).powi(2)).exp())
-                    * (1.0 - 0.85 * smooth(76.0, 50.0, x));
+                    * (1.0 - 0.85 * smooth(76.0 * Self::HS, 50.0 * Self::HS, x));
                 if c > 0.01 {
                     cloud = cloud.max(c);
                     let (l0, l1) = (f64::from(self.lo_lit[i0]), f64::from(self.lo_lit[i1]));
@@ -494,9 +593,9 @@ impl Piece for OceanSunset {
             let fres = 0.24 + 0.46 * (-dz / 8.0).exp();
             let depth = smooth(HZF, hf, y);
             let fade = smooth(hf + 6.0, hf - 4.0, y);
-            for xi in 0..W {
+            for xi in 0..Self::W {
                 let x = xi as f64;
-                let k = r * W + xi;
+                let k = r * Self::W + xi;
                 if self.land[k] != 0 {
                     out[k] = {
                         let c = lrgb(self, k);
@@ -504,8 +603,8 @@ impl Piece for OceanSunset {
                     };
                     continue;
                 }
-                let dx = x + 0.5 - SUN[0];
-                let xp = (x + 0.5 - 100.0) / dz;
+                let dx = x + 0.5 - Self::L.sun[0];
+                let xp = (x + 0.5 - Self::W as f64 / 2.0) / dz;
                 // the long swell rolls toward us; shorter chop rides on it
                 let p =
                     13.0 * (z + 0.05 * xp) + 2.2 * fbm(xp * 0.35 + 3.0, z * 0.4, 2, 0.0) + t * 0.8;
@@ -519,8 +618,8 @@ impl Piece for OceanSunset {
                     sxl += c * kx;
                 }
                 let ry = js_round(HZF - 1.0 - dz * 0.85 - 70.0 * sz).clamp(0.0, HZF - 1.0);
-                let rx = js_round(x - 60.0 * sxl).clamp(0.0, W as f64 - 1.0);
-                let q = ry as usize * W + rx as usize;
+                let rx = js_round(x - 60.0 * sxl).clamp(0.0, Self::W as f64 - 1.0);
+                let q = ry as usize * Self::W + rx as usize;
                 // violet near the horizon, deepening to indigo toward us,
                 // broken into long horizontal ripples, each giving back a
                 // little more or less of the sky
@@ -568,14 +667,14 @@ impl Piece for OceanSunset {
                 cg += col * 0.8;
                 cb += col * 0.45;
                 // the headland upside down in the water, broken by ripples
-                if xi < LANDW + 4 && dz < 26.0 {
+                if xi < Self::LANDW + 4 && dz < 26.0 {
                     let xs = x + 0.5 + 1.3 * (y * 1.1 + t * 1.2 + x * 0.05).sin();
-                    let ix = (xs as i32).clamp(0, LANDW as i32 - 1) as usize;
-                    let ft = shore(ix as f64 + 0.5);
+                    let ix = (xs as i32).clamp(0, Self::LANDW as i32 - 1) as usize;
+                    let ft = Self::shore(ix as f64 + 0.5);
                     if y > ft {
                         let my = (2.0 * ft - y).floor();
                         if my >= 0.0 && my < LANDH as f64 {
-                            let m = my as usize * W + ix;
+                            let m = my as usize * Self::W + ix;
                             if self.land[m] != 0 {
                                 let a = 0.8 * smooth(ft + 24.0, ft + 4.0, y);
                                 cr = mix(cr, f64::from(self.lr[m]) * 0.8 + 0.02, a);
@@ -592,14 +691,28 @@ impl Piece for OceanSunset {
                     }
                 }
                 // and the sloop's, shorter and more broken
-                if dz > 2.5 && dz < 14.0 && xi > BOAT - 8 && xi < BOAT + 8 {
+                if dz > 2.5 && dz < 14.0 && xi > Self::BOAT - 8 && xi < Self::BOAT + 8 {
                     let ix = (x + 0.5 + 0.9 * (y * 1.3 + t * 1.6).sin()) as usize;
-                    let m = (2.0 * (HZF + 3.0) - y).floor() as usize * W + ix;
+                    let m = (2.0 * (HZF + 3.0) - y).floor() as usize * Self::W + ix;
                     if self.land[m] == SLOOP {
                         let a = 0.7 * smooth(HZF + 14.0, HZF + 4.0, y) * (0.6 + 0.4 * rip);
                         cr = mix(cr, 0.04, a);
                         cg = mix(cg, 0.03, a);
                         cb = mix(cb, 0.1, a);
+                    }
+                }
+                // the island's, short and dim
+                if let Some([i0, i1]) = Self::L.isle {
+                    if dz < 7.0 && xi >= i0 && xi < i1 {
+                        let ix = (x + 0.5 + 0.7 * (y * 1.4 + t * 1.4).sin()) as usize;
+                        let m = (2.0 * (HZF + 0.8) - y).floor() as usize * Self::W
+                            + ix.min(Self::W - 1);
+                        if self.land[m] == ISLE {
+                            let a = 0.6 * smooth(HZF + 7.0, HZF + 1.0, y) * (0.6 + 0.4 * rip);
+                            cr = mix(cr, 0.1, a);
+                            cg = mix(cg, 0.05, a);
+                            cb = mix(cb, 0.16, a);
+                        }
                     }
                 }
                 // a crisp dark line at the horizon for the sun to sit on
