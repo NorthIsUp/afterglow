@@ -1,12 +1,16 @@
 # `storm-plains`
 
+![`storm-plains`](../media/storm-plains.gif)
+
 An anvil thunderhead at dusk over open wheat country. The sun has just set behind the farmhouse, so the storm's top and western flank still catch its light while the base sinks into slate shadow. Lightning flickers inside the cloud, now and then a bolt reaches the ground, rain curtains drift under the base and the wheat moves in gusts.
 
-One of ascii.rest's thirteen halftone scenes: shaded cell by cell and drawn as dots whose size is their brightness. The camera slowly tours it; the shared engine, the tour and its knobs are in [the ascii.rest ports](../ascii-rest.md).
+One of ascii.rest's thirteen halftone scenes: shaded cell by cell and drawn as dots whose size is their brightness. It holds the cover view; `ASCII_REST_TOUR=1` sets a camera slowly touring it. The shared engine, the tour and its knobs are in [the ascii.rest ports](../ascii-rest.md).
 
 Source: [`src/ascii_rest/storm_plains.rs`](../../src/ascii_rest/storm_plains.rs).
 
 ## `storm-plains-wide`
+
+![`storm-plains-wide`](../media/storm-plains-wide.gif)
 
 The storm stands further east, its anvil streaming on across the extra sky.
 

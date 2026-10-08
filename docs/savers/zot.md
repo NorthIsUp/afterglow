@@ -1,5 +1,7 @@
 # `zot`
 
+![`zot`](../media/zot.gif)
+
 Lightning. A leader crosses the panel and forks, each fork forking again; the channel strobes over a white core in a blue halo, goes out, and usually fires again down the same channel a beat later — a double or triple flash — before the panel goes dark for a second or two. Endpoints are drawn on the perimeter by arc length, so the bolt crosses the panel at any aspect — 1920x1080 or the native 1280x400.
 
 `src/zot.rs` is a bolt and then a gap, and the gap is most of it: the

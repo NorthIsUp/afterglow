@@ -1,5 +1,7 @@
 # `confetti`
 
+![`confetti`](../media/confetti.gif)
+
 Pieces flutter down, land, and pile up like sand. Confetti falls in a gust band
 that sweeps across the panel, so a heap builds under it and topples outward once
 the gust has moved on. Between three and seven ledges stand partway up the panel

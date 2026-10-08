@@ -1,5 +1,7 @@
 # `strings`
 
+![`strings`](../media/strings.gif)
+
 "String Theory", the After Dark module — a polygon whose corners each bounce independently, redrawn every frame over the fading outlines behind it, so a ribbon of lines sweeps and folds. Three ribbons, one hue each.
 
 `src/strings.rs` is After Dark's "String Theory": a polygon whose corners

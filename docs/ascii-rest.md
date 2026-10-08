@@ -59,7 +59,7 @@ the title switches to one glyph per cell, as a character piece's always is.
 
 ## The scene tour
 
-For the halftone scenes the camera moves Ken Burns style. Each shot is a slow
+Off by default: a scene holds its cover view. With `ASCII_REST_TOUR=1` the camera moves Ken Burns style. Each shot is a slow
 push in or pull out with a gentle pan, 15-30 seconds at the default, eased at
 both ends with a half-second settle, and the next shot carries on from where
 it ended. Every third to fifth shot pulls back to the cover view or to the
@@ -95,7 +95,7 @@ mapping is redone only when the view moves, and only while someone watches.
 ## `-wide` variants
 
 The same thirteen scenes recomposed at 320x100 (3.2:1), so they fill pine's glass uncropped. Knobs: as the scenes.
-The mirror page lists each scene once, with an `expanded` toggle between the two.
+The mirror page lists each scene once, with an `expanded` toggle between the two; the pair opens on the `-wide`, in rotation too, until someone unticks it.
 
 **`-wide` variants** are this repo's own: a scene recomposed on a 320x100 grid
 so it fills pine's 3.2:1 glass with nothing cropped, rather than stretched. Each

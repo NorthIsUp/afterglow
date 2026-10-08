@@ -44,3 +44,12 @@ run         = "cargo fmt --all -- --check"
 [tasks.font]
 description = "Regenerate src/font.rs from the vendored Unifont subset"
 run         = "python3 tools/genfont.py tools/unifont-subset.hex -o src/font.rs && cargo fmt"
+
+[tasks.media]
+description = "Regenerate docs/media/: a GIF per saver plus the tour (all savers by default)"
+depends     = ["build"]
+tools       = { uv = "latest", "cargo:gifski" = "1" }
+usage       = '''
+arg "[savers]..." help="Savers to render; none renders every saver and the tour"
+'''
+run         = "uv run tools/media.py"

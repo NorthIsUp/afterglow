@@ -1,5 +1,7 @@
 # `dvd`
 
+![`dvd`](../media/dvd.gif)
+
 The bouncing DVD logo, and the corner hit it exists for. When the logo lands
 exactly in a corner it stops dead and strobes through the palette for
 `DVD_CORNER_MS` — the only time it is ever still.

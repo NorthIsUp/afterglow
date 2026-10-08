@@ -1,5 +1,7 @@
 # `city`
 
+![`city`](../media/city.gif)
+
 The After Dark night skyline — lit windows on a black silhouette, scattered stars, a beacon on the tallest tower and the odd shooting star.
 
 `src/city.rs` is the After Dark night skyline, and its palette and layout

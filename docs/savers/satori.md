@@ -1,5 +1,7 @@
 # `satori`
 
+![`satori`](../media/satori.gif)
+
 A slow colour-field composition: the panel is split into a handful of
 rectangles, each holding one muted tone, all of it moving far slower than a
 glance. Tones walk a closed ribbon of 24 hues, so every intermediate colour on
