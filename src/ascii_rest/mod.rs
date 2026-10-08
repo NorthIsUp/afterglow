@@ -61,7 +61,7 @@ macro_rules! each_piece {
             desert_night::{DesertNight, #[no_upstream] DesertNightWide},
             double_pendulum::{#[fill] DoublePendulum},
             earthrise::{Earthrise, #[no_upstream] EarthriseWide},
-            fractal_tree::{FractalTree, #[fill] FractalTreeWide},
+            fractal_tree::{#[fill] FractalTree},
             kyoto_dusk::{KyotoDusk, #[no_upstream] KyotoDuskWide},
             lighthouse::{#[fill] Lighthouse},
             marine_drive::{MarineDrive, #[no_upstream] MarineDriveWide},
