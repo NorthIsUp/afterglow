@@ -5,7 +5,9 @@
 //! `vinyl-wide` is a DJ's console across the panel: two decks, the right one
 //! pitched a little up so the pair drift in and out of phase, either side of
 //! a mixer whose meters jump to the beat, whose EQ knobs and faders get
-//! nudged, and whose crossfader sweeps slowly from deck to deck. A single
+//! nudged, and whose crossfader sweeps slowly from deck to deck. Each deck's
+//! tonearm plays its side: it tracks in to the run-out groove, lifts, swings
+//! back to its rest, then cues down at the lead-in again. A single
 //! turntable stretched to 3.2:1 would be a record and a lot of plinth; two
 //! decks and a mixer is the shape that object really has at that width. The
 //! decks are upstream's turntable at upstream's size on pine, scaled to the
@@ -115,6 +117,9 @@ struct Spec {
     pitch: i64,
     /// The twin's label colour.
     label: u16,
+    /// The tonearm's side, in seconds, and how far into its cycle it starts
+    /// as a share of one; `None` leaves it in the outer grooves, as upstream.
+    side: Option<(f64, f64)>,
 }
 
 const ORIGINAL: Spec = Spec {
@@ -124,7 +129,65 @@ const ORIGINAL: Spec = Spec {
     dust: 0.0,
     pitch: 0,
     label: 0,
+    side: None,
 };
+
+/// Seconds of each step after a side: the cue lever lifts the arm, it swings
+/// back to its rest, waits there, swings out over the lead-in and cues down.
+const LIFT: f64 = 1.2;
+const BACK: f64 = 4.0;
+const PARK: f64 = 3.0;
+const OVER: f64 = 3.0;
+const CUE: f64 = 1.5;
+
+/// Smoothstep, for the arm's swings.
+fn ease(u: f64) -> f64 {
+    u * u * (3.0 - 2.0 * u)
+}
+
+/// Where the tonearm is in its cycle at `t`: its angle about the pivot,
+/// whether the cue lever is up, and whether the arm is lifted off the record.
+type Pose = (f64, bool, bool);
+
+/// The tonearm's cycle: angles about the pivot (y down, x in rows) at its
+/// rest, the lead-in and the run-out groove, and the arm's length in rows.
+struct Swing {
+    side: f64,
+    /// Seconds into the cycle at `t` = 0.
+    lead: f64,
+    rest: f64,
+    lead_in: f64,
+    run_out: f64,
+    len: f64,
+}
+
+impl Swing {
+    fn pose(&self, t: f64) -> Pose {
+        let (rest, a, b) = (self.rest, self.lead_in, self.run_out);
+        let mut u = (t + self.lead).rem_euclid(self.side + LIFT + BACK + PARK + OVER + CUE);
+        if u < self.side {
+            return (a + (b - a) * u / self.side, false, false);
+        }
+        u -= self.side;
+        if u < LIFT {
+            return (b, true, u > LIFT * 0.4);
+        }
+        u -= LIFT;
+        if u < BACK {
+            return (b + (rest - b) * ease(u / BACK), true, true);
+        }
+        u -= BACK;
+        if u < PARK {
+            return (rest, false, false);
+        }
+        u -= PARK;
+        if u < OVER {
+            return (rest + (a - rest) * ease(u / OVER), true, true);
+        }
+        u -= OVER;
+        (a, u < CUE * 0.6, u < CUE * 0.8)
+    }
+}
 
 /// One turntable: its record, traced once, and where its furniture goes.
 struct Deck {
@@ -135,6 +198,11 @@ struct Deck {
     dust: f64,
     pitch: i64,
     label: u16,
+    /// The tonearm's pivot (column, row), and its headshell's left end and
+    /// row resting in the outer grooves.
+    pivot: (f64, f64),
+    shell: (f64, f64),
+    swing: Option<Swing>,
     cells: Vec<Disc>,
     subs: Vec<(f64, f64)>,
     edge: Vec<(usize, Cell)>,
@@ -275,6 +343,40 @@ impl Deck {
             })
             .collect();
 
+        let pc = (cx + 2.0 * R * s + 10.5).round();
+        let pr = (cy - R * s + 1.5).round();
+        let shell = ((cx + 13.5 * s).round(), (cy + 3.5 * s).round());
+        let swing = spec.side.map(|(side, share)| {
+            // Angles about the pivot's cell centre to the headshell's, x in
+            // rows so the arm keeps its length as it turns.
+            let (px, py) = (pc + 0.5, pr + 0.5);
+            let (vx, vy) = ((shell.0 + 2.5 - px) / 2.0, shell.1 + 0.5 - py);
+            let (len, lead_in) = (vx.hypot(vy), vy.atan2(vx));
+            let head = |a: f64, dc: f64| {
+                let x = (px + 2.0 * len * a.cos() + dc - cx) / 2.0;
+                x.hypot(py + len * a.sin() - cy)
+            };
+            // In to the run-out groove just outside the label, and back out
+            // until the whole headshell clears the platter, or hangs straight
+            // down from the pivot, whichever comes first.
+            let mut run_out = lead_in;
+            while head(run_out, 0.0) > (LABEL + 1.2) * s && run_out < lead_in + PI / 2.0 {
+                run_out += 0.002;
+            }
+            let mut rest = lead_in;
+            while head(rest, -2.5) < RIM * s + 2.5 && rest > PI / 2.0 {
+                rest -= 0.002;
+            }
+            let period = side + LIFT + BACK + PARK + OVER + CUE;
+            Swing {
+                side,
+                lead: share * period,
+                rest: rest.max(PI / 2.0),
+                lead_in,
+                run_out,
+                len,
+            }
+        });
         Self {
             cx,
             cy,
@@ -283,6 +385,9 @@ impl Deck {
             dust: spec.dust,
             pitch: spec.pitch,
             label: spec.label,
+            pivot: (pc, pr),
+            shell,
+            swing,
             cells,
             subs,
             edge,
@@ -349,14 +454,11 @@ impl Deck {
     /// The start and speed buttons, the pitch slider and the tonearm. The
     /// buttons and the slider's foot keep to the record, not to a taller
     /// panel's bottom edge.
-    fn furniture(&self, ox: f64, pen: &mut Pen<'_>) {
+    fn furniture(&self, t: f64, ox: f64, pen: &mut Pen<'_>) {
         let s = self.s;
         let bottom = (self.cy + 11.5 * s).round().min((pen.rows - 1) as f64);
         pen.ink(PLINTH);
-        let pc = (self.cx + 2.0 * R * s + 10.5).round();
-        let pr = (self.cy - R * s + 1.5).round();
-        let ar = (self.cy + 3.5 * s).round();
-        let hc = (self.cx + 13.5 * s).round();
+        let (pc, pr) = self.pivot;
         pen.words(ox + 2.0, bottom - 3.0, "┌──┐");
         pen.words(ox + 2.0, bottom - 2.0, "└──┘");
         pen.words(pc - 4.0, bottom - 3.0, "┌┐┌┐");
@@ -372,6 +474,17 @@ impl Deck {
 
         // The tonearm: counterweight behind the pivot, the pivot in its ring,
         // a tube down and round to the headshell, and the cue lever beside it.
+        // Swung, the headshell follows its arc and the tube keeps its dog-leg;
+        // lifted, the arm's end rides a row up and the lever stands taller.
+        let ((hc, ar), lever, lifted) = match &self.swing {
+            None => (self.shell, false, false),
+            Some(w) => {
+                let (a, lever, lifted) = w.pose(t);
+                let x = pc + 0.5 + 2.0 * w.len * a.cos() - 2.5;
+                let y = (pr + 0.5 + w.len * a.sin()).floor().max(pr + 3.0);
+                ((x.round(), y - f64::from(u8::from(lifted))), lever, lifted)
+            }
+        };
         pen.ink(BRASS);
         pen.words(pc - 2.0, pr - 3.0, "▗▄▄▄▖");
         pen.words(pc - 2.0, pr - 2.0, "▝▀█▀▘");
@@ -388,9 +501,15 @@ impl Deck {
             pen.put(c, ar, '═');
             c += 1.0;
         }
-        pen.put(pc, ar, '╝');
+        if hc + 5.0 <= pc {
+            pen.put(pc, ar, '╝');
+        }
+        pen.ink(if lifted { CAP } else { BRASS });
         pen.words(hc, ar, "▐███▌");
-        pen.words(pc + 3.0, pr + 4.0, "╭╮");
+        pen.ink(if lever { CAP } else { BRASS });
+        let up = f64::from(u8::from(lever));
+        pen.words(pc + 3.0, pr + 4.0 - up, "╭╮");
+        pen.words(pc + 3.0, pr + 5.0 - up, "││");
         pen.words(pc + 3.0, pr + 5.0, "││");
         pen.words(pc + 3.0, pr + 6.0, "╰╯");
     }
@@ -590,7 +709,7 @@ impl Scene {
         pen.ink(PLINTH);
         pen.plinth();
         for (ox, deck) in &self.decks {
-            deck.furniture(*ox, &mut pen);
+            deck.furniture(t, *ox, &mut pen);
         }
         if let Some(m) = &self.mixer {
             m.draw(t, &mut pen);
@@ -639,9 +758,10 @@ impl Canvas for VinylWide {
         let s = (h / ROWS as f64)
             .min((w - MIX - 2.0 * (ARM + 1.0)) / (2.0 * (CX + 2.0 * R)))
             .max(0.25);
+        let side = crate::env_num(&["VINYL_SIDE_SECS"], 240, 20, 3600) as f64;
         let dw = (CX + 2.0 * R) * s + ARM + 1.0;
         let right = (w - dw).floor();
-        let deck = |ox: f64, rate: f64, dust: f64, pitch: i64, label: u16| {
+        let deck = |ox: f64, rate: f64, dust: f64, pitch: i64, label: u16, share: f64| {
             let spec = Spec {
                 ox,
                 s,
@@ -649,6 +769,7 @@ impl Canvas for VinylWide {
                 dust,
                 pitch,
                 label,
+                side: Some((side, share)),
             };
             (ox, Deck::new(cols, rows, &spec))
         };
@@ -657,8 +778,10 @@ impl Canvas for VinylWide {
             cols,
             rows,
             decks: vec![
-                deck(0.0, 1.0, 0.0, 0, RED_LABEL),
-                deck(right, 1.02, PI, 1, BLUE_LABEL),
+                deck(0.0, 1.0, 0.0, 0, RED_LABEL, 0.0),
+                // Most of a side behind, so one deck changes over while the
+                // other plays.
+                deck(right, 1.02, PI, 1, BLUE_LABEL, 0.58),
             ],
             colour: true,
             mixer: (x1 - x0 >= 10.0 && rows >= 16).then_some(Mixer {
@@ -671,5 +794,30 @@ impl Canvas for VinylWide {
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One side, round: plays in from the lead-in lowered, lifts at the
+    /// run-out, parks off the record, and is back at the lead-in a cycle on.
+    #[test]
+    fn the_arm_plays_a_side_and_comes_back() {
+        let deck = Deck::new(120, 25, &Spec {
+            side: Some((20.0, 0.0)),
+            ..ORIGINAL
+        });
+        let w = deck.swing.as_ref().unwrap();
+        let period = 20.0 + LIFT + BACK + PARK + OVER + CUE;
+        assert_eq!(w.pose(0.0), (w.lead_in, false, false));
+        assert!(w.run_out > w.lead_in && w.rest < w.lead_in);
+        let (a, _, lifted) = w.pose(10.0);
+        assert!(a > w.lead_in && a < w.run_out && !lifted);
+        assert_eq!(w.pose(20.0 + LIFT * 0.9), (w.run_out, true, true));
+        assert_eq!(w.pose(20.0 + LIFT + BACK + 1.0), (w.rest, false, false));
+        let (a, ..) = w.pose(period);
+        assert!((a - w.lead_in).abs() < 1e-9);
     }
 }
