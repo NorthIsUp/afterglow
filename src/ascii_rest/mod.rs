@@ -174,6 +174,10 @@ pub trait Piece: Sized + 'static {
     const GROUND: u32;
     /// How the picture meets a panel of another shape.
     const FIT: Fit = Fit::Contain;
+    /// Knob values that draw upstream's picture, for the golden test: a
+    /// port's own additions default on.
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[];
 
     fn new() -> Self;
 
@@ -763,6 +767,44 @@ pub(crate) mod tests {
         }
     }
 
+    /// `P` built with its `UPSTREAM` knobs, each checked against what its
+    /// constructor really reads.
+    fn upstream<P: Piece>() -> P {
+        use crate::config;
+        let _knobs = config::SHARED_KNOBS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let knobs = config::discover(|| drop(P::new()));
+        for (key, value) in P::UPSTREAM {
+            let knob = knobs.iter().find(|k| k.key == *key);
+            let knob = knob.unwrap_or_else(|| panic!("{}: reads no {key}", P::NAME));
+            config::set(knob, value).unwrap();
+        }
+        let piece = P::new();
+        for (key, _) in P::UPSTREAM {
+            config::reset(key);
+        }
+        piece
+    }
+
+    /// The upstream knobs are the port's own picture switched off, so they
+    /// must change it: a no-op entry would leave the golden test vacuous.
+    #[test]
+    fn upstream_knobs_change_the_picture() {
+        fn pic<P: Piece>(mut p: P) -> Vec<Cell> {
+            let mut out = vec![Cell::CLEAR; P::COLS * P::ROWS];
+            p.frame(4.0, &mut out);
+            out
+        }
+        let ours = {
+            let _knobs = crate::config::SHARED_KNOBS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            tv_static::TvStatic::new()
+        };
+        assert_ne!(pic(ours), pic(upstream::<tv_static::TvStatic>()));
+    }
+
     /// Compare the port with upstream's own output, written by
     /// `tools/ascii-rest-golden.ts` into `$ASCII_REST_GOLDEN/<name>.golden`.
     /// Ignored by default: it needs bun and an upstream checkout.
@@ -794,7 +836,7 @@ pub(crate) mod tests {
                 glyph::of(c)
             }
         };
-        let mut piece = P::new();
+        let mut piece = upstream::<P>();
         let mut pic = vec![Cell::CLEAR; P::COLS * P::ROWS];
         let mut tick = 0u64;
         let mut differ = 0usize;

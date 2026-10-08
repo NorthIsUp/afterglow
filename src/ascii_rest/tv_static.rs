@@ -2,6 +2,9 @@
 //! dial clicks over, a test card rolls into place and holds, then is lost.
 //!
 //! Upstream's `set` option is on by default and always on here.
+//! `TV_STATIC_COLOR` (on by default) paints the set in the twin's colours:
+//! the card's bars in their own, a grey cabinet and an amber dial. Off, it is
+//! upstream's one ink, cell for cell.
 //!
 //! `tv-static-wide` makes the panel the screen: the tube's rounded corners
 //! meet its edges inside a thin bezel, the snow, hum bar and card fill all
@@ -257,18 +260,23 @@ const BAR_TONES: [u16; 7] = [1, 2, 3, 4, 5, 6, 7];
 const CASTLE_TONES: [u16; 7] = [7, 0, 5, 0, 3, 0, 1];
 const BEZEL: u16 = 8;
 const DIAL_INK: u16 = 9;
-const WIDE_PALETTE: &[u32] = &[
-    hex("#d8e8ff"),
-    hex("#e8e8e8"),
-    hex("#f0e040"),
-    hex("#40e0e8"),
-    hex("#50e050"),
-    hex("#e050e0"),
-    hex("#f04040"),
-    hex("#4c6cff"),
-    hex("#6a7080"),
-    hex("#ffb347"),
-];
+const fn palette(snow: u32) -> [u32; 10] {
+    [
+        snow,
+        hex("#e8e8e8"),
+        hex("#f0e040"),
+        hex("#40e0e8"),
+        hex("#50e050"),
+        hex("#e050e0"),
+        hex("#f04040"),
+        hex("#4c6cff"),
+        hex("#6a7080"),
+        hex("#ffb347"),
+    ]
+}
+const WIDE_PALETTE: &[u32] = &palette(hex("#d8e8ff"));
+/// Upstream's ink first, so the knob off draws exactly what upstream does.
+const SET_PALETTE: &[u32] = &palette(hex("#cfe6ff"));
 
 /// Each card cell's colour, for the twin: its bar's, or white for the
 /// circle, the crosshair and the bottom strip.
@@ -423,11 +431,14 @@ impl Piece for TvStatic {
     const ROWS: usize = ROWS;
     const FPS: u32 = FPS;
     const CELL: usize = 2;
-    const PALETTE: &'static [u32] = &[hex("#cfe6ff")];
+    const PALETTE: &'static [u32] = SET_PALETTE;
     const GROUND: u32 = 0;
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("TV_STATIC_COLOR", "0")];
 
     fn new() -> Self {
-        Self(Scene::new(ORIGINAL, draw_set(), false))
+        let colour = crate::env_num(&["TV_STATIC_COLOR"], 1, 0, 1) == 1;
+        Self(Scene::new(ORIGINAL, draw_set(), colour))
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
