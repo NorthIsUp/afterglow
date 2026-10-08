@@ -13,7 +13,7 @@ Unifont's `.hex` bitmaps. Of Unifont's dual licence, the SIL Open Font License
 ## ascii.rest pieces
 
 `src/ascii_rest/` ports pieces from [ascii.rest](https://github.com/bas3line/ascii),
-and `tools/ascii-rest-golden.ts` renders goldens with its code. Used under:
+`src/plasma.rs` started as its plasma, and `tools/ascii-rest-golden.ts` renders goldens with its code. Used under:
 
 ```
 MIT License
