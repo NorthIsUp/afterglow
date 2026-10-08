@@ -2,23 +2,25 @@
 //! few specks of dust turn at 33 1/3 rpm, the sheen on the grooves stays put,
 //! and a J-shaped tonearm rests in the outer grooves.
 //!
-//! `vinyl-wide` is a DJ's console across the panel: two decks, the right one
-//! pitched a little up so the pair drift in and out of phase, either side of
-//! a mixer whose meters jump to the beat, whose EQ knobs and faders get
-//! nudged, and whose crossfader sweeps slowly from deck to deck. Each deck's
-//! tonearm plays its side: it tracks in to the run-out groove, lifts, swings
-//! back to its rest, then cues down at the lead-in again. A single
-//! turntable stretched to 3.2:1 would be a record and a lot of plinth; two
-//! decks and a mixer is the shape that object really has at that width. The
-//! decks are upstream's turntable at upstream's size on pine, scaled to the
-//! panel's height (and whatever width two of them leave) elsewhere.
+//! Drawn at the panel's size. Narrow or squarish, it is one turntable,
+//! scaled to fit and centred. Wide, it is a DJ's console: two decks, the
+//! right one pitched a little up so the pair drift in and out of phase,
+//! either side of a mixer whose meters jump to the beat, whose EQ knobs and
+//! faders get nudged, and whose crossfader sweeps slowly from deck to deck —
+//! a single turntable stretched to 3.2:1 would be a record and a lot of
+//! plinth. Each deck's tonearm plays its side (`VINYL_SIDE_SECS`): it tracks
+//! in to the run-out groove, lifts, swings back to its rest, then cues down
+//! at the lead-in again. `VINYL_COLOR` (on) paints each part its own colour.
+//! With both off, at upstream's 64x25, it is upstream's picture cell for
+//! cell.
 
 use std::f64::consts::PI;
 
 use super::math::{hash2, js_round};
-use super::{hex, text, Canvas, Piece};
+use super::{hex, text, Canvas};
 use crate::grid::Cell;
 
+#[cfg(test)]
 const COLS: usize = 64;
 const ROWS: usize = 25;
 const RAMP: [Cell; 11] = text::cells([' ', '.', '·', ':', '-', '=', '+', '*', '#', '%', '@']);
@@ -68,7 +70,7 @@ struct Disc {
 /// Rim tally: samples, summed height in the cell, summed |cos|, falling count.
 type Tally = [f64; 4];
 
-/// The twin's colours: an amber plinth, a brass tonearm, a black record
+/// The colours: an amber plinth, a brass tonearm, a black record
 /// whose grooves catch a grey sheen, a silver rim and spindle, each deck's
 /// label in its own colour printed in cream, white dust; on the mixer green,
 /// yellow and red meters, cyan knobs, white fader caps in a grey box.
@@ -85,7 +87,7 @@ const KNOB: u16 = 11;
 const CAP: u16 = 12;
 const PANEL: u16 = 13;
 const BLUE_LABEL: u16 = 14;
-const WIDE_PALETTE: &[u32] = &[
+const PALETTE: &[u32] = &[
     hex("#ffb347"),
     hex("#e0b050"),
     hex("#4a4a54"),
@@ -115,22 +117,12 @@ struct Spec {
     dust: f64,
     /// Rows the pitch slider's cap sits below its middle.
     pitch: i64,
-    /// The twin's label colour.
+    /// The label's colour.
     label: u16,
     /// The tonearm's side, in seconds, and how far into its cycle it starts
     /// as a share of one; `None` leaves it in the outer grooves, as upstream.
     side: Option<(f64, f64)>,
 }
-
-const ORIGINAL: Spec = Spec {
-    ox: 0.0,
-    s: 1.0,
-    rate: 1.0,
-    dust: 0.0,
-    pitch: 0,
-    label: 0,
-    side: None,
-};
 
 /// Seconds of each step after a side: the cue lever lifts the arm, it swings
 /// back to its rest, waits there, swings out over the lead-in and cues down.
@@ -539,20 +531,20 @@ struct Pen<'a> {
     out: &'a mut [Cell],
     cols: usize,
     rows: usize,
-    /// The twin colours by part; upstream's one ink stays entry 0.
+    /// Colours by part; upstream's one ink stays entry 0.
     colour: bool,
     ink: u16,
 }
 
 impl Pen<'_> {
-    /// Draw in `WIDE_PALETTE` entry `k` from here on, in the twin.
+    /// Draw in `PALETTE` entry `k` from here on, in colour.
     fn ink(&mut self, k: u16) {
         if self.colour {
             self.ink = k;
         }
     }
 
-    /// Cell `k` is `c`, in entry `tone` in the twin.
+    /// Cell `k` is `c`, in entry `tone` in colour.
     fn set(&mut self, k: usize, c: Cell, tone: u16) {
         self.out[k] = if self.colour { text::tint(c, tone) } else { c };
     }
@@ -596,12 +588,13 @@ impl Pen<'_> {
 struct Mixer {
     x0: f64,
     x1: f64,
+    y0: f64,
     y1: f64,
 }
 
 impl Mixer {
     fn draw(&self, t: f64, pen: &mut Pen<'_>) {
-        let (x0, x1, y0, y1) = (self.x0, self.x1, 1.0, self.y1);
+        let (x0, x1, y0, y1) = (self.x0, self.x1, self.y0, self.y1);
         pen.ink(PANEL);
         pen.words(x0, y0, "┌");
         pen.words(x1, y0, "┐");
@@ -738,54 +731,41 @@ impl Scene {
 
 pub struct Vinyl(Scene);
 
-impl Piece for Vinyl {
-    const NAME: &'static str = "vinyl";
-    const COLS: usize = COLS;
-    const ROWS: usize = ROWS;
-    const FPS: u32 = 24;
-    const CELL: usize = 2;
-    const PALETTE: &'static [u32] = &[hex("#ffb347")];
-    const GROUND: u32 = 0;
+/// Upstream's one ink.
+const INK: u32 = hex("#ffb347");
 
-    fn new() -> Self {
-        Self(Scene {
-            cols: COLS,
-            rows: ROWS,
-            decks: vec![(0.0, Deck::new(COLS, ROWS, &ORIGINAL))],
-            mixer: None,
-            colour: false,
-        })
-    }
-
-    fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        self.0.frame(t, out);
-    }
+/// A deck's width in columns at scale `s`: the record, then the tonearm, the
+/// pitch slider and the plinth's edge, which keep their size.
+fn deck_w(s: f64) -> f64 {
+    (CX + 2.0 * R) * s + ARM + 1.0
 }
 
-pub struct VinylWide(Scene);
+impl Canvas for Vinyl {
+    const NAME: &'static str = "vinyl";
+    #[cfg(test)]
+    const COLS: usize = COLS;
+    #[cfg(test)]
+    const ROWS: usize = ROWS;
+    const FPS: u32 = 24;
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] =
+        &[("VINYL_COLOR", "0"), ("VINYL_SIDE_SECS", "0")];
 
-impl Canvas for VinylWide {
-    const NAME: &'static str = "vinyl-wide";
-    const FPS: u32 = Vinyl::FPS;
-    #[cfg(test)]
-    const COLS: usize = <Vinyl as super::Piece>::COLS;
-    #[cfg(test)]
-    const ROWS: usize = <Vinyl as super::Piece>::ROWS;
-    #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)] = &[];
-
-    /// Two decks as tall as the panel allows, so long as two of them and a
-    /// mixer at least `MIX` wide still fit across it.
+    /// Two decks and a mixer at least `MIX` wide when they still come out
+    /// at `TWO` of the size one deck alone would; otherwise one deck as big
+    /// as fits, centred. At upstream's 64x25 the one deck is upstream's.
     fn new(cols: usize, rows: usize) -> Self {
         const MIX: f64 = 22.0;
+        const TWO: f64 = 0.6;
+        let colour = crate::env_num(&["VINYL_COLOR"], 1, 0, 1) == 1;
+        let side = crate::env_num(&["VINYL_SIDE_SECS"], 240, 0, 3600) as f64;
         let (w, h) = (cols as f64, rows as f64);
-        let s = (h / ROWS as f64)
+        let tall = h / ROWS as f64;
+        let one = tall.min((w - ARM - 1.0) / (CX + 2.0 * R)).max(0.25);
+        let two = tall
             .min((w - MIX - 2.0 * (ARM + 1.0)) / (2.0 * (CX + 2.0 * R)))
             .max(0.25);
-        let side = crate::env_num(&["VINYL_SIDE_SECS"], 240, 20, 3600) as f64;
-        let dw = (CX + 2.0 * R) * s + ARM + 1.0;
-        let right = (w - dw).floor();
-        let deck = |ox: f64, rate: f64, dust: f64, pitch: i64, label: u16, share: f64| {
+        let deck = |s: f64, ox: f64, rate: f64, dust: f64, pitch: i64, label: u16, share: f64| {
             let spec = Spec {
                 ox,
                 s,
@@ -793,34 +773,54 @@ impl Canvas for VinylWide {
                 dust,
                 pitch,
                 label,
-                side: Some((side, share)),
+                side: (side > 0.0).then_some((side, share)),
             };
             (ox, Deck::new(cols, rows, &spec))
         };
-        let (x0, x1) = (dw.floor(), right - 1.0);
-        Self(Scene {
-            cols,
-            rows,
-            decks: vec![
-                deck(0.0, 1.0, 0.0, 0, RED_LABEL, 0.0),
-                // Most of a side behind, so one deck changes over while the
-                // other plays.
-                deck(right, 1.02, PI, 1, BLUE_LABEL, 0.58),
-            ],
-            colour: true,
-            mixer: (x1 - x0 >= 10.0 && rows >= 16).then_some(Mixer {
-                x0,
-                x1,
-                y1: h - 2.0,
-            }),
-        })
+        let scene = if two < one * TWO {
+            Scene {
+                cols,
+                rows,
+                decks: vec![deck(one, ((w - deck_w(one)) / 2.0).floor().max(0.0), 1.0, 0.0, 0, RED_LABEL, 0.0)],
+                mixer: None,
+                colour,
+            }
+        } else {
+            let right = (w - deck_w(two)).floor();
+            let (x0, x1) = (deck_w(two).floor(), right - 1.0);
+            Scene {
+                cols,
+                rows,
+                decks: vec![
+                    deck(two, 0.0, 1.0, 0.0, 0, RED_LABEL, 0.0),
+                    // Most of a side behind, so one deck changes over while
+                    // the other plays.
+                    deck(two, right, 1.02, PI, 1, BLUE_LABEL, 0.58),
+                ],
+                // As tall as the decks, not the panel: a mixer twice their
+                // height is a column of meter.
+                mixer: (x1 - x0 >= 10.0 && rows >= 16).then_some(Mixer {
+                    x0,
+                    x1,
+                    y0: (h / 2.0 - 11.5 * two).floor().max(1.0),
+                    y1: (h / 2.0 + 11.5 * two).round().min(h - 2.0),
+                }),
+                colour,
+            }
+        };
+        Self(scene)
+    }
+
+    fn palette(&self) -> &'static [u32] {
+        if self.0.colour {
+            PALETTE
+        } else {
+            &[INK]
+        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
-    }
-    fn palette(&self) -> &'static [u32] {
-        WIDE_PALETTE
     }
 }
 
@@ -833,8 +833,13 @@ mod tests {
     #[test]
     fn the_arm_plays_a_side_and_comes_back() {
         let deck = Deck::new(120, 25, &Spec {
+            ox: 0.0,
+            s: 1.0,
+            rate: 1.0,
+            dust: 0.0,
+            pitch: 0,
+            label: 0,
             side: Some((20.0, 0.0)),
-            ..ORIGINAL
         });
         let w = deck.swing.as_ref().unwrap();
         assert_eq!(w.pose(0.0), pose(w.lead_in, false, false));
