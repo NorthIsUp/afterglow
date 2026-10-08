@@ -136,6 +136,13 @@ pub struct Mirror {
     /// Bit per `saver::SAVERS` row, set when rotation may pick it. Read only
     /// when a turn is up, never per frame.
     rotation: [AtomicU64; saver::POOL_WORDS],
+    /// Bit per `-wide` row, set while its scene is expanded: the variant a
+    /// click last chose, and so the one rotation shows. One pair, one turn.
+    expanded: [AtomicU64; saver::POOL_WORDS],
+    /// Per row, its pair's other half and whether this row is the `-wide`
+    /// one. Built once here, so the rotation boundary on the render thread
+    /// looks it up rather than formatting a name.
+    twins: Box<[Option<(usize, bool)>]>,
     /// The selection word the render loop last built and announced, so a
     /// `/select` can answer with the saver it asked for rather than the one
     /// it replaced.
@@ -159,6 +166,14 @@ impl Mirror {
             selected: AtomicU64::new(0),
             rotate: AtomicU64::new(0),
             rotation: std::array::from_fn(|_| AtomicU64::new(u64::MAX)),
+            expanded: std::array::from_fn(|_| AtomicU64::new(0)),
+            twins: saver::names()
+                .map(|n| {
+                    saver::twin_of(n)
+                        .and_then(saver::index_of)
+                        .map(|t| (t, n.ends_with("-wide")))
+                })
+                .collect(),
             applied: Mutex::new(0),
             built: Condvar::new(),
             frame: Mutex::new(Frame::default()),
@@ -196,6 +211,18 @@ impl Mirror {
         let Some(i) = saver::index_of(name) else {
             return false;
         };
+        // Picking one half of a scene's pair is the `expanded` choice, and
+        // rotation follows it. Here and not in `select_at`: rotation moving
+        // on must not change what the viewer chose.
+        if let Some((t, wide)) = self.twins[i] {
+            let w = if wide { i } else { t };
+            let bit = 1u64 << (w % 64);
+            if wide {
+                self.expanded[w / 64].fetch_or(bit, Ordering::Relaxed);
+            } else {
+                self.expanded[w / 64].fetch_and(!bit, Ordering::Relaxed);
+            }
+        }
         self.select_at(i);
         true
     }
@@ -226,6 +253,20 @@ impl Mirror {
     /// May rotation pick row `i`.
     pub fn in_rotation(&self, i: usize) -> bool {
         self.rotation[i / 64].load(Ordering::Relaxed) & (1 << (i % 64)) != 0
+    }
+
+    /// May rotation pick row `i` now: in rotation, and for a scene's pair,
+    /// the half its `expanded` choice names — the original until a viewer
+    /// picks the `-wide`. Allocation-free; called at the rotation boundary.
+    pub fn pickable(&self, i: usize) -> bool {
+        let expanded =
+            |w: usize| self.expanded[w / 64].load(Ordering::Relaxed) & (1 << (w % 64)) != 0;
+        self.in_rotation(i)
+            && match self.twins[i] {
+                None => true,
+                Some((_, true)) => expanded(i),
+                Some((t, false)) => !expanded(t),
+            }
     }
 
     /// Put `name` in or out of rotation, and its `-wide` twin with it: the

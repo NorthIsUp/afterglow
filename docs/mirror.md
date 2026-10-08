@@ -20,8 +20,8 @@ behind the button above the canvas.
 
 Each row has a tick box for whether rotation may pick it, and each group heading
 one for the whole group (half-ticked when some are in). A scene's box covers its
-`-wide` twin as well, so rotation may show either; `expanded` only picks which
-one a click shows. Everything out with the timer on is a pause, and the bar says
+`-wide` twin as well, and the pair takes one turn: rotation shows whichever half
+`expanded` last chose — the original until someone picks the `-wide`. Everything out with the timer on is a pause, and the bar says
 so in red. A saver out of rotation still shows when clicked.
 
 A click is one round trip. The row and the name change at once, the canvas
