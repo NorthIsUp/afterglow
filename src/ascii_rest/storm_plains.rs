@@ -6,6 +6,10 @@
 //!
 //! The cloud is built as a height field (heaped domes, a flat anvil, pouches
 //! hanging under it) and lit from its surface normals.
+//!
+//! `storm-plains-wide` is the same evening on a 3.2:1 canvas: the farm keeps its
+//! corner, the storm stands 50 columns further east, and the anvil streams on
+//! across the extra width trailing thinner rain.
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, js_round, mix, noise, smooth};
@@ -13,7 +17,6 @@ use super::{Fit, Piece, hex};
 use crate::font;
 use crate::grid::Cell;
 
-const W: usize = 200;
 const H: usize = 100;
 const HF: f64 = H as f64;
 /// The horizon.
@@ -35,8 +38,7 @@ const TREE: u8 = 7;
 const PUMP: u8 = 8;
 const BELT: u8 = 9;
 
-/// The height-field grid, two cells of margin either side.
-const SX: usize = W + 4;
+/// The height-field grid's rows.
 const SY: usize = BASE as usize + 8;
 /// Toward the light: west, a touch high, out of the page.
 const LX: f64 = -0.72;
@@ -166,87 +168,43 @@ struct Flash {
     inside: f64,
 }
 
-/// A fixed schedule of flashes, some carrying a bolt.
-fn flash_at(t: f64, bolts: &[Bolt]) -> Option<Flash> {
-    let n = (t / PERIOD).floor();
-    if n > 0.0 && hash(n, 50.0) < 0.25 {
-        return None; // some periods stay dark
-    }
-    let start = if n == 0.0 {
-        -0.08
-    } else {
-        n * PERIOD + 0.2 + hash(n, 51.0) * 1.6
-    };
-    let l = t - start;
-    if !(0.0..=0.9).contains(&l) {
-        return None;
-    }
-    // a stroke and its restrikes, each a sharp rise and a fast decay
-    let mut i = 0.0;
-    let strikes = [0.0, 0.09 + hash(n, 52.0) * 0.06, 0.32 + hash(n, 53.0) * 0.2];
-    for (j, &s) in strikes.iter().enumerate() {
-        if l >= s {
-            let (tau, a) = if j == 0 {
-                (0.09, 1.0)
-            } else {
-                (0.06, 0.7 - j as f64 * 0.15)
-            };
-            i += (-(l - s) / tau).exp() * a;
-        }
-    }
-    let bolt = (n == 0.0 || hash(n, 54.0) > 0.55).then_some((n % 4.0) as usize);
-    let (cx, cy) = match bolt {
-        Some(b) => (bolts[b].x, BASE - 8.0),
-        None => (115.0 + hash(n, 55.0) * 45.0, 14.0 + hash(n, 56.0) * 24.0),
-    };
-    Some(Flash {
-        i: i.min(1.3),
-        bolt,
-        cx,
-        cy,
-        bolt_on: if bolt.is_some() && l < 0.5 {
-            (i * 1.4).min(1.0)
-        } else {
-            0.0
-        },
-        inside: 0.0,
-    })
+/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+struct Layout {
+    name: &'static str,
+    w: usize,
+    /// How far east the storm stands from the original's: it is drawn in its own
+    /// coordinates, `x - sd`. Zero for the original, and `x - 0.0` is `x` exactly.
+    sd: f64,
+    /// Where the shelterbelt on the horizon gives out, in the storm's coordinates.
+    belt_end: [f64; 2],
+    /// The stars: the columns they show in, and where they would fade out.
+    stars: (usize, f64),
+    /// Thinner rain trailing from the anvil, across the extra width.
+    anvil_rain: bool,
 }
 
-/// Between the big flashes, the storm keeps flickering inside itself.
-fn flicker_at(t: f64) -> Option<Flash> {
-    let n0 = (t / FL).floor();
-    let mut n = n0;
-    while n >= n0 - 1.0 && n >= 0.0 {
-        let l = t - (n * FL + 0.35 + hash(n, 70.0) * 0.75);
-        if (0.0..=0.6).contains(&l) {
-            let mut i = 0.0;
-            let pulses = [0.0, 0.08 + hash(n, 71.0) * 0.1, 0.26 + hash(n, 72.0) * 0.18];
-            for (j, &p) in pulses.iter().enumerate() {
-                if l >= p {
-                    let a = match j {
-                        1 => 0.7,
-                        2 => 0.45,
-                        _ => 1.0,
-                    };
-                    i += (-(l - p) / 0.07).exp() * a;
-                }
-            }
-            return Some(Flash {
-                i: i.min(1.0) * (0.25 + 0.2 * hash(n, 73.0)),
-                bolt: None,
-                cx: 120.0 + hash(n, 74.0) * 38.0,
-                cy: 15.0 + hash(n, 75.0) * 25.0,
-                bolt_on: 0.0,
-                inside: 1.0,
-            });
-        }
-        n -= 1.0;
-    }
-    None
-}
+const ORIGINAL: Layout = Layout {
+    name: "storm-plains",
+    w: 200,
+    sd: 0.0,
+    belt_end: [196.0, 186.0],
+    stars: (100, 130.0),
+    anvil_rain: false,
+};
 
-pub struct StormPlains {
+const WIDE: Layout = Layout {
+    name: "storm-plains-wide",
+    w: 320,
+    sd: 50.0,
+    belt_end: [296.0, 286.0],
+    stars: (150, 195.0),
+    anvil_rain: true,
+};
+
+pub type StormPlains = Scene<false>;
+pub type StormPlainsWide = Scene<true>;
+
+pub struct Scene<const IS_WIDE: bool> {
     dots: Dots,
     sr: Vec<f32>,
     sg: Vec<f32>,
@@ -278,9 +236,96 @@ pub struct StormPlains {
     bolts: Vec<Bolt>,
 }
 
-impl Piece for StormPlains {
-    const NAME: &'static str = "storm-plains";
-    const COLS: usize = W;
+impl<const IS_WIDE: bool> Scene<IS_WIDE> {
+    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
+    const W: usize = Self::L.w;
+    /// The height-field grid's columns, two cells of margin either side.
+    const SX: usize = Self::W + 4;
+
+    /// A fixed schedule of flashes, some carrying a bolt.
+    fn flash_at(t: f64, bolts: &[Bolt]) -> Option<Flash> {
+        let n = (t / PERIOD).floor();
+        if n > 0.0 && hash(n, 50.0) < 0.25 {
+            return None; // some periods stay dark
+        }
+        let start = if n == 0.0 {
+            -0.08
+        } else {
+            n * PERIOD + 0.2 + hash(n, 51.0) * 1.6
+        };
+        let l = t - start;
+        if !(0.0..=0.9).contains(&l) {
+            return None;
+        }
+        // a stroke and its restrikes, each a sharp rise and a fast decay
+        let mut i = 0.0;
+        let strikes = [0.0, 0.09 + hash(n, 52.0) * 0.06, 0.32 + hash(n, 53.0) * 0.2];
+        for (j, &s) in strikes.iter().enumerate() {
+            if l >= s {
+                let (tau, a) = if j == 0 {
+                    (0.09, 1.0)
+                } else {
+                    (0.06, 0.7 - j as f64 * 0.15)
+                };
+                i += (-(l - s) / tau).exp() * a;
+            }
+        }
+        let bolt = (n == 0.0 || hash(n, 54.0) > 0.55).then_some((n % 4.0) as usize);
+        let (cx, cy) = match bolt {
+            Some(b) => (bolts[b].x, BASE - 8.0),
+            None => (115.0 + Self::L.sd + hash(n, 55.0) * 45.0, 14.0 + hash(n, 56.0) * 24.0),
+        };
+        Some(Flash {
+            i: i.min(1.3),
+            bolt,
+            cx,
+            cy,
+            bolt_on: if bolt.is_some() && l < 0.5 {
+                (i * 1.4).min(1.0)
+            } else {
+                0.0
+            },
+            inside: 0.0,
+        })
+    }
+
+    /// Between the big flashes, the storm keeps flickering inside itself.
+    fn flicker_at(t: f64) -> Option<Flash> {
+        let n0 = (t / FL).floor();
+        let mut n = n0;
+        while n >= n0 - 1.0 && n >= 0.0 {
+            let l = t - (n * FL + 0.35 + hash(n, 70.0) * 0.75);
+            if (0.0..=0.6).contains(&l) {
+                let mut i = 0.0;
+                let pulses = [0.0, 0.08 + hash(n, 71.0) * 0.1, 0.26 + hash(n, 72.0) * 0.18];
+                for (j, &p) in pulses.iter().enumerate() {
+                    if l >= p {
+                        let a = match j {
+                            1 => 0.7,
+                            2 => 0.45,
+                            _ => 1.0,
+                        };
+                        i += (-(l - p) / 0.07).exp() * a;
+                    }
+                }
+                return Some(Flash {
+                    i: i.min(1.0) * (0.25 + 0.2 * hash(n, 73.0)),
+                    bolt: None,
+                    cx: 120.0 + Self::L.sd + hash(n, 74.0) * 38.0,
+                    cy: 15.0 + hash(n, 75.0) * 25.0,
+                    bolt_on: 0.0,
+                    inside: 1.0,
+                });
+            }
+            n -= 1.0;
+        }
+        None
+    }
+}
+
+impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
+    const NAME: &'static str = Self::L.name;
+    const COLS: usize = Self::W;
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
@@ -307,7 +352,7 @@ impl Piece for StormPlains {
     ];
 
     fn new() -> Self {
-        let n = W * H;
+        let n = Self::W * H;
 
         // The towers are heaps of puffs: [x, y, radius, bulge toward us, flat].
         // Each puff is a dome in the height field, so it gets its own lit side
@@ -363,12 +408,12 @@ impl Piece for StormPlains {
             x += 3.2 + rnd() * 1.6;
         }
 
-        let mut sh = vec![0f32; SX * SY];
-        let mut anv = vec![0f32; SX * SY]; // how much of the height is anvil
-        let mut lip = vec![0f32; SX * SY]; // the anvil's sunlit top edge
+        let mut sh = vec![0f32; Self::SX * SY];
+        let mut anv = vec![0f32; Self::SX * SY]; // how much of the height is anvil
+        let mut lip = vec![0f32; Self::SX * SY]; // the anvil's sunlit top edge
         for r in 0..SY {
-            for i in 0..SX {
-                let x = i as f64 - 2.0 + 0.5;
+            for i in 0..Self::SX {
+                let x = i as f64 - 2.0 + 0.5 - Self::L.sd;
                 let y = r as f64 + 0.5;
                 // the towers, cut flat along the base
                 let mut tower: f64 = 0.0;
@@ -425,9 +470,9 @@ impl Piece for StormPlains {
                 let sy = y * 0.18 + 0.9 * (noise(x * 0.04, 5.5, 0.0) - 0.5) + x * 0.012;
                 let streaky = fbm(x * 0.03 + 0.6 * noise(x * 0.08, y * 0.1, 0.0), sy, 3, 0.0) - 0.5;
                 h += (h / 2.5).min(1.0) * mix(3.0 * billow, 2.2 * streaky, a);
-                sh[r * SX + i] = h.max(0.0) as f32;
-                anv[r * SX + i] = a as f32;
-                lip[r * SX + i] = (on_top * a) as f32;
+                sh[r * Self::SX + i] = h.max(0.0) as f32;
+                anv[r * Self::SX + i] = a as f32;
+                lip[r * Self::SX + i] = (on_top * a) as f32;
             }
         }
 
@@ -441,8 +486,8 @@ impl Piece for StormPlains {
         // per-cell dither jitter, against contour lines
         let jit: Vec<f32> = (0..n)
             .map(|k| {
-                let row = k / W;
-                ((hash((k % W) as f64, row as f64 + 517.0) - 0.5)
+                let row = k / Self::W;
+                ((hash((k % Self::W) as f64, row as f64 + 517.0) - 0.5)
                     * if row < HZ { 0.16 } else { 0.06 }) as f32
             })
             .collect();
@@ -453,14 +498,16 @@ impl Piece for StormPlains {
 
         let shf = |v: f32| f64::from(v);
         for r in 0..H {
-            for xi in 0..W {
+            for xi in 0..Self::W {
                 let x = xi as f64;
-                let k = r * W + xi;
+                let k = r * Self::W + xi;
                 let y = r as f64 + 0.5;
                 if y < ground(x) {
                     // sky: indigo overhead, dusky rose lower down, amber where the sun went
                     let v = y / HZF;
                     let g = glow_sun(x, y);
+                    // everything after the sun's own glow is the storm's
+                    let x = x - Self::L.sd;
                     let east = smooth(60.0, 190.0, x); // the storm side is cooler and darker
                     let v2 = v.powf(2.2);
                     let veil = 0.9 + 0.2 * fbm(x * 0.05, y * 0.09, 3, 0.0);
@@ -489,12 +536,12 @@ impl Piece for StormPlains {
                     // the storm
                     if r < SY - 1 {
                         let i = xi + 2;
-                        let j = r * SX + i;
+                        let j = r * Self::SX + i;
                         let h = shf(sh[j]);
                         let c = smooth(0.15, 1.6, h);
                         if c > 0.0 {
-                            let up = if r > 0 { shf(sh[j - SX]) } else { 0.0 };
-                            let dn = shf(sh[j + SX]);
+                            let up = if r > 0 { shf(sh[j - Self::SX]) } else { 0.0 };
+                            let dn = shf(sh[j + Self::SX]);
                             let (gx, gy) =
                                 ((shf(sh[j + 1]) - shf(sh[j - 1])) / 2.0, (dn - up) / 2.0);
                             let nl = (gx * gx + gy * gy + 1.0).sqrt();
@@ -608,10 +655,11 @@ impl Piece for StormPlains {
                 }
 
                 // a shelterbelt of trees on the far horizon, half lost in the rain
+                let xs = x - Self::L.sd;
                 let belt = HZF + 2.0
-                    - (1.5 + 2.2 * fbm(x * 0.3, 2.0, 2, 0.0))
-                        * smooth(140.0, 150.0, x)
-                        * smooth(196.0, 186.0, x);
+                    - (1.5 + 2.2 * fbm(xs * 0.3, 2.0, 2, 0.0))
+                        * smooth(140.0, 150.0, xs)
+                        * smooth(Self::L.belt_end[0], Self::L.belt_end[1], xs);
                 let belt2 = HZF + 2.0
                     - (1.0 + 1.8 * fbm(x * 0.35, 9.0, 2, 0.0))
                         * smooth(0.0, 4.0, x)
@@ -668,8 +716,8 @@ impl Piece for StormPlains {
 
         for r in HZ + 3..H {
             let p = (r as f64 + 0.5 - HZF) / (HF - HZF);
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 if mat[k] != FIELD {
                     continue;
                 }
@@ -693,8 +741,8 @@ impl Piece for StormPlains {
                 wheat[r * TW + u] =
                     fbm(u as f64 * 0.55, rf * (0.5 - 0.42 * p), 3, TW as f64 * 0.55) as f32;
             }
-            for x in 0..W {
-                persp[r * W + x] =
+            for x in 0..Self::W {
+                persp[r * Self::W + x] =
                     (((x as f64 + 0.5 - VX) * 24.0) / (rf + 2.0 - HZF) + 256.0) as f32;
             }
         }
@@ -704,12 +752,12 @@ impl Piece for StormPlains {
         for r in HZ..H {
             let y = r as f64 + 0.5;
             let p = (y - HZF) / (HF - HZF);
-            for xi in 0..W {
+            for xi in 0..Self::W {
                 let x = xi as f64;
                 let sun_w = (-((x - SUN[0]) / 100.0).powi(2)).exp();
-                let east = smooth(80.0, 130.0, x + 10.0 * p);
+                let east = smooth(80.0, 130.0, x - Self::L.sd + 10.0 * p);
                 let fore = 1.0 - 0.6 * smooth(HF - 22.0, HF - 2.0, y);
-                field_light[r * W + xi] =
+                field_light[r * Self::W + xi] =
                     ((0.72 + 0.45 * sun_w) * (1.0 - 0.35 * east) * fore) as f32;
             }
         }
@@ -740,14 +788,14 @@ impl Piece for StormPlains {
         // stars in the darkest part of the sky
         let mut stars = Vec::new();
         for r in 0..28 {
-            for x in 0..100 {
+            for x in 0..Self::L.stars.0 {
                 let (xf, rf) = (x as f64, r as f64);
-                if hash(xf, rf * 5.0 + 3.0) > 0.986 && cloud[r * W + x] < 0.05 {
+                if hash(xf, rf * 5.0 + 3.0) > 0.986 && cloud[r * Self::W + x] < 0.05 {
                     stars.push([
-                        (r * W + x) as f64,
+                        (r * Self::W + x) as f64,
                         hash(xf, rf) * 6.28,
                         1.0 + hash(rf, xf) * 2.5,
-                        0.85 * (1.0 - rf / 28.0) * (1.0 - xf / 130.0),
+                        0.85 * (1.0 - rf / 28.0) * (1.0 - xf / Self::L.stars.1),
                     ]);
                 }
             }
@@ -756,7 +804,7 @@ impl Piece for StormPlains {
         // wheat ears right in front of us, bowing with the wind
         let mut ears = Vec::new();
         let mut x = 2.0;
-        while x < W as f64 {
+        while x < Self::W as f64 {
             ears.push([
                 x,
                 8.0 + hash(x * 3.0, 61.0) * 12.0,
@@ -773,17 +821,33 @@ impl Piece for StormPlains {
         let shafts = (0..RW)
             .map(|u| smooth(0.47, 0.57, fbm(u as f64 * 0.09375, 0.5, 2, 24.0)) as f32)
             .collect();
-        let col_phase = (0..W)
+        let col_phase = (0..Self::W)
             .map(|x| (hash(x as f64, 77.0) * 40.0) as f32)
             .collect();
-        let col_speed = (0..W)
+        let col_speed = (0..Self::W)
             .map(|x| (22.0 + hash(x as f64, 78.0) * 14.0) as f32)
             .collect();
-        let rain_top = (0..W).map(|x| (shelf_bot(x as f64) - 1.5) as f32).collect();
-        let rain_on = (0..W)
+        let rain_top = (0..Self::W)
             .map(|x| {
-                let x = x as f64;
-                (smooth(106.0, 118.0, x) * smooth(198.0, 186.0, x)) as f32
+                let x = x as f64 - Self::L.sd;
+                let top = shelf_bot(x) - 1.5;
+                if Self::L.anvil_rain {
+                    mix(top, BASE - 7.0, smooth(200.0, 214.0, x)) as f32
+                } else {
+                    top as f32
+                }
+            })
+            .collect();
+        let rain_on = (0..Self::W)
+            .map(|x| {
+                let x = x as f64 - Self::L.sd;
+                // the main curtains, then thinner rain trailing from the anvil
+                let on = smooth(106.0, 118.0, x) * smooth(198.0, 186.0, x);
+                if Self::L.anvil_rain {
+                    (on + 0.5 * smooth(214.0, 226.0, x) * smooth(266.0, 252.0, x)) as f32
+                } else {
+                    on as f32
+                }
             })
             .collect();
 
@@ -794,7 +858,7 @@ impl Piece for StormPlains {
                 let mut segs = Vec::new();
                 walk(
                     i,
-                    122.0 + hash(i, 40.0) * 34.0,
+                    122.0 + Self::L.sd + hash(i, 40.0) * 34.0,
                     BASE - 4.0,
                     40.0,
                     (hash(i, 44.0) - 0.5) * 0.8,
@@ -803,7 +867,7 @@ impl Piece for StormPlains {
                 );
                 let mut field = vec![99f32; n];
                 for r in 25..HZ + 4 {
-                    for x2 in 80..W {
+                    for x2 in 80 + Self::L.sd as usize..Self::W {
                         let x2f = x2 as f64;
                         let mut m: f64 = 99.0;
                         for &[ax, ay, bx, by, dep] in &segs {
@@ -815,7 +879,7 @@ impl Piece for StormPlains {
                                 m = d;
                             }
                         }
-                        field[r * W + x2] = m as f32;
+                        field[r * Self::W + x2] = m as f32;
                     }
                 }
                 Bolt {
@@ -856,8 +920,8 @@ impl Piece for StormPlains {
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        let mut f = flash_at(t, &self.bolts);
-        let fl = flicker_at(t);
+        let mut f = Self::flash_at(t, &self.bolts);
+        let fl = Self::flicker_at(t);
         if let Some(fl) = fl {
             if f.is_none_or(|f| f.i < fl.i) {
                 f = Some(fl);
@@ -891,11 +955,11 @@ impl Piece for StormPlains {
                 let y = js_round(HF + foot - i);
                 let q = i / tall;
                 let x = js_round(ex + lean * q * q);
-                if y >= HF || x < 0.0 || x + 1.0 >= W as f64 {
+                if y >= HF || x < 0.0 || x + 1.0 >= Self::W as f64 {
                     i += 1.0;
                     continue;
                 }
-                let k = y as usize * W + x as usize;
+                let k = y as usize * Self::W + x as usize;
                 if i < eh {
                     // the stalk: a thin dark line against the field
                     if ear[k] == 0.0 {
@@ -924,7 +988,7 @@ impl Piece for StormPlains {
                     }
                     // a whisker of awns past the tip
                     if tip && y > 0.0 {
-                        let a = k - W + usize::from(lean > 0.5);
+                        let a = k - Self::W + usize::from(lean > 0.5);
                         if ear[a] < 0.3 {
                             ear[a] = 0.3;
                             touched.push(a);
@@ -938,9 +1002,9 @@ impl Piece for StormPlains {
         for r in 0..H {
             let y = r as f64 + 0.5;
             let p = (y - HZF) / (HF - HZF);
-            for xi in 0..W {
+            for xi in 0..Self::W {
                 let x = xi as f64;
-                let k = r * W + xi;
+                let k = r * Self::W + xi;
                 let m = self.mat[k];
                 let (mut cr, mut cg, mut cb) = (
                     f64::from(self.sr[k]),
@@ -959,7 +1023,7 @@ impl Piece for StormPlains {
                         let ix = ixf as usize;
                         let s0 = f64::from(self.streak[r * CW + ix % CW]);
                         let s1 = f64::from(self.streak[r * CW + (ix + 1) % CW]);
-                        let s = (s0 + (s1 - s0) * fx) * (1.0 - c) * smooth(105.0, 55.0, x) * 0.75;
+                        let s = (s0 + (s1 - s0) * fx) * (1.0 - c) * smooth(105.0, 55.0, x - Self::L.sd) * 0.75;
                         if s > 0.005 {
                             let sun = (-((x - SUN[0]) / 80.0).powi(2)).exp();
                             cr = mix(cr, 0.5 + 0.5 * sun, s);
@@ -985,7 +1049,7 @@ impl Piece for StormPlains {
                             * (1.0 - c * 0.7);
                         if env > 0.01 {
                             // falling streaks, slanted with the shafts
-                            let col = (x + (y - BASE) * 0.42).floor() as usize % W;
+                            let col = (x + (y - BASE) * 0.42).floor() as usize % Self::W;
                             let fall = (y * 0.4 - t * f64::from(self.col_speed[col]) * 0.1
                                 + f64::from(self.col_phase[col])
                                 + 1000.0)
@@ -1041,7 +1105,7 @@ impl Piece for StormPlains {
                     floor = 0.05;
                 } else if m == BELT {
                     // far trees: dark, hazed toward the rain
-                    let h = smooth(130.0, 190.0, x);
+                    let h = smooth(130.0, 190.0, x - Self::L.sd);
                     (cr, cg, cb) = (mix(0.07, 0.1, h), mix(0.05, 0.1, h), mix(0.1, 0.17, h));
                     floor = 0.06;
                 } else if m == TREE {
