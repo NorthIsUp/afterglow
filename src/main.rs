@@ -73,7 +73,7 @@
 //!   `127.0.0.1:8080`, which is the `tailscale-auth` sidecar's default upstream;
 //!   `off` disables it). See `mirror.rs`.
 //! * `SAVER_DUMP`     — render to PPM files in this directory instead of to a
-//!   display, then exit. Also honours `SAVER_DUMP_FRAMES`, `SAVER_DUMP_EVERY`,
+//!   display, then exit. Not with `SAVER_TERM`. Also honours `SAVER_DUMP_FRAMES`, `SAVER_DUMP_EVERY`,
 //!   `SAVER_WIDTH`, `SAVER_HEIGHT`.
 //! * `SAVER_TERM`     — 1 animates the saver in this terminal instead of on a
 //!   display, until Ctrl-C or `q`. Any OS with a truecolor terminal, no card
@@ -210,14 +210,37 @@ pub struct Config {
     saver: String,
     rotate_secs: u64,
     retry: Duration,
-    dump: Option<String>,
-    term: bool,
+    host: Host,
     http: String,
 }
 
+/// Where the frames go. One of these, never two: `SAVER_DUMP` and `SAVER_TERM`
+/// together is refused rather than one silently winning.
+enum Host {
+    /// PPM files in this directory, then exit.
+    Dump(String),
+    /// The terminal this runs in, until Ctrl-C or `q`.
+    Term,
+    /// The DRM card, retrying while no display is present.
+    Drm,
+}
+
+impl Host {
+    fn from_env() -> Result<Self, String> {
+        let dump = std::env::var("SAVER_DUMP").ok();
+        let term = env_num(&["SAVER_TERM"], 0, 0, 1) == 1;
+        match (dump, term) {
+            (Some(_), true) => Err("SAVER_DUMP and SAVER_TERM=1 are both set; pick one".into()),
+            (Some(dir), false) => Ok(Self::Dump(dir)),
+            (None, true) => Ok(Self::Term),
+            (None, false) => Ok(Self::Drm),
+        }
+    }
+}
+
 impl Config {
-    fn from_env() -> Self {
-        Self {
+    fn from_env() -> Result<Self, String> {
+        Ok(Self {
             device: std::env::var("DRM_DEVICE").unwrap_or_else(|_| "/dev/dri/card0".into()),
             fps: env_num(&["SAVER_FPS", "FIRE_FPS"], 30, 1, 120) as u32,
             // Unrecognised names land on fire-ascii, which is what FIRE_STYLE
@@ -226,17 +249,19 @@ impl Config {
             saver: env_str(&["SAVER", "FIRE_STYLE"], "ascii"),
             rotate_secs: env_num(&["SAVER_ROTATE_SECS"], 0, 0, 86_400) as u64,
             retry: Duration::from_secs(env_num(&["RETRY_SECONDS"], 30, 1, 3600) as u64),
-            dump: std::env::var("SAVER_DUMP").ok(),
-            term: env_num(&["SAVER_TERM"], 0, 0, 1) == 1,
+            host: Host::from_env()?,
             // Loopback by default: the only thing that should reach the mirror
             // is the tailscale-auth gate sharing this pod's netns.
             http: env_str(&["SAVER_HTTP"], "127.0.0.1:8080"),
-        }
+        })
     }
 }
 
 fn main() {
-    let cfg = Config::from_env();
+    let cfg = Config::from_env().unwrap_or_else(|e| {
+        eprintln!("[screensaver] {e}");
+        std::process::exit(2);
+    });
 
     // SIGTERM/SIGINT set the flag so the render loop exits and the CRTC is
     // restored. Kubernetes sends SIGTERM on pod shutdown; without this the last
@@ -269,23 +294,23 @@ fn main() {
         std::thread::spawn(move || mirror::serve(&m, &addr));
     }
 
-    // Checked before anything touches DRM, so a dump runs on a laptop with no
-    // card at all.
-    if let Some(dir) = &cfg.dump {
-        if let Err(e) = dump::run_dump(dir, &cfg, &mirror) {
-            eprintln!("[screensaver] {e}");
-            std::process::exit(1);
+    // Decided before anything touches DRM, so a dump or the terminal runs on a
+    // laptop with no card at all.
+    let res = match &cfg.host {
+        Host::Dump(dir) => dump::run_dump(dir, &cfg, &mirror),
+        Host::Term => term::run(&cfg, &mirror),
+        Host::Drm => {
+            run_drm(&cfg, &mirror);
+            Ok(())
         }
-        return;
+    };
+    if let Err(e) = res {
+        eprintln!("[screensaver] {e}");
+        std::process::exit(1);
     }
-    if cfg.term {
-        if let Err(e) = term::run(&cfg, &mirror) {
-            eprintln!("[screensaver] {e}");
-            std::process::exit(1);
-        }
-        return;
-    }
+}
 
+fn run_drm(cfg: &Config, mirror: &mirror::Mirror) {
     eprintln!("[screensaver] starting; DRM_DEVICE={}", cfg.device);
 
     // Talos is headless and immutable: there is no console login, just this pod.
@@ -295,7 +320,7 @@ fn main() {
         if SIGNALLED.load(Ordering::Relaxed) {
             return;
         }
-        match host::run(&cfg, &mirror) {
+        match host::run(cfg, mirror) {
             Ok(()) => return,
             Err(e) => {
                 eprintln!("[screensaver] {e}");

@@ -9,7 +9,7 @@ use crate::doodles::Doodles;
 use crate::dvd::Dvd;
 use crate::fire::Fire;
 use crate::fractal::Fractal;
-use crate::grid::{Cell, Grid};
+use crate::grid::Grid;
 use crate::hardrain::HardRain;
 use crate::hypercube::Hypercube;
 use crate::life::Life;
@@ -50,24 +50,17 @@ pub trait Saver {
     /// For the startup log line.
     fn name(&self) -> &'static str;
 
-    /// The grid this saver draws through, for the web mirror. Every saver here
-    /// has one — a saver that painted pixels directly could not be mirrored as
-    /// cells, and would need its own answer rather than an `Option` here that
-    /// every caller has to defend against.
+    /// The grid the panel shows: the one the last `render` flushed. Every
+    /// saver here has one — a saver that painted pixels directly could not be
+    /// mirrored as cells, and would need its own answer rather than an
+    /// `Option` here that every caller has to defend against.
     fn grid(&self) -> &Grid;
 
-    /// This frame's cells in `grid()`'s geometry, for the web mirror. Called
-    /// after `render` and only while someone is watching, so a saver whose
-    /// panel geometry moves under a fixed mirror one (the ascii.rest tour) pays
-    /// for the second view only then.
-    fn mirror_cells(&mut self) -> &[Cell] {
-        self.grid().cells()
-    }
-
-    /// The grid the last `render` flushed, which is `grid()` unless the
-    /// saver's panel geometry moves (the ascii.rest tour). For a host that
-    /// re-draws the panel's cells itself, as the terminal does.
-    fn shown(&self) -> &Grid {
+    /// The grid the web mirror shows, geometry and this frame's cells. The
+    /// panel's, unless the saver's panel geometry moves under a fixed mirror
+    /// one (the ascii.rest tour) and pays for the second view here — which is
+    /// only after `render` while someone is watching, and in `announce`.
+    fn mirror(&mut self) -> &Grid {
         self.grid()
     }
 
@@ -94,7 +87,7 @@ type Build = fn(&Panel, u32) -> Box<dyn Saver>;
 // A macro only so the ascii.rest rows come from `ascii_rest::each_piece`, the
 // one list of ports, instead of a second copy here.
 macro_rules! savers {
-    ($($m:ident::$t:ident),* $(,)?) => {
+    ($($(#[$no:ident])? $m:ident::$t:ident),* $(,)?) => {
         const SAVERS: &[(&str, Build)] = &[
         ("ascii", |p, _| Box::new(Fire::ascii(p))),
         ("blocks", |p, _| Box::new(Fire::blocks(p))),
@@ -190,7 +183,7 @@ pub fn make(name: &str, panel: &Panel, fps: u32) -> Box<dyn Saver> {
 /// longer ones. That trades one number for a table of per-saver seconds to
 /// solve a problem nobody has — the expensive savers hold the target fps on
 /// this panel, so there is nothing to compensate for.
-pub struct Rotate {
+struct Rotate {
     every: Duration,
     /// The control word `every` was decoded from. A `!=` against this is how a
     /// live change is noticed without a lock — see `Mirror::set_rotate_secs`.
@@ -206,7 +199,7 @@ pub struct Rotate {
 }
 
 impl Rotate {
-    pub fn new(now: Instant) -> Self {
+    fn new(now: Instant) -> Self {
         // Seeded off the clock so a restart does not replay the same order.
         // Same trick sakura grows its tree from.
         let seed = std::time::SystemTime::now()
@@ -287,62 +280,145 @@ impl Rotate {
     }
 }
 
-/// Swap the saver if the mirror's selection moved. Shared verbatim by the DRM
-/// loop and the dump loop for the same reason `frame` is: a dump that ran its
-/// own copy of this would prove nothing about what runs on hardware.
+/// The frame loop every host runs: the saver, which one the mirror has
+/// selected, rotation and the frame budget. A host keeps only its own concerns
+/// — DRM maps and dirties, the dump verifies and writes PPMs, the terminal
+/// composes and prints — so a dump proves what runs on hardware.
 ///
-/// Returns true when it switched, so the caller can log it on the thread that
-/// actually draws — the HTTP thread cannot know whether the render loop is
-/// running or parked in its no-monitor retry.
-///
-/// Rotation lands here rather than in either loop, for the same reason: a dump
-/// that rotated by its own rules would prove nothing about what the panel does.
-/// It moves the mirror's selection and then falls through the ordinary switch
-/// below, so an automatic move and a click are the same event from here down —
-/// including the `/meta` the page re-reads.
-pub fn switch(
-    saver: &mut Box<dyn Saver>,
-    selected: &mut usize,
-    rot: &mut Rotate,
-    now: Instant,
-    mirror: &Mirror,
-    panel: &Panel,
-    fps: u32,
-) -> bool {
-    // Two relaxed loads per frame now — the rotation word and the selection —
-    // off the same cache line, for the reason below.
-    if let Some(i) = rot.due(now, *selected, mirror.rotate_ctl()) {
-        mirror.select_at(i);
+/// Every saver is built by the host's `place`, which names the panel it is
+/// built for along with it: the DRM and dump hosts have one panel and pass
+/// `|n| (panel, make(n, &panel, fps))`, and the terminal sizes the panel to
+/// the saver.
+pub struct Driver {
+    saver: Box<dyn Saver>,
+    panel: Panel,
+    selected: usize,
+    rot: Rotate,
+    frame_dur: Duration,
+}
+
+impl Driver {
+    /// Built from the mirror's selection, not `cfg.saver`: one validated path,
+    /// so `make`'s fallback arm is not load-bearing for user input.
+    ///
+    /// Rotation is built here, not once in main, so a modeset retry gives the
+    /// current saver a full turn — and picks up whatever `/rotate` has been set
+    /// to since.
+    pub fn new(mirror: &Mirror, fps: u32, place: impl Fn(&str) -> (Panel, Box<dyn Saver>)) -> Self {
+        let selected = mirror.selected();
+        let (panel, saver) = place(name_at(selected));
+        let mut d = Self {
+            saver,
+            panel,
+            selected,
+            rot: Rotate::new(Instant::now()),
+            frame_dur: Duration::from_nanos(1_000_000_000 / u64::from(fps)),
+        };
+        // Geometry, palette and glyph table are fixed until the saver changes,
+        // so the mirror is told once and every frame after it is only cells.
+        announce(mirror, d.saver.as_mut(), &d.panel);
+        d
     }
-    // One relaxed load per frame, same as the mirror's viewer count, and free
-    // for the same reason: adjacent field, already-hot cache line, a plain load
-    // with no barrier. Relaxed is right because the atomic publishes no data —
-    // it indexes a const table that has existed since program start. Everything
-    // a viewer observes travels through the meta and frame mutexes.
-    let want = mirror.selected();
-    if want == *selected {
-        return false;
+
+    pub fn saver(&self) -> &dyn Saver {
+        self.saver.as_ref()
     }
-    // A manual pick resets the interval, so clicking a saver buys it a WHOLE
-    // turn rather than however little was left of the last one's — being
-    // overridden a second after choosing is the infuriating version of this
-    // feature. It does not PAUSE rotation: a pause needs a resume, which is a
-    // second knob and a page that has to show which mode it is in, to save
-    // someone setting the interval to 0 in the deployment.
-    rot.restart(now);
-    *selected = want;
-    *saver = make(name_at(want), panel, fps);
-    // The new grid geometry and palette differ, so this bumps the mirror's
-    // epoch and every viewer reconnects onto the new /meta.
-    announce(mirror, saver.as_ref(), panel);
-    true
+
+    pub fn panel(&self) -> &Panel {
+        &self.panel
+    }
+
+    /// Build the selected saver again, for a host whose panel changed under it.
+    pub fn rebuild(&mut self, mirror: &Mirror, place: impl Fn(&str) -> (Panel, Box<dyn Saver>)) {
+        (self.panel, self.saver) = place(name_at(self.selected));
+        // The new grid geometry and palette differ, so this bumps the mirror's
+        // epoch and every viewer reconnects onto the new /meta.
+        announce(mirror, self.saver.as_mut(), &self.panel);
+    }
+
+    /// Swap the saver if the mirror's selection moved, building it once
+    /// through `place`. True when it switched, so the caller can log it on the
+    /// thread that actually draws — the HTTP thread cannot know whether the
+    /// render loop is running or parked in its no-monitor retry.
+    ///
+    /// Rotation lands here, for the same reason as everything else in this
+    /// struct: a dump that rotated by its own rules would prove nothing about
+    /// what the panel does. It moves the mirror's selection and then falls
+    /// through the ordinary switch below, so an automatic move and a click are
+    /// the same event from here down — including the `/meta` the page re-reads.
+    pub fn switch(
+        &mut self,
+        now: Instant,
+        mirror: &Mirror,
+        place: impl Fn(&str) -> (Panel, Box<dyn Saver>),
+    ) -> bool {
+        // Two relaxed loads per frame now — the rotation word and the
+        // selection — off the same cache line, for the reason below.
+        if let Some(i) = self.rot.due(now, self.selected, mirror.rotate_ctl()) {
+            mirror.select_at(i);
+        }
+        // One relaxed load per frame, same as the mirror's viewer count, and
+        // free for the same reason: adjacent field, already-hot cache line, a
+        // plain load with no barrier. Relaxed is right because the atomic
+        // publishes no data — it indexes a const table that has existed since
+        // program start. Everything a viewer observes travels through the meta
+        // and frame mutexes.
+        let want = mirror.selected();
+        if want == self.selected {
+            return false;
+        }
+        // A manual pick resets the interval, so clicking a saver buys it a
+        // WHOLE turn rather than however little was left of the last one's —
+        // being overridden a second after choosing is the infuriating version
+        // of this feature. It does not PAUSE rotation: a pause needs a resume,
+        // which is a second knob and a page that has to show which mode it is
+        // in, to save someone setting the interval to 0 in the deployment.
+        self.rot.restart(now);
+        self.selected = want;
+        self.rebuild(mirror, place);
+        true
+    }
+
+    /// Draw one frame into `buf`, then hand the mirror its cells — after the
+    /// flush, so they are the frame that just went to the panel. One atomic
+    /// load with nobody watching; see mirror.rs for why this can never make the
+    /// display wait.
+    #[inline]
+    pub fn frame(&mut self, buf: &mut [u32], mirror: &Mirror) -> Damage {
+        let d = frame(self.saver.as_mut(), buf, &self.panel);
+        if mirror.watched() {
+            publish(mirror, self.saver.as_mut());
+        }
+        d
+    }
+
+    /// Sleep out what is left of the frame budget, or count the overrun —
+    /// the branch that has to be right before anyone raises `SAVER_FPS`
+    /// against the pod's 500m CFS quota.
+    pub fn pace(&self, mirror: &Mirror, t0: Instant) {
+        match self.frame_dur.checked_sub(t0.elapsed()) {
+            Some(rem) => std::thread::sleep(rem),
+            // The panel missed its rate. COUNTED, not logged: a log line per
+            // frame at 30fps is its own outage. Read it from /stat.
+            None => mirror.overran(),
+        }
+    }
 }
 
 /// Tell the mirror what this saver draws through. Every construction of a saver
 /// is followed by one of these — a viewer holding the previous saver's geometry
 /// and palette would mis-draw every cell.
-pub fn announce(mirror: &Mirror, s: &dyn Saver, panel: &Panel) {
-    mirror.describe(s.name(), s.grid(), panel, s.palette());
+pub fn announce(mirror: &Mirror, s: &mut dyn Saver, panel: &Panel) {
+    // Copied because `mirror()` holds the saver mutably; once per switch.
+    let pal = s.palette().to_vec();
+    let name = s.name();
+    mirror.describe(name, s.mirror(), panel, &pal);
+}
+
+/// This frame's cells to the mirror, through the same `mirror()` `announce`
+/// described, so the geometry and the cells cannot disagree.
+pub fn publish(mirror: &Mirror, s: &mut dyn Saver) {
+    mirror.publish(s.mirror().cells());
 }
 
 /// The per-frame body, shared verbatim by the DRM path and the dump path. A
@@ -512,116 +588,114 @@ mod tests {
         );
     }
 
+    /// A driver on a small panel with a seeded rotation, as every host
+    /// builds one.
+    fn driver(mirror: &Mirror, t0: Instant, seed: u32) -> (Driver, Panel) {
+        let panel = Panel::new(128, 128, 128);
+        let mut d = Driver::new(mirror, 30, |n| (panel, make(n, &panel, 30)));
+        d.rot = Rotate::seeded(t0, seed);
+        (d, panel)
+    }
+
     /// A click must buy a full turn. Through `switch`, because the reset lives
     /// on the path a click takes and not in the timer.
     #[test]
     fn a_manual_pick_restarts_the_interval() {
-        let panel = Panel::new(128, 128, 128);
         let mirror = Mirror::new(15);
         let t0 = Instant::now();
-        let mut rot = Rotate::seeded(t0, 7);
         mirror.set_rotate_secs(30);
-        let mut selected = mirror.selected();
-        let mut saver = make(name_at(selected), &panel, 30);
+        let (mut d, panel) = driver(&mirror, t0, 7);
+        let mut at = |secs: u64| {
+            let place = |n: &str| (panel, make(n, &panel, 30));
+            let switched = d.switch(t0 + Duration::from_secs(secs), &mirror, place);
+            (switched, d.saver().name())
+        };
 
         // 29 seconds in, someone picks something. One second of the turn left.
-        let at = t0 + Duration::from_secs(29);
         assert!(mirror.select("dvd"));
-        assert!(switch(
-            &mut saver,
-            &mut selected,
-            &mut rot,
-            at,
-            &mirror,
-            &panel,
-            30
-        ));
-        assert_eq!(saver.name(), "dvd");
-
+        assert_eq!(at(29), (true, "dvd"));
         // The second that was left does not end their turn...
-        let at = t0 + Duration::from_secs(30);
-        assert!(!switch(
-            &mut saver,
-            &mut selected,
-            &mut rot,
-            at,
-            &mirror,
-            &panel,
-            30
-        ));
-        assert_eq!(saver.name(), "dvd");
+        assert_eq!(at(30), (false, "dvd"));
         // ...and neither does anything short of a full interval from the click.
-        let at = t0 + Duration::from_secs(58);
-        assert!(!switch(
-            &mut saver,
-            &mut selected,
-            &mut rot,
-            at,
-            &mirror,
-            &panel,
-            30
-        ));
-        assert_eq!(saver.name(), "dvd");
+        assert_eq!(at(58), (false, "dvd"));
         // 29 + 30: now it is up.
-        let at = t0 + Duration::from_secs(59);
-        assert!(switch(
-            &mut saver,
-            &mut selected,
-            &mut rot,
-            at,
-            &mirror,
-            &panel,
-            30
-        ));
-        assert_ne!(saver.name(), "dvd");
+        let (switched, name) = at(59);
+        assert!(switched);
+        assert_ne!(name, "dvd");
     }
 
-    /// End to end through the call both loops make: the timer moves the
+    /// End to end through the call every host makes: the timer moves the
     /// MIRROR's selection, so the picker and `/meta` follow the panel, and the
     /// saver that is drawing actually changes.
     #[test]
     fn switch_rotates_the_panel_and_the_mirror_together() {
-        let panel = Panel::new(128, 128, 128);
         let mirror = Mirror::new(15);
         let t0 = Instant::now();
-        let mut rot = Rotate::seeded(t0, 42);
         mirror.set_rotate_secs(5);
-        let mut selected = mirror.selected();
-        let mut saver = make(name_at(selected), &panel, 30);
-        let first = saver.name();
+        let (mut d, panel) = driver(&mirror, t0, 42);
+        let place = |n: &str| (panel, make(n, &panel, 30));
+        let first = d.saver().name();
 
         // Frame zero adopts the interval and starts the clock — see `due`.
-        assert!(!switch(
-            &mut saver,
-            &mut selected,
-            &mut rot,
-            t0,
-            &mirror,
-            &panel,
-            30
-        ));
-        assert!(!switch(
-            &mut saver,
-            &mut selected,
-            &mut rot,
-            t0 + Duration::from_secs(4),
-            &mirror,
-            &panel,
-            30
-        ));
-        assert_eq!(saver.name(), first);
+        assert!(!d.switch(t0, &mirror, place));
+        assert!(!d.switch(t0 + Duration::from_secs(4), &mirror, place));
+        assert_eq!(d.saver().name(), first);
 
-        assert!(switch(
-            &mut saver,
-            &mut selected,
-            &mut rot,
-            t0 + Duration::from_secs(5),
-            &mirror,
-            &panel,
-            30
-        ));
-        assert_ne!(saver.name(), first);
-        assert_eq!(name_at(mirror.selected()), saver.name());
-        assert_eq!(selected, mirror.selected());
+        assert!(d.switch(t0 + Duration::from_secs(5), &mirror, place));
+        assert_ne!(d.saver().name(), first);
+        assert_eq!(name_at(mirror.selected()), d.saver().name());
+        assert_eq!(d.selected, mirror.selected());
+    }
+
+    /// A switch builds the saver once, for the panel `place` names. The
+    /// terminal used to build at a base panel and again at its own, and
+    /// whatever the first build rolled was thrown away.
+    #[test]
+    fn a_switch_builds_once_for_the_panel_place_names() {
+        let mirror = Mirror::new(15);
+        let t0 = Instant::now();
+        let builds = std::cell::Cell::new(0);
+        let big = Panel::new(256, 192, 256);
+        let place = |n: &str| {
+            builds.set(builds.get() + 1);
+            (big, make(n, &big, 30))
+        };
+        let mut d = Driver::new(&mirror, 30, place);
+        assert_eq!(builds.get(), 1);
+        assert!(mirror.select("dvd"));
+        assert!(d.switch(t0, &mirror, place));
+        assert_eq!(builds.get(), 2);
+        assert_eq!((d.panel().w, d.panel().h), (256, 192));
+    }
+
+    /// The whole point of the overrun counter: a frame that ran past its
+    /// budget is counted, and one that did not is not. CI has no card, so the
+    /// render loop itself never runs here — this branch is the testable half.
+    #[test]
+    fn a_late_frame_is_counted_and_an_early_one_is_not() {
+        let m = Mirror::new(15);
+        let (mut d, _) = driver(&m, Instant::now(), 1);
+        d.frame_dur = Duration::from_millis(20);
+
+        // Frame that took longer than the budget: nothing left to sleep.
+        let late = Instant::now()
+            .checked_sub(Duration::from_millis(50))
+            .unwrap();
+        d.pace(&m, late);
+        assert_eq!(m.overruns(), 1);
+        d.pace(&m, late);
+        assert_eq!(m.overruns(), 2);
+
+        // Frame that finished inside the budget: sleeps out the remainder and
+        // counts nothing. The elapsed check is what fails if the arms are
+        // swapped — a swapped `pace` returns instantly here.
+        let t0 = Instant::now();
+        d.pace(&m, t0);
+        assert_eq!(m.overruns(), 2);
+        assert!(
+            t0.elapsed() >= d.frame_dur,
+            "did not sleep: {:?}",
+            t0.elapsed()
+        );
     }
 }

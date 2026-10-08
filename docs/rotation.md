@@ -48,7 +48,7 @@ always gets a whole turn rather than the two seconds that happened to be left.
 It does not pause rotation: a pause needs a resume, which is a second knob plus
 a page that has to show which mode it is in, to save someone setting this to 0.
 
-A rotation is the same event as a click from `saver::switch` down, including the
+A rotation is the same event as a click from `Driver::switch` down, including the
 epoch bump — so every connected viewer's stream ends, it re-reads `/meta` and
 takes a keyframe. That is one keyframe per viewer per interval (32 KB for
 `matrix`, 1 MB for `blocks`, which is the widest grid here), on the viewer's own

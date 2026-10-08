@@ -918,26 +918,14 @@ mod tests {
         let panel = Panel::new(128, 128, 128);
         let m = Mirror::new(15);
         let t0 = std::time::Instant::now();
-        let mut rot = saver::Rotate::new(t0);
-        let mut selected = m.selected();
-        let mut sav = saver::make(saver::name_at(selected), &panel, 30);
-        saver::announce(&m, sav.as_ref(), &panel);
+        let place = |n: &str| (panel, saver::make(n, &panel, 30));
+        let mut d = saver::Driver::new(&m, 30, place);
 
         m.set_rotate_secs(120);
-        let mut step = |rot: &mut saver::Rotate, sav: &mut Box<dyn saver::Saver>, secs: u64| {
-            saver::switch(
-                sav,
-                &mut selected,
-                rot,
-                t0 + Duration::from_secs(secs),
-                &m,
-                &panel,
-                30,
-            )
-        };
-        assert!(!step(&mut rot, &mut sav, 0));
-        assert!(!step(&mut rot, &mut sav, 119), "rotated early");
-        assert!(step(&mut rot, &mut sav, 120), "did not rotate on time");
+        let mut step = |secs: u64| d.switch(t0 + Duration::from_secs(secs), &m, place);
+        assert!(!step(0));
+        assert!(!step(119), "rotated early");
+        assert!(step(120), "did not rotate on time");
 
         // Over the socket, because the interval is spliced in by the route: a
         // /meta served straight out of the cached string would answer with
@@ -960,6 +948,23 @@ mod tests {
         s.read_to_string(&mut body).unwrap();
         let tail = body.rsplit_once("]],").unwrap().1.to_string();
         assert!(tail.contains("\"rotate_secs\":120"), "{tail}");
+    }
+
+    /// Every viewer reconnects on an epoch bump, so a switch must bump it
+    /// exactly once. The terminal used to announce the saver `switch` built
+    /// and then the one it rebuilt for itself, and every viewer reconnected
+    /// twice.
+    #[test]
+    fn a_switch_announces_once() {
+        let panel = Panel::new(128, 128, 128);
+        let m = Mirror::new(15);
+        let epoch = || m.frame.lock().unwrap().epoch;
+        let place = |n: &str| (panel, saver::make(n, &panel, 30));
+        let mut d = saver::Driver::new(&m, 30, place);
+        let before = epoch();
+        assert!(m.select("dvd"));
+        assert!(d.switch(std::time::Instant::now(), &m, place));
+        assert_eq!(epoch(), before + 1);
     }
 
     /// A `/select` landing between the page's `/meta` and `/stream` fetches
