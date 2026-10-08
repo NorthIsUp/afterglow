@@ -12,4 +12,4 @@ A larger headland, a wider sea and a far island beyond the sun.
 
 Recomposed at 320x100 (3.2:1) to fill pine's glass uncropped; see [`-wide` variants](../ascii-rest.md#-wide-variants).
 
-Source: [`src/ascii_rest/ocean_sunset_wide.rs`](../../src/ascii_rest/ocean_sunset_wide.rs).
+Source: the `WIDE` layout in [`src/ascii_rest/ocean_sunset.rs`](../../src/ascii_rest/ocean_sunset.rs), the original's own module.

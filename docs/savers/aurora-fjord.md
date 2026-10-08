@@ -12,4 +12,4 @@ Fjord and cabin kept off-centre, two more peaks on each range.
 
 Recomposed at 320x100 (3.2:1) to fill pine's glass uncropped; see [`-wide` variants](../ascii-rest.md#-wide-variants).
 
-Source: [`src/ascii_rest/aurora_fjord_wide.rs`](../../src/ascii_rest/aurora_fjord_wide.rs).
+Source: the `WIDE` layout in [`src/ascii_rest/aurora_fjord.rs`](../../src/ascii_rest/aurora_fjord.rs), the original's own module.

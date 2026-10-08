@@ -12,4 +12,4 @@ More highlands and ground, two more bright stars, a longer galaxy band.
 
 Recomposed at 320x100 (3.2:1) to fill pine's glass uncropped; see [`-wide` variants](../ascii-rest.md#-wide-variants).
 
-Source: [`src/ascii_rest/earthrise_wide.rs`](../../src/ascii_rest/earthrise_wide.rs).
+Source: the `WIDE` layout in [`src/ascii_rest/earthrise.rs`](../../src/ascii_rest/earthrise.rs), the original's own module.

@@ -12,4 +12,4 @@ Broader reefs and sand, two more bommies, a hazy third kelp.
 
 Recomposed at 320x100 (3.2:1) to fill pine's glass uncropped; see [`-wide` variants](../ascii-rest.md#-wide-variants).
 
-Source: [`src/ascii_rest/deep_reef_wide.rs`](../../src/ascii_rest/deep_reef_wide.rs).
+Source: the `WIDE` layout in [`src/ascii_rest/deep_reef.rs`](../../src/ascii_rest/deep_reef.rs), the original's own module.

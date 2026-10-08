@@ -12,4 +12,4 @@ A temple hall beside the pagoda, hills rising further east.
 
 Recomposed at 320x100 (3.2:1) to fill pine's glass uncropped; see [`-wide` variants](../ascii-rest.md#-wide-variants).
 
-Source: [`src/ascii_rest/kyoto_dusk_wide.rs`](../../src/ascii_rest/kyoto_dusk_wide.rs).
+Source: the `WIDE` layout in [`src/ascii_rest/kyoto_dusk.rs`](../../src/ascii_rest/kyoto_dusk.rs), the original's own module.

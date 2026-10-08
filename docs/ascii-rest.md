@@ -83,10 +83,12 @@ The same thirteen scenes recomposed at 320x100 (3.2:1), so they fill pine's glas
 The mirror page lists each scene once, with an `expanded` toggle between the two.
 
 **`-wide` variants** are this repo's own: a scene recomposed on a 320x100 grid
-so it fills pine's 3.2:1 glass with nothing cropped, rather than stretched. The
-original stays untouched and golden-exact; a wide one is marked
-`#[no_upstream]` in `each_piece!`, so it gets no `golden` test — there is no
-upstream output to compare against.
+so it fills pine's 3.2:1 glass with nothing cropped, rather than stretched. Each
+shares its original's module: one `Scene<IS_WIDE>` drawn from a `Layout` (width,
+sun, landmarks, extra peaks and props), with an `ORIGINAL` that keeps upstream's
+literals and a `WIDE` beside it. The original stays golden-exact; the wide one
+is marked `#[no_upstream]` in `each_piece!`, so it gets no `golden` test — there
+is no upstream output to compare against.
 
 ## Character pieces
 
