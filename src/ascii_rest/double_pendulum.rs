@@ -99,6 +99,8 @@ struct Grid<'a> {
     out: &'a mut [Cell],
     cols: usize,
     rows: usize,
+    /// The colour `rod` draws in.
+    ink: u16,
 }
 
 fn put(grid: &mut Grid<'_>, x: f64, y: f64, ch: Cell) {
@@ -149,7 +151,8 @@ fn rod(grid: &mut Grid<'_>, x0: f64, y0: f64, x1: f64, y1: f64) {
             } else {
                 '-'
             };
-            put(grid, c, r, text::cell(ch));
+            let ink = grid.ink;
+            put(grid, c, r, text::tint(text::cell(ch), ink));
             c += 1.0;
         }
     } else {
@@ -163,14 +166,48 @@ fn rod(grid: &mut Grid<'_>, x0: f64, y0: f64, x1: f64, y1: f64) {
             } else {
                 slash
             };
-            put(grid, c, r, text::cell(ch));
+            let ink = grid.ink;
+            put(grid, c, r, text::tint(text::cell(ch), ink));
             r += 1.0;
         }
     }
 }
 
+/// The twin's colours: each pendulum's trail in its own family, deep and
+/// dim where it is oldest to bright at the bob, the rods pale, the bobs
+/// white and the pivot grey.
+const SHADES: usize = 5;
+const FAMILIES: usize = 3;
+const ROD: u16 = 15;
+const BOB: u16 = 16;
+const KNEE: u16 = 17;
+const PIVOT: u16 = 18;
+const WIDE_PALETTE: &[u32] = &[
+    hex("#1a3a8a"),
+    hex("#2a5ad0"),
+    hex("#3a8af0"),
+    hex("#40c0ff"),
+    hex("#6ee7ff"),
+    hex("#5a1a7a"),
+    hex("#8a2ab0"),
+    hex("#c040d8"),
+    hex("#f060e0"),
+    hex("#ff9af0"),
+    hex("#6a3a10"),
+    hex("#a05a18"),
+    hex("#d08a20"),
+    hex("#f0c040"),
+    hex("#fff07a"),
+    hex("#d8f0ff"),
+    hex("#ffffff"),
+    hex("#b0e8ff"),
+    hex("#8090a0"),
+];
+
 struct Pendulum {
     hang: Hang,
+    /// The twin's colour family for the trail; None upstream, in one ink.
+    family: Option<u16>,
     start: State,
     s: State,
     trail: VecDeque<(f64, f64)>,
@@ -181,9 +218,10 @@ struct Pendulum {
 }
 
 impl Pendulum {
-    fn new(hang: Hang, start: State) -> Self {
+    fn new(hang: Hang, start: State, family: Option<u16>) -> Self {
         let mut me = Self {
             hang,
+            family,
             start,
             s: start,
             // One over TRAIL: a push lands before the shift.
@@ -245,7 +283,11 @@ impl Pendulum {
     fn draw_trail(&self, out: &mut Grid<'_>) {
         let len = self.trail.len();
         for i in 1..len {
-            let ch = FADE[((i as f64 / len as f64) * FADE.len() as f64).floor() as usize];
+            let age = i as f64 / len as f64;
+            let mut ch = FADE[(age * FADE.len() as f64).floor() as usize];
+            if let Some(f) = self.family {
+                ch = text::tint(ch, f * SHADES as u16 + (age * SHADES as f64) as u16);
+            }
             let (x0, y0) = self.trail[i - 1];
             let (x1, y1) = self.trail[i];
             let n = ((x1 - x0).abs().max((y1 - y0).abs()) * 2.0).ceil();
@@ -263,13 +305,22 @@ impl Pendulum {
         let a = self.s[0];
         let (x1, y1) = (cx + sx * a.sin(), cy + sy * a.cos());
         let (x2, y2) = self.hang.tip(self.s);
+        let ink = |c: char, tone: u16| {
+            let c = text::cell(c);
+            if self.family.is_some() {
+                text::tint(c, tone)
+            } else {
+                c
+            }
+        };
+        out.ink = if self.family.is_some() { ROD } else { 0 };
         rod(out, cx, cy, x1, y1);
         rod(out, x1, y1, x2, y2);
-        put(out, cx - 1.0, cy, text::cell('('));
-        put(out, cx, cy, text::cell('+'));
-        put(out, cx + 1.0, cy, text::cell(')'));
-        put(out, x1, y1, text::cell('o'));
-        put(out, x2, y2, text::cell('@'));
+        put(out, cx - 1.0, cy, ink('(', PIVOT));
+        put(out, cx, cy, ink('+', PIVOT));
+        put(out, cx + 1.0, cy, ink(')', PIVOT));
+        put(out, x1, y1, ink('o', KNEE));
+        put(out, x2, y2, ink('@', BOB));
     }
 }
 
@@ -289,6 +340,7 @@ impl Scene {
             out,
             cols: self.cols,
             rows: self.rows,
+            ink: 0,
         };
         for p in &self.swing {
             p.draw_trail(&mut grid);
@@ -315,7 +367,7 @@ impl Piece for DoublePendulum {
         Self(Scene {
             cols: COLS,
             rows: ROWS,
-            swing: vec![Pendulum::new(hang, START)],
+            swing: vec![Pendulum::new(hang, START, None)],
         })
     }
 
@@ -329,7 +381,7 @@ pub struct DoublePendulumWide(Scene);
 impl Canvas for DoublePendulumWide {
     const NAME: &'static str = "double-pendulum-wide";
     const FPS: u32 = DoublePendulum::FPS;
-    const PALETTE: &'static [u32] = DoublePendulum::PALETTE;
+    const PALETTE: &'static [u32] = WIDE_PALETTE;
 
     /// One pendulum a slot as wide as its reach (with a little air), the
     /// slots sharing out the width; each lets go a little further round.
@@ -342,7 +394,8 @@ impl Canvas for DoublePendulumWide {
                 let [a, b, p, q] = START;
                 let k = i as f64 - (n - 1) as f64 / 2.0;
                 let hang = Hang::new(x0 as f64, x1 - x0, rows);
-                Pendulum::new(hang, [a + 0.04 * k, b - 0.03 * k, p, q])
+                let family = (i % FAMILIES) as u16;
+                Pendulum::new(hang, [a + 0.04 * k, b - 0.03 * k, p, q], Some(family))
             })
             .collect();
         Self(Scene { cols, rows, swing })

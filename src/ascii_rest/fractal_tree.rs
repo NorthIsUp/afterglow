@@ -102,6 +102,8 @@ struct Tree {
     s: f64,
     /// Seconds the wind reaches it late.
     lag: f64,
+    /// The share of its brightest leaves in blossom, in the twin.
+    blossom: f64,
     limbs: Vec<Limb>,
     lobes: Vec<Lobe>,
     order: Vec<Placed>,
@@ -111,7 +113,7 @@ struct Tree {
 }
 
 impl Tree {
-    fn new(x0: f64, fork: usize, s: f64, lag: f64, seed: u32) -> Self {
+    fn new(x0: f64, fork: usize, s: f64, lag: f64, seed: u32, blossom: f64) -> Self {
         let mut rand = Mulberry32(seed);
         let mut limbs = Vec::new();
         grow(&mut limbs, &mut rand, None, 1, LEN * s);
@@ -138,6 +140,7 @@ impl Tree {
             fork,
             s,
             lag,
+            blossom,
             order: vec![Placed::default(); lobes.len()],
             px: vec![0.0; limbs.len()],
             py: vec![0.0; limbs.len()],
@@ -364,6 +367,39 @@ struct Ground {
     dots: usize,
 }
 
+/// The twin's colours: a brown trunk darkening into the branches, olive
+/// twigs, leaves in four greens by their light, blossom, and earth.
+const TRUNK: u8 = 0;
+const BARK: u8 = 1;
+const TWIG: u8 = 2;
+const LEAVES: u8 = 3;
+const BLOSSOM: u8 = 7;
+const EARTH: u8 = 8;
+const WIDE_PALETTE: &[u32] = &[
+    hex("#9a6236"),
+    hex("#7a5a30"),
+    hex("#7a8a3a"),
+    hex("#2e6a2a"),
+    hex("#4f9a3a"),
+    hex("#7ccf4a"),
+    hex("#b4f070"),
+    hex("#ffb0d0"),
+    hex("#7a5a3a"),
+];
+
+/// A cell's colour in the twin, from its glyph and how deep its limb is:
+/// `LEAF`'s glyphs are leaves, by light, now and then in blossom at
+/// `blossom` (a share of the brightest leaves); the rest are wood.
+fn tone_of(ink: u8, depth: u8, blossom: f64, c: usize, r: usize) -> u8 {
+    match LEAF.iter().position(|&l| l == ink) {
+        Some(i) if i >= 3 && hash2(c as i64 + 911, r as i64) < blossom => BLOSSOM,
+        Some(i) => LEAVES + i.saturating_sub(1) as u8,
+        None if depth <= 2 => TRUNK,
+        None if depth <= 4 => BARK,
+        None => TWIG,
+    }
+}
+
 struct Scene {
     /// Back to front.
     trees: Vec<Tree>,
@@ -371,10 +407,12 @@ struct Scene {
     canopy: Canopy,
     ink: Vec<u8>,
     cells: [Cell; 128],
+    /// Each cell's `tone_of` this frame, for the twin; empty upstream.
+    tone: Vec<u8>,
 }
 
 impl Scene {
-    fn new(cols: usize, rows: usize, trees: Vec<Tree>, ground: Ground) -> Self {
+    fn new(cols: usize, rows: usize, trees: Vec<Tree>, ground: Ground, colour: bool) -> Self {
         let n = cols * rows;
         let mut cells = [Cell::CLEAR; 128];
         for (b, cell) in cells.iter_mut().enumerate().take(0x7f).skip(0x20) {
@@ -393,17 +431,23 @@ impl Scene {
             },
             ink: vec![b' '; n],
             cells,
+            tone: if colour { vec![0; n] } else { Vec::new() },
         }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         let cols = self.canopy.cols;
         self.ink.fill(b' ');
+        let colour = !self.tone.is_empty();
         for tree in &mut self.trees {
             self.canopy.draw(tree, self.ground.row, t);
-            for (o, &i) in self.ink.iter_mut().zip(&self.canopy.ink) {
+            for (k, (o, &i)) in self.ink.iter_mut().zip(&self.canopy.ink).enumerate() {
                 if i != b' ' {
                     *o = i;
+                    if colour {
+                        let d = self.canopy.depth_at[k];
+                        self.tone[k] = tone_of(i, d, tree.blossom, k % cols, k / cols);
+                    }
                 }
             }
         }
@@ -417,10 +461,19 @@ impl Scene {
                 } else {
                     b'_'
                 };
+                if colour {
+                    self.tone[k] = EARTH;
+                }
             }
         }
-        for (cell, &b) in out.iter_mut().zip(self.ink.iter()) {
-            *cell = self.cells[b as usize];
+        if colour {
+            for ((cell, &b), &k) in out.iter_mut().zip(&self.ink).zip(&self.tone) {
+                *cell = text::tint(self.cells[b as usize], u16::from(k));
+            }
+        } else {
+            for (cell, &b) in out.iter_mut().zip(self.ink.iter()) {
+                *cell = self.cells[b as usize];
+            }
         }
     }
 }
@@ -437,13 +490,13 @@ impl Piece for FractalTree {
     const GROUND: u32 = 0;
 
     fn new() -> Self {
-        let tree = Tree::new(X0, FORK, 1.0, 0.0, SEED);
+        let tree = Tree::new(X0, FORK, 1.0, 0.0, SEED, 0.0);
         let ground = Ground {
             row: GROUND,
             bare: 3,
             dots: 3,
         };
-        Self(Scene::new(COLS, ROWS, vec![tree], ground))
+        Self(Scene::new(COLS, ROWS, vec![tree], ground, false))
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
@@ -456,7 +509,7 @@ pub struct FractalTreeWide(Scene);
 impl Canvas for FractalTreeWide {
     const NAME: &'static str = "fractal-tree-wide";
     const FPS: u32 = FractalTree::FPS;
-    const PALETTE: &'static [u32] = FractalTree::PALETTE;
+    const PALETTE: &'static [u32] = WIDE_PALETTE;
 
     /// Upstream's tree scaled to the height in the middle, then trees of
     /// 55% to 80% of it walking out from it either side until one stands past
@@ -469,7 +522,9 @@ impl Canvas for FractalTreeWide {
         let ground = rows - 1;
         let at = |x: f64, k: f64, seed: u32| {
             let fork = ground.saturating_sub(((GROUND - FORK) as f64 * s * k).round() as usize);
-            Tree::new(x - 0.5, fork, s * k, 1.6 * x / cols as f64, seed)
+            // Every other tree out from the middle is a cherry in bloom.
+            let blossom = if seed.is_multiple_of(2) { 0.06 } else { 0.35 };
+            Tree::new(x - 0.5, fork, s * k, 1.6 * x / cols as f64, seed, blossom)
         };
         let mid = cols as f64 / 2.0;
         let mut trees = Vec::new();
@@ -496,7 +551,7 @@ impl Canvas for FractalTreeWide {
             bare: 0,
             dots: 0,
         };
-        Self(Scene::new(cols, rows, grove, ground))
+        Self(Scene::new(cols, rows, grove, ground, true))
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {

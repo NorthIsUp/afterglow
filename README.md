@@ -146,7 +146,7 @@ Ports of [ascii.rest](https://ascii.rest)'s scenes; the camera slowly tours each
 
 ### ascii.rest character pieces
 
-One ink each. Every piece also has a `-wide` twin drawn at the panel's own size, any shape, with no bars. The shared engine: [the ascii.rest ports](docs/ascii-rest.md#character-pieces).
+One ink each. Every piece also has a `-wide` twin in colour, drawn at the panel's own size, any shape, with no bars. The shared engine: [the ascii.rest ports](docs/ascii-rest.md#character-pieces).
 
 | `SAVER`                                                   | `-wide`                                                                                | What                                                                            |
 | --------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |

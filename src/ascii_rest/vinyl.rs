@@ -66,6 +66,41 @@ struct Disc {
 /// Rim tally: samples, summed height in the cell, summed |cos|, falling count.
 type Tally = [f64; 4];
 
+/// The twin's colours: an amber plinth, a brass tonearm, a black record
+/// whose grooves catch a grey sheen, a silver rim and spindle, each deck's
+/// label in its own colour printed in cream, white dust; on the mixer green,
+/// yellow and red meters, cyan knobs, white fader caps in a grey box.
+const PLINTH: u16 = 0;
+const BRASS: u16 = 1;
+const GROOVE: u16 = 2;
+const SHEEN: u16 = 3;
+const SILVER: u16 = 4;
+const RED_LABEL: u16 = 5;
+const PRINT: u16 = 6;
+const DUST_INK: u16 = 7;
+const METER: [u16; 3] = [8, 9, 10];
+const KNOB: u16 = 11;
+const CAP: u16 = 12;
+const PANEL: u16 = 13;
+const BLUE_LABEL: u16 = 14;
+const WIDE_PALETTE: &[u32] = &[
+    hex("#ffb347"),
+    hex("#e0b050"),
+    hex("#4a4a54"),
+    hex("#b0b0c0"),
+    hex("#d8d8e0"),
+    hex("#d83a3a"),
+    hex("#ffe9c0"),
+    hex("#ffffff"),
+    hex("#50e070"),
+    hex("#f0e040"),
+    hex("#ff4a3a"),
+    hex("#50d8f0"),
+    hex("#f0f0f0"),
+    hex("#8a8a96"),
+    hex("#3a6ad8"),
+];
+
 /// Where one turntable sits on the grid and how its record turns.
 struct Spec {
     /// The deck's left edge, in columns.
@@ -78,6 +113,8 @@ struct Spec {
     dust: f64,
     /// Rows the pitch slider's cap sits below its middle.
     pitch: i64,
+    /// The twin's label colour.
+    label: u16,
 }
 
 const ORIGINAL: Spec = Spec {
@@ -86,6 +123,7 @@ const ORIGINAL: Spec = Spec {
     rate: 1.0,
     dust: 0.0,
     pitch: 0,
+    label: 0,
 };
 
 /// One turntable: its record, traced once, and where its furniture goes.
@@ -96,6 +134,7 @@ struct Deck {
     rate: f64,
     dust: f64,
     pitch: i64,
+    label: u16,
     cells: Vec<Disc>,
     subs: Vec<(f64, f64)>,
     edge: Vec<(usize, Cell)>,
@@ -243,6 +282,7 @@ impl Deck {
             rate: spec.rate,
             dust: spec.dust,
             pitch: spec.pitch,
+            label: spec.label,
             cells,
             subs,
             edge,
@@ -254,7 +294,7 @@ impl Deck {
         let a = SPIN * t * self.rate;
         let (ca, sa) = (a.cos(), a.sin());
         for &(k, g) in &self.edge {
-            pen.out[k] = g;
+            pen.set(k, g, SILVER);
         }
         for cell in &self.cells {
             let r = cell.d;
@@ -284,9 +324,17 @@ impl Deck {
             } else {
                 3 + js_round(4.0 * s) as usize
             };
-            pen.out[cell.k] = RAMP[b];
+            let tone = match b {
+                5 => PRINT,
+                9 => self.label,
+                6.. => SHEEN,
+                _ => GROOVE,
+            };
+            pen.set(cell.k, RAMP[b], tone);
         }
+        pen.ink(SILVER);
         pen.put(self.cx, self.cy, 'o');
+        pen.ink(DUST_INK);
         // Dust riding round with the record.
         for (r, p) in DUST {
             let r = r * self.s;
@@ -304,6 +352,7 @@ impl Deck {
     fn furniture(&self, ox: f64, pen: &mut Pen<'_>) {
         let s = self.s;
         let bottom = (self.cy + 11.5 * s).round().min((pen.rows - 1) as f64);
+        pen.ink(PLINTH);
         let pc = (self.cx + 2.0 * R * s + 10.5).round();
         let pr = (self.cy - R * s + 1.5).round();
         let ar = (self.cy + 3.5 * s).round();
@@ -316,12 +365,14 @@ impl Deck {
         let cap = ((top + bottom - 2.0) / 2.0).floor() + self.pitch as f64;
         let mut r = top;
         while r <= bottom - 2.0 {
+            pen.ink(if r == cap { CAP } else { PLINTH });
             pen.put(pc + 8.0, r, if r == cap { '═' } else { '┊' });
             r += 1.0;
         }
 
         // The tonearm: counterweight behind the pivot, the pivot in its ring,
         // a tube down and round to the headshell, and the cue lever beside it.
+        pen.ink(BRASS);
         pen.words(pc - 2.0, pr - 3.0, "▗▄▄▄▖");
         pen.words(pc - 2.0, pr - 2.0, "▝▀█▀▘");
         pen.words(pc - 3.0, pr - 1.0, "╭──╨──╮");
@@ -350,13 +401,28 @@ struct Pen<'a> {
     out: &'a mut [Cell],
     cols: usize,
     rows: usize,
+    /// The twin colours by part; upstream's one ink stays entry 0.
+    colour: bool,
+    ink: u16,
 }
 
 impl Pen<'_> {
+    /// Draw in `WIDE_PALETTE` entry `k` from here on, in the twin.
+    fn ink(&mut self, k: u16) {
+        if self.colour {
+            self.ink = k;
+        }
+    }
+
+    /// Cell `k` is `c`, in entry `tone` in the twin.
+    fn set(&mut self, k: usize, c: Cell, tone: u16) {
+        self.out[k] = if self.colour { text::tint(c, tone) } else { c };
+    }
+
     fn put(&mut self, c: f64, r: f64, g: char) {
         let (c, r) = (c.floor(), r.floor());
         if c >= 0.0 && c < self.cols as f64 && r >= 0.0 && r < self.rows as f64 {
-            self.out[r as usize * self.cols + c as usize] = text::cell(g);
+            self.out[r as usize * self.cols + c as usize] = text::tint(text::cell(g), self.ink);
         }
     }
 
@@ -398,6 +464,7 @@ struct Mixer {
 impl Mixer {
     fn draw(&self, t: f64, pen: &mut Pen<'_>) {
         let (x0, x1, y0, y1) = (self.x0, self.x1, 1.0, self.y1);
+        pen.ink(PANEL);
         pen.words(x0, y0, "┌");
         pen.words(x1, y0, "┐");
         pen.words(x0, y1, "└");
@@ -419,6 +486,7 @@ impl Mixer {
         pen.put(a, y0 + 1.0, 'A');
         pen.put(b, y0 + 1.0, 'B');
         // Hi, mid and low on each channel, each turned now and then.
+        pen.ink(KNOB);
         for (ch, x) in [a, b].into_iter().enumerate() {
             for k in 0..3 {
                 let ph = (ch * 3 + k) as f64;
@@ -436,10 +504,12 @@ impl Mixer {
             let dip = (t * 0.11 + ch as f64 * 2.4).sin().max(0.0).powi(4);
             let cap = (f0 + (f1 - f0) * (0.12 + 0.6 * dip)).round();
             let mut r = f0;
+            pen.ink(PANEL);
             while r <= f1 {
                 pen.put(x, r, '┊');
                 r += 1.0;
             }
+            pen.ink(CAP);
             pen.words(x - 1.0, cap, "═══");
         }
         // The meters, one a channel, kicking on the beat.
@@ -462,6 +532,16 @@ impl Mixer {
                 } else {
                     '·'
                 };
+                let up = i / span;
+                pen.ink(if g == '·' {
+                    PANEL
+                } else if up < 0.6 {
+                    METER[0]
+                } else if up < 0.85 {
+                    METER[1]
+                } else {
+                    METER[2]
+                });
                 pen.put(x, r, g);
                 r -= 1.0;
                 i += 1.0;
@@ -469,12 +549,14 @@ impl Mixer {
         }
         // The crossfader, swept from deck to deck.
         let cr = y1 - 2.0;
+        pen.ink(PANEL);
         let mut c = a;
         while c <= b {
             pen.put(c, cr, '─');
             c += 1.0;
         }
         let at = (a + (b - a) * (0.5 + 0.45 * (t * TAU_XF).sin())).round();
+        pen.ink(PLINTH);
         pen.words(at - 1.0, cr, "▐█▌");
     }
 }
@@ -487,6 +569,7 @@ struct Scene {
     rows: usize,
     decks: Vec<(f64, Deck)>,
     mixer: Option<Mixer>,
+    colour: bool,
 }
 
 impl Scene {
@@ -496,12 +579,15 @@ impl Scene {
             out,
             cols: self.cols,
             rows: self.rows,
+            colour: self.colour,
+            ink: 0,
         };
         for (_, deck) in &self.decks {
             deck.record(t, &mut pen);
         }
 
         // The plinth, its start and speed buttons, and the pitch slider.
+        pen.ink(PLINTH);
         pen.plinth();
         for (ox, deck) in &self.decks {
             deck.furniture(*ox, &mut pen);
@@ -529,6 +615,7 @@ impl Piece for Vinyl {
             rows: ROWS,
             decks: vec![(0.0, Deck::new(COLS, ROWS, &ORIGINAL))],
             mixer: None,
+            colour: false,
         })
     }
 
@@ -542,7 +629,7 @@ pub struct VinylWide(Scene);
 impl Canvas for VinylWide {
     const NAME: &'static str = "vinyl-wide";
     const FPS: u32 = Vinyl::FPS;
-    const PALETTE: &'static [u32] = Vinyl::PALETTE;
+    const PALETTE: &'static [u32] = WIDE_PALETTE;
 
     /// Two decks as tall as the panel allows, so long as two of them and a
     /// mixer at least `MIX` wide still fit across it.
@@ -554,13 +641,14 @@ impl Canvas for VinylWide {
             .max(0.25);
         let dw = (CX + 2.0 * R) * s + ARM + 1.0;
         let right = (w - dw).floor();
-        let deck = |ox: f64, rate: f64, dust: f64, pitch: i64| {
+        let deck = |ox: f64, rate: f64, dust: f64, pitch: i64, label: u16| {
             let spec = Spec {
                 ox,
                 s,
                 rate,
                 dust,
                 pitch,
+                label,
             };
             (ox, Deck::new(cols, rows, &spec))
         };
@@ -568,7 +656,11 @@ impl Canvas for VinylWide {
         Self(Scene {
             cols,
             rows,
-            decks: vec![deck(0.0, 1.0, 0.0, 0), deck(right, 1.02, PI, 1)],
+            decks: vec![
+                deck(0.0, 1.0, 0.0, 0, RED_LABEL),
+                deck(right, 1.02, PI, 1, BLUE_LABEL),
+            ],
+            colour: true,
             mixer: (x1 - x0 >= 10.0 && rows >= 16).then_some(Mixer {
                 x0,
                 x1,

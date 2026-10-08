@@ -10,6 +10,8 @@ Source: [`src/ascii_rest/fractal_tree.rs`](../../src/ascii_rest/fractal_tree.rs)
 
 A grove. Upstream's tree, scaled to the panel's height, stands in the middle. Smaller trees grown from other seeds walk out either side until one stands past each edge, all on one ground line that runs edge to edge. The wind reaches each tree a moment after the one to its left, so a gust crosses the grove.
 
+In colour: brown trunks darkening into the branches and olive twigs, with leaves in four greens by their light. Every other tree out from the middle is a cherry with a third of its brightest leaves in pink blossom; the rest show a few. The ground line is earth brown.
+
 Knobs: `ASCII_REST_TEXT_CELL_W` / `ASCII_REST_TEXT_CELL_H` and `ASCII_REST_TITLE`; see [full-screen twins](../ascii-rest.md#full-screen-twins).
 
 Source: [`src/ascii_rest/fractal_tree.rs`](../../src/ascii_rest/fractal_tree.rs), the original's own module.
