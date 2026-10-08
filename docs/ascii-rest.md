@@ -74,8 +74,9 @@ The same thirteen scenes recomposed at 320x100 (3.2:1), so they fill pine's glas
 
 **`-wide` variants** are this repo's own: a scene recomposed on a 320x100 grid
 so it fills pine's 3.2:1 glass with nothing cropped, rather than stretched. The
-original stays untouched and golden-exact; a wide one sets `UPSTREAM = false`,
-so its `golden` test skips — there is no upstream output to compare against.
+original stays untouched and golden-exact; a wide one is marked
+`#[no_upstream]` in `each_piece!`, so it gets no `golden` test — there is no
+upstream output to compare against.
 
 ## Character pieces
 

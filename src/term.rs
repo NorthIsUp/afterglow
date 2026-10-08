@@ -1,22 +1,23 @@
 //! The terminal host: the same frames, printed into the terminal this runs in.
 //!
-//! A third host beside DRM and the dump. It drives the same `saver::switch` and
-//! `saver::frame` into a pixel buffer nobody reads, then prints the grid that
-//! frame flushed: one character per cell where cells are glyph-shaped, two
-//! cells per character (`▀`, top cell as the foreground, bottom as the
+//! A third host beside DRM and the dump. It drives the same `saver::Driver`
+//! into a pixel buffer nobody reads, then prints the grid that frame flushed,
+//! scaled as the panel shows it: a character per cell where cells are
+//! glyph-shaped, two per character (`▀`, top as the foreground, bottom as the
 //! background) where they are square. Truecolor only; every terminal worth
 //! running a screensaver in has it.
 
-use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::fs::{File, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::sync::atomic::Ordering;
+use std::sync::{Mutex, PoisonError};
+use std::time::Instant;
 
 use crate::font;
-use crate::grid::{Cell, Grid};
-use crate::host::pace;
+use crate::grid::{Cell, Grid, Shape};
 use crate::mirror::Mirror;
-use crate::saver::{self, Saver};
+use crate::saver::{self, Driver, Saver};
 use crate::surface::Panel;
 use crate::{Config, SIGNALLED};
 
@@ -26,8 +27,8 @@ const CHAR_W: usize = 8;
 const CHAR_H: usize = 16;
 
 /// Upscaled panels stop here. A 24px-cell saver in a wide terminal would
-/// otherwise ask for a buffer of hundreds of megabytes; past this its grid is
-/// simply smaller than the terminal and centred.
+/// otherwise ask for a buffer of hundreds of megabytes; past this its cells
+/// are simply bigger than a character.
 const MAX_PANEL: usize = 4096;
 
 const ENTER: &[u8] = b"\x1b[?1049h\x1b[?25l\x1b[2J";
@@ -42,8 +43,8 @@ fn size() -> Option<(usize, usize)> {
 
 /// A cell at least 1.5x taller than wide reads as a character; anything
 /// squarer is a pixel, and two of those stack into one character.
-fn glyph_cells(g: &Grid) -> bool {
-    2 * g.cell_h() >= 3 * g.cell_w()
+fn glyph_cells(s: Shape) -> bool {
+    2 * s.cell_h >= 3 * s.cell_w
 }
 
 /// The panel that gives `g`'s saver about one grid cell per character (or per
@@ -53,27 +54,27 @@ fn glyph_cells(g: &Grid) -> bool {
 /// already fits — growing a grid that is sized off the panel, as the
 /// ascii.rest pieces are, gains nothing.
 fn upscale(g: &Grid, base: &Panel, cols: usize, rows: usize) -> Option<Panel> {
-    let want_rows = if glyph_cells(g) { rows } else { rows * 2 };
+    let want_rows = if glyph_cells(g.shape_of()) {
+        rows
+    } else {
+        rows * 2
+    };
     let permille = (cols * 1000 / g.cols()).min(want_rows * 1000 / g.rows());
     let w = (base.w * permille / 1000).min(MAX_PANEL);
     let h = (base.h * permille / 1000).min(MAX_PANEL);
     (permille > 1000 && (w, h) != (base.w, base.h)).then(|| Panel::new(w, h, w))
 }
 
-/// Build the selected saver for a `cols` x `rows` terminal.
-fn build(mirror: &Mirror, cols: usize, rows: usize, fps: u32) -> (Panel, Box<dyn Saver>) {
+/// Build saver `name` for a `cols` x `rows` terminal: `saver::Driver`'s
+/// `place`. A saver whose cells are bigger than a character at the base panel
+/// is built again for a bigger one; only that build is kept and announced.
+fn place(name: &str, cols: usize, rows: usize, fps: u32) -> (Panel, Box<dyn Saver>) {
     let base = Panel::new(cols * CHAR_W, rows * CHAR_H, cols * CHAR_W);
-    let name = saver::name_at(mirror.selected());
-    let mut s = saver::make(name, &base, fps);
-    let panel = match upscale(s.grid(), &base, cols, rows) {
-        Some(p) => {
-            s = saver::make(name, &p, fps);
-            p
-        }
-        None => base,
-    };
-    saver::announce(mirror, s.as_ref(), &panel);
-    (panel, s)
+    let s = saver::make(name, &base, fps);
+    match upscale(s.grid(), &base, cols, rows) {
+        Some(p) => (p, saver::make(name, &p, fps)),
+        None => (base, s),
+    }
 }
 
 /// One terminal character: what it prints and in which colours.
@@ -91,17 +92,26 @@ pub struct Screen {
     rows: usize,
     cur: Vec<Tc>,
     prev: Vec<Tc>,
+    /// The grid column under each character's centre, and the grid row under
+    /// each character's (or half character's) centre; `u32::MAX` off the grid.
+    xs: Vec<u32>,
+    ys: Vec<u32>,
     out: Vec<u8>,
     /// Nothing on the terminal is known, so every cell is written.
     fresh: bool,
 }
 
-/// Map terminal position `t` onto a picture `len` wide centred in `n`; None
-/// off the picture. A picture wider than the terminal loses both edges.
+/// The grid cell under the centre of slot `t` of `n` spread across `len`
+/// panel pixels, for cells `cell` pixels wide of which there are `count`;
+/// `u32::MAX` in the margin past the last.
 #[inline]
-fn centred(t: usize, n: usize, len: usize) -> Option<usize> {
-    let p = t as isize - (n as isize - len as isize) / 2;
-    (p >= 0 && (p as usize) < len).then_some(p as usize)
+fn sample(t: usize, n: usize, len: usize, cell: usize, count: usize) -> u32 {
+    let g = (2 * t + 1) * len / (2 * n) / cell;
+    if g < count {
+        g as u32
+    } else {
+        u32::MAX
+    }
 }
 
 impl Screen {
@@ -116,6 +126,8 @@ impl Screen {
             rows,
             cur: vec![blank; cols * rows],
             prev: vec![blank; cols * rows],
+            xs: Vec::with_capacity(cols),
+            ys: Vec::with_capacity(rows * 2),
             // Room for a full repaint with a cursor move and both colours on
             // every cell, so a busy frame does not grow it.
             out: Vec::with_capacity(cols * rows * 48 + 64),
@@ -123,24 +135,19 @@ impl Screen {
         }
     }
 
-    /// Lay a flushed grid's cells onto the terminal.
-    pub fn compose(&mut self, g: &Grid, pal: &[u32]) {
-        self.compose_cells(
-            g.cells(),
-            g.cols(),
-            g.rows(),
-            glyph_cells(g),
-            g.ground(),
-            pal,
-        );
+    /// Lay a flushed grid's cells onto the terminal as the panel shows them:
+    /// each character, or each half of one, shows the cell under its centre.
+    /// A close-up's cells span several characters and a wide view's are
+    /// sampled, so a zoom reads as a zoom here as on the glass.
+    pub fn compose(&mut self, g: &Grid, panel: &Panel, pal: &[u32]) {
+        self.compose_cells(g.cells(), g.shape_of(), (panel.w, panel.h), g.ground(), pal);
     }
 
     fn compose_cells(
         &mut self,
         cells: &[Cell],
-        gcols: usize,
-        grows: usize,
-        glyphs: bool,
+        g: Shape,
+        (pw, ph): (usize, usize),
         ground: u32,
         pal: &[u32],
     ) {
@@ -151,38 +158,49 @@ impl Screen {
                 pal[c.colour()]
             }
         };
-        let vrows = if glyphs { grows } else { grows.div_ceil(2) };
-        for y in 0..self.rows {
-            let gy = centred(y, self.rows, vrows);
-            for x in 0..self.cols {
-                let tc = match (gy, centred(x, self.cols, gcols)) {
-                    (Some(gy), Some(gx)) if glyphs => {
-                        let c = cells[gy * gcols + gx];
-                        Tc {
+        let glyphs = glyph_cells(g);
+        let vrows = if glyphs { self.rows } else { self.rows * 2 };
+        let (cols, rows) = (self.cols, self.rows);
+        self.xs.clear();
+        self.xs
+            .extend((0..cols).map(|x| sample(x, cols, pw, g.cell_w, g.cols)));
+        self.ys.clear();
+        self.ys
+            .extend((0..vrows).map(|y| sample(y, vrows, ph, g.cell_h, g.rows)));
+        let at = |gx: u32, gy: u32| cells[gy as usize * g.cols + gx as usize];
+        let off = |v: u32| v == u32::MAX;
+        for y in 0..rows {
+            for x in 0..cols {
+                let gx = self.xs[x];
+                let tc = if glyphs {
+                    let gy = self.ys[y];
+                    if off(gx) || off(gy) {
+                        None
+                    } else {
+                        let c = at(gx, gy);
+                        Some(Tc {
                             ch: font::CHARS[c.glyph()],
                             fg: pal[c.colour()],
                             bg: ground,
-                        }
+                        })
                     }
-                    (Some(gy), Some(gx)) => {
-                        let (top, bot) = (2 * gy, 2 * gy + 1);
-                        Tc {
+                } else {
+                    let (top, bot) = (self.ys[2 * y], self.ys[2 * y + 1]);
+                    if off(gx) || off(top) {
+                        None
+                    } else {
+                        Some(Tc {
                             ch: '▀',
-                            fg: lit(cells[top * gcols + gx]),
-                            bg: if bot < grows {
-                                lit(cells[bot * gcols + gx])
-                            } else {
-                                ground
-                            },
-                        }
+                            fg: lit(at(gx, top)),
+                            bg: if off(bot) { ground } else { lit(at(gx, bot)) },
+                        })
                     }
-                    _ => Tc {
-                        ch: ' ',
-                        fg: ground,
-                        bg: ground,
-                    },
                 };
-                self.cur[y * self.cols + x] = tc;
+                self.cur[y * cols + x] = tc.unwrap_or(Tc {
+                    ch: ' ',
+                    fg: ground,
+                    bg: ground,
+                });
             }
         }
     }
@@ -239,65 +257,84 @@ impl Screen {
     }
 }
 
-static ACTIVE: AtomicBool = AtomicBool::new(false);
-static TERMIOS: OnceLock<libc::termios> = OnceLock::new();
-/// The real stderr while fd 2 is muted, or -1.
-static STDERR: AtomicI32 = AtomicI32::new(-1);
+/// What `enter` took from the terminal, for `restore` to give back.
+struct Tty {
+    termios: Option<libc::termios>,
+    /// The real stderr, and the file fd 2 writes into meanwhile.
+    stderr: Option<(OwnedFd, File)>,
+}
+
+/// The one static, because the panic hook can reach nothing else and
+/// `panic = "abort"` runs no destructor that could.
+static TTY: Mutex<Option<Tty>> = Mutex::new(None);
 
 /// Take the terminal: alternate screen, no cursor, no echo, keys readable
 /// without Enter. Returns whether stdin is a tty whose keys can be read.
 fn enter() -> bool {
-    let keys = unsafe {
+    let termios = unsafe {
         let mut t: libc::termios = std::mem::zeroed();
-        libc::tcgetattr(libc::STDIN_FILENO, &raw mut t) == 0 && {
-            let _ = TERMIOS.set(t);
-            // ISIG stays on: Ctrl-C is still SIGINT, which main already turns
-            // into a clean stop.
-            t.c_lflag &= !(libc::ECHO | libc::ICANON);
-            t.c_cc[libc::VMIN] = 0;
-            t.c_cc[libc::VTIME] = 0;
-            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw const t) == 0
-        }
+        (libc::tcgetattr(libc::STDIN_FILENO, &raw mut t) == 0).then_some(t)
     };
-    // Anything written to stderr while the alternate screen is up lands on top
-    // of the picture, and the diff never repaints cells it thinks are
-    // unchanged — the mirror thread's "listening" line would sit there for
-    // good. Muted rather than lost: a panic restores fd 2 before it prints.
-    unsafe {
-        if libc::isatty(libc::STDERR_FILENO) == 1 {
-            let saved = libc::dup(libc::STDERR_FILENO);
-            let null = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
-            if saved >= 0 && null >= 0 {
-                libc::dup2(null, libc::STDERR_FILENO);
-                STDERR.store(saved, Ordering::SeqCst);
-            }
-            if null >= 0 {
-                libc::close(null);
-            }
-        }
-    }
+    let keys = termios.is_some_and(|mut t| {
+        // ISIG stays on: Ctrl-C is still SIGINT, which main already turns
+        // into a clean stop.
+        t.c_lflag &= !(libc::ECHO | libc::ICANON);
+        t.c_cc[libc::VMIN] = 0;
+        t.c_cc[libc::VTIME] = 0;
+        unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw const t) == 0 }
+    });
+    let tty = Tty {
+        termios,
+        stderr: hold_stderr(),
+    };
+    *TTY.lock().unwrap_or_else(PoisonError::into_inner) = Some(tty);
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(ENTER).and_then(|()| out.flush());
-    ACTIVE.store(true, Ordering::SeqCst);
     keys
 }
 
-/// Give the terminal back. Idempotent, and called from the panic hook as well
-/// as on the way out: `panic = "abort"` skips every destructor.
-fn restore() {
-    if !ACTIVE.swap(false, Ordering::SeqCst) {
-        return;
+/// Point fd 2 at an unlinked file until `restore` replays it. Anything written
+/// to the terminal while the alternate screen is up lands on top of the
+/// picture, and the diff never repaints cells it thinks are unchanged — the
+/// mirror thread's "listening" line would sit there for good. None, leaving
+/// stderr alone, when it is not a terminal or no file can be made.
+fn hold_stderr() -> Option<(OwnedFd, File)> {
+    if unsafe { libc::isatty(libc::STDERR_FILENO) } != 1 {
+        return None;
     }
+    let path = std::env::temp_dir().join(format!("afterglow-stderr-{}", std::process::id()));
+    // create_new so a planted symlink is refused; std opens it O_CLOEXEC.
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .ok()?;
+    let _ = std::fs::remove_file(&path);
+    let real = unsafe { libc::fcntl(libc::STDERR_FILENO, libc::F_DUPFD_CLOEXEC, 3) };
+    if real < 0 {
+        return None;
+    }
+    let real = unsafe { OwnedFd::from_raw_fd(real) };
+    (unsafe { libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO) } >= 0).then_some((real, file))
+}
+
+/// Give the terminal back, then replay what stderr said meanwhile. Idempotent,
+/// and called from the panic hook as well as on the way out: `panic = "abort"`
+/// skips every destructor.
+fn restore() {
+    let Some(tty) = TTY.lock().unwrap_or_else(PoisonError::into_inner).take() else {
+        return;
+    };
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(LEAVE).and_then(|()| out.flush());
-    unsafe {
-        if let Some(t) = TERMIOS.get() {
-            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, t);
-        }
-        let fd = STDERR.swap(-1, Ordering::SeqCst);
-        if fd >= 0 {
-            libc::dup2(fd, libc::STDERR_FILENO);
-            libc::close(fd);
+    if let Some(t) = tty.termios {
+        unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw const t) };
+    }
+    if let Some((real, mut held)) = tty.stderr {
+        unsafe { libc::dup2(real.as_raw_fd(), libc::STDERR_FILENO) };
+        if held.seek(SeekFrom::Start(0)).is_ok() {
+            let _ = std::io::copy(&mut held, &mut std::io::stderr());
         }
     }
 }
@@ -320,12 +357,10 @@ fn quit_key() -> bool {
 pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
     let (mut cols, mut rows) =
         size().ok_or("SAVER_TERM=1 needs a terminal on stdout (TIOCGWINSZ failed)")?;
-    let (mut panel, mut saver) = build(mirror, cols, rows, cfg.fps);
-    let mut buf = vec![0u32; panel.buf_len()];
+    let fps = cfg.fps;
+    let mut d = Driver::new(mirror, fps, |n| place(n, cols, rows, fps));
+    let mut buf = vec![0u32; d.panel().buf_len()];
     let mut screen = Screen::new(cols, rows);
-    let mut selected = mirror.selected();
-    let mut rot = saver::Rotate::new(Instant::now());
-    let frame_dur = Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps));
 
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -339,37 +374,23 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
         let t0 = Instant::now();
         // Polled rather than SIGWINCH: one ioctl a frame, and no second signal
         // handler racing the first.
-        if let Some((c, r)) = size().filter(|&s| s != (cols, rows)) {
+        let resized = size().filter(|&s| s != (cols, rows));
+        if let Some((c, r)) = resized {
             (cols, rows) = (c, r);
-            (panel, saver) = build(mirror, cols, rows, cfg.fps);
-            buf = vec![0u32; panel.buf_len()];
+            d.rebuild(mirror, |n| place(n, cols, rows, fps));
             screen = Screen::new(cols, rows);
         }
-        let base = Panel::new(cols * CHAR_W, rows * CHAR_H, cols * CHAR_W);
-        if saver::switch(
-            &mut saver,
-            &mut selected,
-            &mut rot,
-            t0,
-            mirror,
-            &base,
-            cfg.fps,
-        ) {
-            // Switched at the base panel; this sizes it for the terminal.
-            (panel, saver) = build(mirror, cols, rows, cfg.fps);
-            buf = vec![0u32; panel.buf_len()];
+        if d.switch(t0, mirror, |n| place(n, cols, rows, fps)) || resized.is_some() {
+            buf.resize(d.panel().buf_len(), 0);
         }
-        saver::frame(saver.as_mut(), &mut buf, &panel);
-        if mirror.watched() {
-            mirror.publish(saver.mirror_cells());
-        }
-        screen.compose(saver.shown(), saver.palette());
+        d.frame(&mut buf, mirror);
+        screen.compose(d.saver().grid(), d.panel(), d.saver().palette());
         let mut out = std::io::stdout().lock();
         out.write_all(screen.emit())
             .and_then(|()| out.flush())
             .map_err(|e| format!("write terminal: {e}"))?;
         drop(out);
-        pace(mirror, frame_dur, t0);
+        d.pace(mirror, t0);
     }
     Ok(())
 }
@@ -403,18 +424,31 @@ mod tests {
         font::ASCII[usize::from(c - 0x20)]
     }
 
+    /// A grid of `cols x rows` cells `cw x ch` on a panel exactly that size.
+    fn fitted(cols: usize, rows: usize, cw: usize, ch: usize) -> (Shape, (usize, usize)) {
+        let s = Shape {
+            cols,
+            rows,
+            cell_w: cw,
+            cell_h: ch,
+        };
+        (s, (cols * cw, rows * ch))
+    }
+
     #[test]
-    fn glyph_cells_print_one_char_each_centred() {
+    fn glyph_cells_print_one_char_each() {
         let mut s = Screen::new(4, 3);
         let cells = [Cell::new(ascii(b'A'), 1), Cell::new(ascii(b'B'), 2)];
-        s.compose_cells(&cells, 2, 1, true, 0x111111, &PAL);
-        let row: Vec<char> = s.cur[4..8].iter().map(|t| t.ch).collect();
-        assert_eq!(row, [' ', 'A', 'B', ' ']);
-        assert_eq!(s.cur[5].fg, 0xFF0000);
-        assert_eq!(s.cur[6].fg, 0x00FF00);
-        assert!(s.cur[5..7].iter().all(|t| t.bg == 0x111111));
+        // Two cells on a panel four characters wide: the rest is margin.
+        let (g, _) = fitted(2, 1, CHAR_W, CHAR_H);
+        s.compose_cells(&cells, g, (4 * CHAR_W, 3 * CHAR_H), 0x111111, &PAL);
+        let row: Vec<char> = s.cur[0..4].iter().map(|t| t.ch).collect();
+        assert_eq!(row, ['A', 'B', ' ', ' ']);
+        assert_eq!(s.cur[0].fg, 0xFF0000);
+        assert_eq!(s.cur[1].fg, 0x00FF00);
+        assert!(s.cur[0..2].iter().all(|t| t.bg == 0x111111));
         // Outside the grid is ground, not black.
-        assert_eq!(s.cur[0].bg, 0x111111);
+        assert_eq!(s.cur[4].bg, 0x111111);
     }
 
     #[test]
@@ -429,7 +463,8 @@ mod tests {
             Cell::new(font::SOLID, 2),
             Cell::new(font::SOLID, 1),
         ];
-        s.compose_cells(&cells, 2, 3, false, 0x111111, &PAL);
+        let (g, _) = fitted(2, 3, CHAR_W, CHAR_H / 2);
+        s.compose_cells(&cells, g, (2 * CHAR_W, 2 * CHAR_H), 0x111111, &PAL);
         let t = |i: usize| (s.cur[i].ch, s.cur[i].fg, s.cur[i].bg);
         assert_eq!(t(0), ('▀', 0xFF0000, 0x111111));
         // A blank glyph is ground whatever its colour; any lit one is its colour.
@@ -438,27 +473,45 @@ mod tests {
         assert_eq!(t(3), ('▀', 0xFF0000, 0x111111));
     }
 
+    /// The ascii.rest tour zooms by cell size. A close-up's cells are wider
+    /// than a character and must span several; a wide view's are narrower and
+    /// must be sampled across the whole picture. Composing cells 1:1 showed
+    /// the first as a small window in the middle of the terminal and cropped
+    /// the second to its centre.
     #[test]
-    fn a_wider_grid_is_cropped_to_its_centre() {
-        let mut s = Screen::new(2, 1);
-        let cells: Vec<Cell> = b"WXYZ".iter().map(|&c| Cell::new(ascii(c), 1)).collect();
-        s.compose_cells(&cells, 4, 1, true, 0, &PAL);
-        assert_eq!((s.cur[0].ch, s.cur[1].ch), ('X', 'Y'));
+    fn a_zoom_reads_as_a_zoom() {
+        let panel = (4 * CHAR_W, CHAR_H);
+        let row = |s: &Screen| s.cur.iter().map(|t| t.ch).collect::<String>();
+        let mut s = Screen::new(4, 1);
+
+        let close: Vec<Cell> = b"WX".iter().map(|&c| Cell::new(ascii(c), 1)).collect();
+        let (g, _) = fitted(2, 1, 2 * CHAR_W, 2 * CHAR_H);
+        s.compose_cells(&close, g, panel, 0, &PAL);
+        assert_eq!(row(&s), "WWXX");
+
+        let wide: Vec<Cell> = b"ABCDEFGH"
+            .iter()
+            .map(|&c| Cell::new(ascii(c), 1))
+            .collect();
+        let (g, _) = fitted(8, 1, CHAR_W / 2, CHAR_H);
+        s.compose_cells(&wide, g, panel, 0, &PAL);
+        assert_eq!(row(&s), "BDFH");
     }
 
     #[test]
     fn an_unchanged_frame_writes_no_cells() {
         let mut s = Screen::new(3, 2);
         let cells = [Cell::new(ascii(b'A'), 1); 6];
-        s.compose_cells(&cells, 3, 2, true, 0, &PAL);
+        let (g, p) = fitted(3, 2, CHAR_W, CHAR_H);
+        s.compose_cells(&cells, g, p, 0, &PAL);
         let first = s.emit().len();
         assert!(first > 0);
-        s.compose_cells(&cells, 3, 2, true, 0, &PAL);
+        s.compose_cells(&cells, g, p, 0, &PAL);
         assert_eq!(s.emit(), []);
 
         let mut moved = cells;
         moved[4] = Cell::new(ascii(b'B'), 1);
-        s.compose_cells(&moved, 3, 2, true, 0, &PAL);
+        s.compose_cells(&moved, g, p, 0, &PAL);
         // A cursor move and the colours, which are re-sent once per frame.
         let out = String::from_utf8(s.emit().to_vec()).unwrap();
         assert!(out.starts_with("\x1b[2;2H"), "{out:?}");
@@ -470,22 +523,24 @@ mod tests {
     fn contiguous_writes_skip_the_cursor_move_but_not_past_a_row_end() {
         let mut s = Screen::new(2, 2);
         let cells = [Cell::new(ascii(b'A'), 1); 4];
-        s.compose_cells(&cells, 2, 2, true, 0, &PAL);
+        let (g, p) = fitted(2, 2, CHAR_W, CHAR_H);
+        s.compose_cells(&cells, g, p, 0, &PAL);
         let out = String::from_utf8(s.emit().to_vec()).unwrap();
         assert_eq!(out.matches('H').count(), 2, "{out:?}");
     }
 
     #[test]
-    fn emit_never_allocates() {
+    fn compose_and_emit_never_allocate() {
         let mut s = Screen::new(40, 10);
         let mut cells = vec![Cell::new(ascii(b'A'), 1); 400];
-        s.compose_cells(&cells, 40, 10, true, 0, &PAL);
+        let (g, p) = fitted(40, 10, CHAR_W, CHAR_H);
+        s.compose_cells(&cells, g, p, 0, &PAL);
         s.emit();
         for (i, c) in cells.iter_mut().enumerate() {
             *c = Cell::new(ascii(b'B'), (i % 3) as u16);
         }
         let n = allocs_during(|| {
-            s.compose_cells(&cells, 40, 10, true, 0x123456, &PAL);
+            s.compose_cells(&cells, g, p, 0x123456, &PAL);
             std::hint::black_box(s.emit());
         });
         assert_eq!(n, 0);

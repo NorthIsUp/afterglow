@@ -109,6 +109,15 @@ impl Cell {
     }
 }
 
+/// A grid's geometry: `cols x rows` cells of `cell_w x cell_h` pixels.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Shape {
+    pub cols: usize,
+    pub rows: usize,
+    pub cell_w: usize,
+    pub cell_h: usize,
+}
+
 pub struct Grid {
     cols: usize,
     rows: usize,
@@ -168,22 +177,20 @@ impl Grid {
         g
     }
 
-    /// `(cols, rows, cell_w, cell_h)` of the grid `with_aspect` would build,
-    /// without building it — for a saver planning geometries ahead.
-    pub fn shape(
-        panel: &Panel,
-        cell_w: usize,
-        cell_h: usize,
-        aspect: usize,
-    ) -> (usize, usize, usize, usize) {
+    /// The geometry `with_aspect` would build, without building it — for a
+    /// saver planning geometries ahead.
+    pub fn shape(panel: &Panel, cell_w: usize, cell_h: usize, aspect: usize) -> Shape {
         let cell_w = cell_w.max(1);
         // Rounded, not truncated: a cell is a couple of dozen pixels, so
         // flooring 16 x 1.8 to 28 costs nearly a whole percent of the
         // correction the knob was set to make.
         let cell_h = ((cell_h.max(1) * aspect + 50) / 100).max(1);
-        let cols = (panel.w / cell_w).max(1);
-        let rows = (panel.h / cell_h).max(1);
-        (cols, rows, cell_w, cell_h)
+        Shape {
+            cols: (panel.w / cell_w).max(1),
+            rows: (panel.h / cell_h).max(1),
+            cell_w,
+            cell_h,
+        }
     }
 
     /// Become the grid `with_aspect` would build, keeping the ground, and
@@ -191,7 +198,12 @@ impl Grid {
     /// Allocates nothing once the buffers have held a geometry at least this
     /// large in each of cell count, cell width and cell height.
     pub fn reshape(&mut self, panel: &Panel, cell_w: usize, cell_h: usize, aspect: usize) {
-        let (cols, rows, cell_w, cell_h) = Self::shape(panel, cell_w, cell_h, aspect);
+        let Shape {
+            cols,
+            rows,
+            cell_w,
+            cell_h,
+        } = Self::shape(panel, cell_w, cell_h, aspect);
         (self.cols, self.rows, self.cell_w, self.cell_h) = (cols, rows, cell_w, cell_h);
         for v in [&mut self.cur, &mut self.prev] {
             v.clear();
@@ -206,12 +218,6 @@ impl Grid {
         self.first = true;
     }
 
-    /// Paint every cell and the margins on the next flush, as on frame 0: for
-    /// a grid going back onto a panel something else has drawn over.
-    pub fn repaint(&mut self) {
-        self.first = true;
-    }
-
     #[inline]
     pub fn ground(&self) -> u32 {
         self.ground
@@ -221,6 +227,16 @@ impl Grid {
     pub fn with_ground(mut self, ground: u32) -> Self {
         self.ground = ground;
         self
+    }
+
+    #[inline]
+    pub fn shape_of(&self) -> Shape {
+        Shape {
+            cols: self.cols,
+            rows: self.rows,
+            cell_w: self.cell_w,
+            cell_h: self.cell_h,
+        }
     }
 
     #[inline]
@@ -251,11 +267,11 @@ impl Grid {
         &self.prev
     }
 
-    /// The cells `fill` just wrote, before any flush: for a grid that is read
-    /// this frame but not drawn.
+    /// Take the cells `fill` just wrote as the drawn frame without blitting
+    /// them, so `cells()` reads them: for a grid that is read but never drawn.
     #[inline]
-    pub fn pending(&self) -> &[Cell] {
-        &self.cur
+    pub fn settle(&mut self) {
+        std::mem::swap(&mut self.cur, &mut self.prev);
     }
 
     /// Write this frame's cells. `f(cx, cy)` is called for EVERY cell, so an

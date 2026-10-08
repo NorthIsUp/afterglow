@@ -7,10 +7,10 @@
 //! `saver::frame` the DRM host calls, and fails the process.
 
 use std::io::Write;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::mirror::Mirror;
-use crate::saver;
+use crate::saver::{self, Driver};
 use crate::surface::{Damage, Panel, MAX_RUNS};
 use crate::{env_num, Config};
 
@@ -84,19 +84,14 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
     // fails to paint frame 0 in full shows up here as black, same as on the panel.
     let mut buf = vec![0u32; panel.buf_len()];
     let mut check = vec![0u32; buf.len()];
-    // Built from the mirror's selection, not cfg.saver: one validated path,
-    // so make's fallback arm stops being load-bearing for user input.
-    let mut saver = saver::make(saver::name_at(mirror.selected()), &panel, cfg.fps);
-
+    let fps = cfg.fps;
+    let place = |n: &str| (panel, saver::make(n, &panel, fps));
+    let mut d = Driver::new(mirror, fps, place);
     // The mirror is fed from here too, so it is exercisable on a laptop with no
     // card — the same argument that put the damage self-check in this file.
     // Paced at SAVER_FPS when it is live, so a dump of many frames is a live
     // mirror rather than a burst; `SAVER_HTTP=off` keeps a dump instant.
-    let paced =
-        (cfg.http != "off").then(|| Duration::from_nanos(1_000_000_000 / u64::from(cfg.fps)));
-    saver::announce(mirror, saver.as_ref(), &panel);
-    let mut selected = mirror.selected();
-    let mut rot = saver::Rotate::new(Instant::now());
+    let paced = cfg.http != "off";
 
     std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {dir}: {e}"))?;
     let log_path = format!("{dir}/damage.txt");
@@ -104,7 +99,7 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
         std::fs::File::create(&log_path).map_err(|e| format!("create {log_path}: {e}"))?;
     eprintln!(
         "[screensaver] dump saver={} {}x{} frames={frames} every={every} -> {dir}",
-        saver.name(),
+        d.saver().name(),
         w,
         h
     );
@@ -113,22 +108,11 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
         let t0 = Instant::now();
         // The same switch the DRM host honours, so /select and SAVER_ROTATE_SECS
         // are both exercisable on a machine with no card.
-        if saver::switch(
-            &mut saver,
-            &mut selected,
-            &mut rot,
-            t0,
-            mirror,
-            &panel,
-            cfg.fps,
-        ) {
-            eprintln!("[dump] frame {n}: now drawing {}", saver.name());
+        if d.switch(t0, mirror, place) {
+            eprintln!("[dump] frame {n}: now drawing {}", d.saver().name());
         }
         check.copy_from_slice(&buf);
-        let damage = saver::frame(saver.as_mut(), &mut buf, &panel);
-        if mirror.watched() {
-            mirror.publish(saver.mirror_cells());
-        }
+        let damage = d.frame(&mut buf, mirror);
         verify(&check, &buf, &damage, &panel, n)?;
         writeln!(
             log,
@@ -142,8 +126,8 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
         if n % every == 0 {
             write_ppm(dir, n, &buf, &panel)?;
         }
-        if let Some(rem) = paced.and_then(|d| d.checked_sub(t0.elapsed())) {
-            std::thread::sleep(rem);
+        if paced {
+            d.pace(mirror, t0);
         }
     }
     Ok(())
