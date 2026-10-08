@@ -46,13 +46,17 @@ macro_rules! each_piece {
             misty_forest::MistyForest,
             night_coast::NightCoast,
             ocean_sunset::OceanSunset,
+            ocean_sunset_wide::OceanSunsetWide,
             plasma::Plasma,
             reaction_diffusion::ReactionDiffusion,
             storm_plains::StormPlains,
+            storm_plains_wide::StormPlainsWide,
             synthwave::Synthwave,
             taj_dawn::TajDawn,
+            taj_dawn_wide::TajDawnWide,
             tv_static::TvStatic,
             varanasi_ghats::VaranasiGhats,
+            varanasi_ghats_wide::VaranasiGhatsWide,
             vinyl::Vinyl,
         }
     };
