@@ -9,7 +9,7 @@ use crate::doodles::Doodles;
 use crate::dvd::Dvd;
 use crate::fire::Fire;
 use crate::fractal::Fractal;
-use crate::grid::Grid;
+use crate::grid::{Cell, Grid};
 use crate::hardrain::HardRain;
 use crate::hypercube::Hypercube;
 use crate::life::Life;
@@ -54,6 +54,21 @@ pub trait Saver {
     /// cells, and would need its own answer rather than an `Option` here that
     /// every caller has to defend against.
     fn grid(&self) -> &Grid;
+
+    /// This frame's cells in `grid()`'s geometry, for the web mirror. Called
+    /// after `render` and only while someone is watching, so a saver whose
+    /// panel geometry moves under a fixed mirror one (the ascii.rest tour) pays
+    /// for the second view only then.
+    fn mirror_cells(&mut self) -> &[Cell] {
+        self.grid().cells()
+    }
+
+    /// The grid the last `render` flushed, which is `grid()` unless the
+    /// saver's panel geometry moves (the ascii.rest tour). For a host that
+    /// re-draws the panel's cells itself, as the terminal does.
+    fn shown(&self) -> &Grid {
+        self.grid()
+    }
 
     /// Palette the cells' colour indices address, as XRGB8888.
     fn palette(&self) -> &[u32];

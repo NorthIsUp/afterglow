@@ -152,6 +152,30 @@ impl Grid {
     /// `new` with the aspect handed in, so the tests can vary it: cargo runs
     /// them in parallel threads and the environment is process-wide.
     pub fn with_aspect(panel: &Panel, cell_w: usize, cell_h: usize, aspect: usize) -> Self {
+        let mut g = Self {
+            cols: 0,
+            rows: 0,
+            cell_w: 0,
+            cell_h: 0,
+            cur: Vec::new(),
+            prev: Vec::new(),
+            rowmap: Vec::new(),
+            mask: Vec::new(),
+            first: true,
+            ground: BG,
+        };
+        g.reshape(panel, cell_w, cell_h, aspect);
+        g
+    }
+
+    /// `(cols, rows, cell_w, cell_h)` of the grid `with_aspect` would build,
+    /// without building it — for a saver planning geometries ahead.
+    pub fn shape(
+        panel: &Panel,
+        cell_w: usize,
+        cell_h: usize,
+        aspect: usize,
+    ) -> (usize, usize, usize, usize) {
         let cell_w = cell_w.max(1);
         // Rounded, not truncated: a cell is a couple of dozen pixels, so
         // flooring 16 x 1.8 to 28 costs nearly a whole percent of the
@@ -159,22 +183,33 @@ impl Grid {
         let cell_h = ((cell_h.max(1) * aspect + 50) / 100).max(1);
         let cols = (panel.w / cell_w).max(1);
         let rows = (panel.h / cell_h).max(1);
-        Self {
-            cols,
-            rows,
-            cell_w,
-            cell_h,
-            cur: vec![Cell::CLEAR; cols * rows],
-            prev: vec![Cell::CLEAR; cols * rows],
-            rowmap: (0..cell_h)
-                .map(|py| (py * font::GLYPH_H / cell_h) as u8)
-                .collect(),
-            mask: (0..cell_w)
-                .map(|px| 0x80u8 >> (px * font::GLYPH_W / cell_w))
-                .collect(),
-            first: true,
-            ground: BG,
+        (cols, rows, cell_w, cell_h)
+    }
+
+    /// Become the grid `with_aspect` would build, keeping the ground, and
+    /// repaint in full on the next flush: the panel still shows the old cells.
+    /// Allocates nothing once the buffers have held a geometry at least this
+    /// large in each of cell count, cell width and cell height.
+    pub fn reshape(&mut self, panel: &Panel, cell_w: usize, cell_h: usize, aspect: usize) {
+        let (cols, rows, cell_w, cell_h) = Self::shape(panel, cell_w, cell_h, aspect);
+        (self.cols, self.rows, self.cell_w, self.cell_h) = (cols, rows, cell_w, cell_h);
+        for v in [&mut self.cur, &mut self.prev] {
+            v.clear();
+            v.resize(cols * rows, Cell::CLEAR);
         }
+        self.rowmap.clear();
+        self.rowmap
+            .extend((0..cell_h).map(|py| (py * font::GLYPH_H / cell_h) as u8));
+        self.mask.clear();
+        self.mask
+            .extend((0..cell_w).map(|px| 0x80u8 >> (px * font::GLYPH_W / cell_w)));
+        self.first = true;
+    }
+
+    /// Paint every cell and the margins on the next flush, as on frame 0: for
+    /// a grid going back onto a panel something else has drawn over.
+    pub fn repaint(&mut self) {
+        self.first = true;
     }
 
     #[inline]
@@ -214,6 +249,13 @@ impl Grid {
     #[inline]
     pub fn cells(&self) -> &[Cell] {
         &self.prev
+    }
+
+    /// The cells `fill` just wrote, before any flush: for a grid that is read
+    /// this frame but not drawn.
+    #[inline]
+    pub fn pending(&self) -> &[Cell] {
+        &self.cur
     }
 
     /// Write this frame's cells. `f(cx, cy)` is called for EVERY cell, so an

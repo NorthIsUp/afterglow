@@ -164,7 +164,9 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
         // After the flush, so `cells()` is the frame that just went to the
         // panel. Costs one atomic load with nobody watching; see mirror.rs for
         // why this can never make the display wait.
-        mirror.publish(saver.grid().cells());
+        if mirror.watched() {
+            mirror.publish(saver.mirror_cells());
+        }
 
         // Drivers that scan out directly have no need for this and answer
         // ENOSYS/EINVAL; note it once and stop asking rather than logging per

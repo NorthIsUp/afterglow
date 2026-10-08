@@ -126,7 +126,9 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
         }
         check.copy_from_slice(&buf);
         let damage = saver::frame(saver.as_mut(), &mut buf, &panel);
-        mirror.publish(saver.grid().cells());
+        if mirror.watched() {
+            mirror.publish(saver.mirror_cells());
+        }
         verify(&check, &buf, &damage, &panel, n)?;
         writeln!(
             log,
