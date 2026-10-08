@@ -1742,7 +1742,7 @@ mod tests {
     }
 
     /// `/meta`'s `expanded` is the Rust default until a pick moves it: every
-    /// scene starts on its `-wide`, the text pieces on their originals, and a
+    /// pair starts on its `-wide`, the text pieces included, and a
     /// pick of either half sticks. Picking by index — rotation, and the
     /// startup `SAVER` — moves nothing.
     #[test]

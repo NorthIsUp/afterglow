@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["numpy", "pillow"]
+# dependencies = ["numpy>=2", "pillow>=11"]
 # ///
 """Render every saver to docs/media/<name>.gif, plus docs/media/tour.gif.
 
@@ -17,11 +17,12 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
+
+LANCZOS = Image.Resampling.LANCZOS
 
 ROOT = Path(__file__).resolve().parent.parent
 FPS = 12
@@ -81,13 +82,15 @@ def capture(binary: Path, name: str, scratch: Path) -> list[np.ndarray]:
         "SAVER_HEIGHT": "1080",
         "SAVER_ROTATE_SECS": "0",
     }
-    subprocess.run([binary], env=env, check=True, stderr=subprocess.DEVNULL)
+    run = subprocess.run([binary], env=env, capture_output=True, text=True, check=False)
+    if run.returncode:
+        sys.exit(f"{name}: dump exited {run.returncode}\n{run.stderr[-2000:]}")
     first = warm * DUMP_FPS
     frames = []
     for ppm in sorted(dump.glob("frame-*.ppm")):
         if int(ppm.stem.split("-")[1]) >= first:
             with Image.open(ppm) as im:
-                frames.append(np.asarray(im.convert("RGB").resize(SIZE, Image.LANCZOS)))
+                frames.append(np.asarray(im.convert("RGB").resize(SIZE, LANCZOS)))
     shutil.rmtree(dump)
     return frames
 
@@ -103,15 +106,18 @@ def gif(frames: list[np.ndarray], out: Path, budget: float = CLIP_BUDGET) -> str
             paths.append(str(Path(d) / f"{i:05}.png"))
             Image.fromarray(f).save(paths[-1])
         for q, lossy in GIF_LADDER:
-            subprocess.run(
+            run = subprocess.run(
                 ["gifski", "--quiet", "--fps", str(FPS), "--quality", str(q),
                  "--lossy-quality", str(lossy), "--motion-quality", str(lossy),
                  "-o", str(out), *paths],
-                check=True,
+                capture_output=True, text=True, check=False,
             )
+            if run.returncode:
+                sys.exit(f"{out.name}: gifski exited {run.returncode}\n{run.stderr[-2000:]}")
             if out.stat().st_size <= budget:
-                break
-    return f"quality {q} lossy {lossy}"
+                return f"quality {q} lossy {lossy}"
+    q, lossy = GIF_LADDER[-1]
+    return f"quality {q} lossy {lossy}, OVER the {budget / 1e6:g} MB budget"
 
 
 def static(n: int, size: tuple[int, int], rng: np.random.Generator) -> list[np.ndarray]:
@@ -133,14 +139,6 @@ def static(n: int, size: tuple[int, int], rng: np.random.Generator) -> list[np.n
     return out
 
 
-@dataclass
-class Args:
-    names: list[str]
-    jobs: int
-    bin: Path
-    out: Path
-
-
 def mb(p: Path) -> str:
     return f"{p.stat().st_size / 1e6:5.2f} MB"
 
@@ -148,33 +146,29 @@ def mb(p: Path) -> str:
 def main() -> int:
     # Set by the `media` task's usage spec in mise.toml.
     names = shlex.split(os.environ.get("usage_savers", ""))
-    args = Args(
-        names=names,
-        jobs=max(1, (os.cpu_count() or 2) // 2),
-        bin=ROOT / "target/release/screensaver",
-        out=ROOT / "docs/media",
-    )
-    if not args.bin.exists():
-        sys.exit(f"{args.bin}: run `mise run build` first")
-    every = savers()
-    want = args.names or every
-    unknown = set(want) - set(every)
+    binary = ROOT / "target/release/screensaver"
+    out = ROOT / "docs/media"
+    if not binary.exists():
+        sys.exit(f"{binary}: run `mise run build` first")
+    indexed = savers()
+    want = names or indexed
+    unknown = set(want) - set(indexed)
     if unknown:
         sys.exit(f"not in the README's saver index: {sorted(unknown)}")
-    tour = [] if args.names else tour_order(every)
-    args.out.mkdir(parents=True, exist_ok=True)
+    tour = [] if names else tour_order(indexed)
+    out.mkdir(parents=True, exist_ok=True)
     clips: dict[str, list[np.ndarray]] = {}
 
     with tempfile.TemporaryDirectory() as scratch:
 
         def one(name: str) -> None:
-            frames = capture(args.bin, name, Path(scratch))
-            mode = gif(frames, args.out / f"{name}.gif")
+            frames = capture(binary, name, Path(scratch))
+            mode = gif(frames, out / f"{name}.gif")
             if name in tour:
                 clips[name] = frames
-            print(f"{name:26} {mb(args.out / f'{name}.gif')}  {mode}", flush=True)
+            print(f"{name:26} {mb(out / f'{name}.gif')}  {mode}", flush=True)
 
-        with ThreadPoolExecutor(args.jobs) as pool:
+        with ThreadPoolExecutor(max(1, (os.cpu_count() or 2) // 2)) as pool:
             for f in [pool.submit(one, n) for n in want]:
                 f.result()
 
@@ -184,12 +178,12 @@ def main() -> int:
         for name in tour:
             frames += static(STATIC_FRAMES, TOUR_SIZE, rng)
             frames += [
-                np.asarray(Image.fromarray(f).resize(TOUR_SIZE, Image.LANCZOS))
+                np.asarray(Image.fromarray(f).resize(TOUR_SIZE, LANCZOS))
                 for f in clips[name][: TOUR_SECS * FPS]
             ]
-        mode = gif(frames, args.out / "tour.gif", TOUR_BUDGET)
+        mode = gif(frames, out / "tour.gif", TOUR_BUDGET)
         print(f"tour: {len(tour)} savers, {len(frames) / FPS:.0f} s, "
-              f"{mb(args.out / 'tour.gif')}  {mode}")
+              f"{mb(out / 'tour.gif')}  {mode}")
     return 0
 
 
