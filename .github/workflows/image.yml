@@ -6,16 +6,17 @@ name: image
 # and the pod sat idle logging "framebuffer not present" while the monitor showed
 # a bare Linux console. A hand-built image has no CI to notice any of that.
 #
-# Builds on any change but docs. Pushes only from main — a PR gets a build (so
-# a broken renderer fails review) without publishing anything. The image keeps
-# its homelab-era name so the deployment and its pull secret need no change.
+# Every PR builds; main builds on any change but docs. Pushes only from main —
+# a PR gets a build (so a broken renderer fails review) without publishing
+# anything.
 
 on:
   push:
     branches: [main]
     paths-ignore: ["**.md"]
+  # Every PR, docs-only included: `build` is the required check that GitHub
+  # auto-merge waits on, and a check that never runs never reports.
   pull_request:
-    paths-ignore: ["**.md"]
   workflow_dispatch:
 
 jobs:
