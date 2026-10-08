@@ -1,10 +1,22 @@
-# afterglow — HDMI screensavers on whichever Pi5 holds the monitor
+<div align="center">
 
-![Two seconds of every saver, with a channel change between each](docs/media/tour.gif)
+# afterglow
 
-Every saver has a clip on its page, rendered as pine's 3.2:1 glass shows it.
-`mise run media` regenerates them all and the tour from a release build
-([`tools/media.py`](tools/media.py)); they are GIFs in Git LFS.
+**HDMI screensavers on whichever Pi5 holds the monitor**
+
+72 savers · one ~230 KB static binary · straight to a DRM/KMS dumb buffer
+
+[![build](https://github.com/NorthIsUp/afterglow/actions/workflows/image.yml/badge.svg)](https://github.com/NorthIsUp/afterglow/actions/workflows/image.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![image](https://img.shields.io/badge/ghcr.io-northisup%2Fafterglow-2496ED?logo=docker&logoColor=white)](https://github.com/NorthIsUp/afterglow/pkgs/container/afterglow)
+
+<img src="docs/media/tour.gif" width="100%" alt="Two seconds of every saver, with a channel change between each">
+
+<sub>Every saver has a clip on its page, rendered as pine's 3.2:1 glass shows it.
+<code>mise run media</code> regenerates them all and the tour
+(<a href="tools/media.py"><code>tools/media.py</code></a>); they are GIFs in Git LFS.</sub>
+
+</div>
 
 A deliberately thin workload that paints an animation onto the HDMI display of
 the Talos Pi5 carrying the `hardware.homelab/display: "true"` label. Renderer:
@@ -135,36 +147,36 @@ them live — see [Live settings](docs/mirror.md#live-settings-config).
 
 Ports of [ascii.rest](https://ascii.rest)'s scenes, held on a cover view; `ASCII_REST_TOUR=1` adds a slow camera tour. Every scene also has a `-wide` variant recomposed at 3.2:1, and the pair opens on it: the mirror page and rotation show the `-wide` until someone unticks `expanded`. The shared engine, the tour and its knobs: [the ascii.rest ports](docs/ascii-rest.md).
 
-| `SAVER`                                           | `-wide`                                                                    | What                                                                                                     |
-| ------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| [`alpine-dawn`](docs/savers/alpine-dawn.md)       | [`alpine-dawn-wide`](docs/savers/alpine-dawn.md#alpine-dawn-wide)          | Jagged snow peaks catch the first pink light on their east faces while their flanks stay in blue shadow. |
-| [`aurora-fjord`](docs/savers/aurora-fjord.md)     | [`aurora-fjord-wide`](docs/savers/aurora-fjord.md#aurora-fjord-wide)       | Curtains of aurora ripple over a fjord between snowy mountains.                                          |
-| [`deep-reef`](docs/savers/deep-reef.md)           | [`deep-reef-wide`](docs/savers/deep-reef.md#deep-reef-wide)                | Looking along a coral reef from a few metres down.                                                       |
-| [`desert-night`](docs/savers/desert-night.md)     | [`desert-night-wide`](docs/savers/desert-night.md#desert-night-wide)       | A moonless desert under the milky way.                                                                   |
-| [`earthrise`](docs/savers/earthrise.md)           | [`earthrise-wide`](docs/savers/earthrise.md#earthrise-wide)                | The Earth coming up over the lunar horizon.                                                              |
-| [`kyoto-dusk`](docs/savers/kyoto-dusk.md)         | [`kyoto-dusk-wide`](docs/savers/kyoto-dusk.md#kyoto-dusk-wide)             | A five-storey pagoda at dusk over a temple pond, a cherry tree in bloom lit by a stone lantern.          |
-| [`marine-drive`](docs/savers/marine-drive.md)     | [`marine-drive-wide`](docs/savers/marine-drive.md#marine-drive-wide)       | The Queen's Necklace seen from Malabar Hill at night.                                                    |
-| [`misty-forest`](docs/savers/misty-forest.md)     | [`misty-forest-wide`](docs/savers/misty-forest.md#misty-forest-wide)       | Morning in a pine forest.                                                                                |
-| [`night-coast`](docs/savers/night-coast.md)       | [`night-coast-wide`](docs/savers/night-coast.md#night-coast-wide)          | A lighthouse on a wooded headland under moonlit clouds.                                                  |
-| [`ocean-sunset`](docs/savers/ocean-sunset.md)     | [`ocean-sunset-wide`](docs/savers/ocean-sunset.md#ocean-sunset-wide)       | Golden hour at sea.                                                                                      |
-| [`storm-plains`](docs/savers/storm-plains.md)     | [`storm-plains-wide`](docs/savers/storm-plains.md#storm-plains-wide)       | An anvil thunderhead at dusk over open wheat country.                                                    |
-| [`taj-dawn`](docs/savers/taj-dawn.md)             | [`taj-dawn-wide`](docs/savers/taj-dawn.md#taj-dawn-wide)                   | The Taj Mahal at first light, seen down its long reflecting canal between rows of cypress.               |
-| [`varanasi-ghats`](docs/savers/varanasi-ghats.md) | [`varanasi-ghats-wide`](docs/savers/varanasi-ghats.md#varanasi-ghats-wide) | Dusk on the Ganga.                                                                                       |
+| `SAVER`                                           | What                                                                                                     |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| [`alpine-dawn`](docs/savers/alpine-dawn.md)       | Jagged snow peaks catch the first pink light on their east faces while their flanks stay in blue shadow. |
+| [`aurora-fjord`](docs/savers/aurora-fjord.md)     | Curtains of aurora ripple over a fjord between snowy mountains.                                          |
+| [`deep-reef`](docs/savers/deep-reef.md)           | Looking along a coral reef from a few metres down.                                                       |
+| [`desert-night`](docs/savers/desert-night.md)     | A moonless desert under the milky way.                                                                   |
+| [`earthrise`](docs/savers/earthrise.md)           | The Earth coming up over the lunar horizon.                                                              |
+| [`kyoto-dusk`](docs/savers/kyoto-dusk.md)         | A five-storey pagoda at dusk over a temple pond, a cherry tree in bloom lit by a stone lantern.          |
+| [`marine-drive`](docs/savers/marine-drive.md)     | The Queen's Necklace seen from Malabar Hill at night.                                                    |
+| [`misty-forest`](docs/savers/misty-forest.md)     | Morning in a pine forest.                                                                                |
+| [`night-coast`](docs/savers/night-coast.md)       | A lighthouse on a wooded headland under moonlit clouds.                                                  |
+| [`ocean-sunset`](docs/savers/ocean-sunset.md)     | Golden hour at sea.                                                                                      |
+| [`storm-plains`](docs/savers/storm-plains.md)     | An anvil thunderhead at dusk over open wheat country.                                                    |
+| [`taj-dawn`](docs/savers/taj-dawn.md)             | The Taj Mahal at first light, seen down its long reflecting canal between rows of cypress.               |
+| [`varanasi-ghats`](docs/savers/varanasi-ghats.md) | Dusk on the Ganga.                                                                                       |
 
 ### ascii.rest character pieces
 
 One ink each. Every piece also has a `-wide` twin in colour, drawn at the panel's own size, any shape, with no bars, and the pair opens on the twin as the scenes do. The shared engine: [the ascii.rest ports](docs/ascii-rest.md#character-pieces).
 
-| `SAVER`                                                   | `-wide`                                                                                | What                                                                            |
-| --------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| [`aurora`](docs/savers/aurora.md)                         | [`aurora-wide`](docs/savers/aurora.md#aurora-wide)                                     | A curtain of light over a spruce treeline at night.                             |
-| [`synthwave`](docs/savers/synthwave.md)                   | [`synthwave-wide`](docs/savers/synthwave.md#synthwave-wide)                            | The eighties horizon.                                                           |
-| [`tv-static`](docs/savers/tv-static.md)                   | [`tv-static-wide`](docs/savers/tv-static.md#tv-static-wide)                            | An old set showing snow, with a hum bar rolling through it.                     |
-| [`vinyl`](docs/savers/vinyl.md)                           | [`vinyl-wide`](docs/savers/vinyl.md#vinyl-wide)                                        | A record turning on a turntable, seen from above.                               |
-| [`lighthouse`](docs/savers/lighthouse.md)                 | [`lighthouse-wide`](docs/savers/lighthouse.md#lighthouse-wide)                         | A banded lighthouse on a heap of rocks at night.                                |
-| [`fractal-tree`](docs/savers/fractal-tree.md)             | [`fractal-tree-wide`](docs/savers/fractal-tree.md#fractal-tree-wide)                   | A trunk that forks seven times over into lobes of leaves, bending in the wind.  |
-| [`reaction-diffusion`](docs/savers/reaction-diffusion.md) | [`reaction-diffusion-wide`](docs/savers/reaction-diffusion.md#reaction-diffusion-wide) | A Gray-Scott reaction whose spots on the left give way to stripes on the right. |
-| [`double-pendulum`](docs/savers/double-pendulum.md)       | [`double-pendulum-wide`](docs/savers/double-pendulum.md#double-pendulum-wide)          | Two equal rods hung end to end from one pivot, stepped with RK4.                |
+| `SAVER`                                                   | What                                                                            |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| [`aurora`](docs/savers/aurora.md)                         | A curtain of light over a spruce treeline at night.                             |
+| [`synthwave`](docs/savers/synthwave.md)                   | The eighties horizon.                                                           |
+| [`tv-static`](docs/savers/tv-static.md)                   | An old set showing snow, with a hum bar rolling through it.                     |
+| [`vinyl`](docs/savers/vinyl.md)                           | A record turning on a turntable, seen from above.                               |
+| [`lighthouse`](docs/savers/lighthouse.md)                 | A banded lighthouse on a heap of rocks at night.                                |
+| [`fractal-tree`](docs/savers/fractal-tree.md)             | A trunk that forks seven times over into lobes of leaves, bending in the wind.  |
+| [`reaction-diffusion`](docs/savers/reaction-diffusion.md) | A Gray-Scott reaction whose spots on the left give way to stripes on the right. |
+| [`double-pendulum`](docs/savers/double-pendulum.md)       | Two equal rods hung end to end from one pivot, stepped with RK4.                |
 
 ## Docs
 
