@@ -66,7 +66,8 @@
 //!   the five that measure something in framebuffer pixels (`warp`, `moire`,
 //!   `toasters*`, `confetti`, `podracer`), which carry it explicitly. Process-wide rather
 //!   than per-saver: it is a property of the monitor, and a knob 25 savers each
-//!   have to remember is a knob 25 savers get wrong. See the README.
+//!   have to remember is a knob 25 savers get wrong. See
+//!   `docs/pixel-aspect.md`.
 //! * `RETRY_SECONDS`  — wait between attempts when no display is present (default 30)
 //! * `SAVER_HTTP`     — address the web mirror listens on (default
 //!   `127.0.0.1:8080`, which is the `tailscale-auth` sidecar's default upstream;
@@ -78,8 +79,8 @@
 //!   display, until Ctrl-C or `q`. Any OS with a truecolor terminal, no card
 //!   needed. See `term.rs`.
 //!
-//! Per-saver knobs are documented in `README.md`, one row
-//! per saver — it is the only complete list, and a second copy here goes stale.
+//! Per-saver knobs are documented in `docs/savers/<saver>.md`, one page per saver
+//! (or family) — the only complete list, and a second copy here goes stale.
 //!
 //! `FIRE_FPS` and `FIRE_STYLE` remain accepted as the older spellings of
 //! `SAVER_FPS` and `SAVER` — the live deployment sets them, and its image digest
@@ -91,6 +92,8 @@ mod ascii_rest;
 mod bench;
 mod city;
 mod confetti;
+#[cfg(test)]
+mod docs_check;
 mod doodles;
 mod dump;
 mod dvd;

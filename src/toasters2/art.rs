@@ -432,7 +432,7 @@ mod tests {
         );
         assert_ne!(ink(b'W'), ink(b'c'), "two whites, same reason");
 
-        // The claim in the module doc and the README, as the one number all
+        // The claim in the module doc and `docs/savers/toasters.md`, as the one number all
         // three quote: half of the toaster's lit cells are olive, which is
         // what "the chassis is a fill and not an outline" means in figures.
         // Pinned as a band around the measured 50..=53%. Measured sensitivity:

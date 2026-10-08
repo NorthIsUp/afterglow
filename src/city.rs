@@ -7,11 +7,11 @@
 //! What the look actually IS — the colour families, the window styles and
 //! silhouettes that keep neighbouring buildings apart, the four roof classes,
 //! the band densities and how far this drifts from them on purpose — is written
-//! up once, in `README.md`, under "About the city saver".
+//! up once, in `docs/savers/city.md`.
 //! It is not repeated here: the two copies had already drifted from each other
 //! and from the measurement inside a single commit.
 //!
-//! What a reader of THIS file needs, and cannot get from the README:
+//! What a reader of THIS file needs, and cannot get from that page:
 //!
 //! * `STYLES`, `SHAPE_DRAW`, `STAR_KIND` and `ROOF_CLASS` are the art. All are
 //!   weighted draws, all are validated in a `const` block, and a bad entry is a
@@ -44,8 +44,8 @@
 //! reserved in `new` and only ever `clear`ed, which `render_never_allocates`
 //! pins because CLAUDE.md makes the frame loop the top constraint in the repo.
 //!
-//! Damage is a couple of short runs. The measured figures live in the README
-//! beside the other savers' so they can be compared; the invariant that holds
+//! Damage is a couple of short runs. The measured figures live in
+//! `docs/savers/city.md`; the invariant that holds
 //! them up is here, in `flush_sparse`: `cur` and `prev` are identical after
 //! every flush, so a cell written but left out of `dirty` is a test failure
 //! rather than a region of the panel frozen forever.

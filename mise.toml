@@ -2,6 +2,9 @@
 rust = { version = "stable", components = "rustfmt,clippy" }
 hk   = "latest"
 pkl  = "latest"
+node = "lts"
+"npm:prettier" = "3"
+lychee = "latest"
 
 [settings]
 experimental = true

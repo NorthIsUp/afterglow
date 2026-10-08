@@ -1,0 +1,21 @@
+name: docs
+
+# image.yml ignores markdown, so without this a docs-only change would merge
+# with nothing checking it. The same commands hk runs on pre-commit.
+
+on:
+  push:
+    branches: [main]
+    paths: ["**.md", "mise.toml", "hk.pkl", "src/saver.rs", "src/docs_check.rs", "src/ascii_rest/mod.rs"]
+  pull_request:
+    paths: ["**.md", "mise.toml", "hk.pkl", "src/saver.rs", "src/docs_check.rs", "src/ascii_rest/mod.rs"]
+
+jobs:
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - run: prettier --check '**/*.md'
+      - run: lychee --offline --include-fragments --no-progress '**/*.md'
+      - run: cargo test --release --locked docs_check
