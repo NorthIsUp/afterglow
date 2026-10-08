@@ -103,8 +103,9 @@ struct Dish {
     bare: f64,
     /// Steps a second: `RATE`, or less for a dish over `BUDGET`.
     rate: f64,
-    /// Upstream's f64 arithmetic, cell for cell; off, the step runs in f32
-    /// across whole rows, which the compiler vectorises.
+    /// Upstream's f64 arithmetic, cell for cell, in one ink; off, the step
+    /// runs in f32 across whole rows, which the compiler vectorises, and
+    /// each step of the ramp has its own colour.
     exact: bool,
 }
 
@@ -362,7 +363,13 @@ impl Dish {
                 out[r * cols + c] = if val < FLOOR {
                     BLANK
                 } else {
-                    RAMP[(RAMP.len() - 1).min((q * RAMP.len() as f64).floor() as usize)]
+                    let i = (RAMP.len() - 1).min((q * RAMP.len() as f64).floor() as usize);
+                    // The twin colours each step of the ramp; upstream has one ink.
+                    if self.exact {
+                        RAMP[i]
+                    } else {
+                        text::tint(RAMP[i], i as u16)
+                    }
                 };
             }
         }
@@ -394,7 +401,16 @@ pub struct ReactionDiffusionWide(Dish);
 impl Canvas for ReactionDiffusionWide {
     const NAME: &'static str = "reaction-diffusion-wide";
     const FPS: u32 = ReactionDiffusion::FPS;
-    const PALETTE: &'static [u32] = ReactionDiffusion::PALETTE;
+    /// Thin to thick: violet edges warming through rose and orange to a
+    /// pale-gold core.
+    const PALETTE: &'static [u32] = &[
+        hex("#7a3cc8"),
+        hex("#b04ad0"),
+        hex("#e0508c"),
+        hex("#ff7040"),
+        hex("#ffa83a"),
+        hex("#ffe27a"),
+    ];
 
     fn new(cols: usize, rows: usize) -> Self {
         Self(Dish::new(cols, rows, false))

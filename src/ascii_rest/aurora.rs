@@ -40,6 +40,8 @@ struct Layout {
     tall: f64,
     /// The wide hem's long swell, in rows: 0 upstream.
     swell: f64,
+    /// Colour by part (`WIDE_PALETTE`) rather than upstream's one ink.
+    colour: bool,
 }
 
 const ORIGINAL: Layout = Layout {
@@ -52,6 +54,7 @@ const ORIGINAL: Layout = Layout {
     height: [1.5, 6.5],
     tall: 1.0,
     swell: 0.0,
+    colour: false,
 };
 
 impl Layout {
@@ -69,6 +72,7 @@ impl Layout {
             height: [1.5 * sy, 6.5 * sy],
             tall: sy,
             swell: 1.6 * sy,
+            colour: true,
         }
     }
 }
@@ -112,7 +116,29 @@ struct Scene {
     land: Vec<Option<Cell>>,
     stars: Vec<Star>,
     field: Vec<f32>,
+    /// Per column, this frame: the hem's row and how high its streaks stand.
+    hem: Vec<f64>,
+    reach: Vec<f64>,
 }
+
+/// The twin's colours: curtain green, teal and violet low to high, a
+/// magenta hem, white and blue-white stars, dark teal spruces.
+const GREEN: u16 = 0;
+const TEAL: u16 = 1;
+const VIOLET: u16 = 2;
+const MAGENTA: u16 = 3;
+const BRIGHT: u16 = 4;
+const DIM: u16 = 5;
+const TREES: u16 = 6;
+const WIDE_PALETTE: &[u32] = &[
+    hex("#6dffa0"),
+    hex("#3fd8d0"),
+    hex("#a878ff"),
+    hex("#ff50d0"),
+    hex("#f4f8ff"),
+    hex("#8fa4d8"),
+    hex("#1f6a58"),
+];
 
 impl Scene {
     fn new(cols: usize, rows: usize, lay: Layout) -> Self {
@@ -188,6 +214,8 @@ impl Scene {
             land: land.into_iter().map(|c| c.map(text::cell)).collect(),
             stars,
             field: vec![0.0; cols * rows],
+            hem: vec![0.0; cols],
+            reach: vec![0.0; cols],
         }
     }
 
@@ -214,6 +242,8 @@ impl Scene {
                 ease(((noise(x * 0.9 - t * 1.4, 7.0 + t * 0.3) - 0.3) / 0.45).clamp(0.0, 1.0));
             let height = lay.height[0]
                 + lay.height[1] * ray * (0.6 + 0.6 * noise(x * 0.12 + t * 0.15, 11.0));
+            self.hem[c] = y0;
+            self.reach[c] = height;
             for r in 0..rows {
                 // Rows above the hem. A bright hem, the streaks above it, and
                 // below it a glow that settles on the treetops, striped like the streaks.
@@ -238,12 +268,15 @@ impl Scene {
                 BLANK
             });
         }
+        if lay.colour {
+            self.tint(t, out);
+        }
         for s in &self.stars {
             if out[s.k] != BLANK {
                 continue;
             }
             let tw = (t * s.rate * TAU + s.ph).sin();
-            out[s.k] = if s.bright {
+            let star = if s.bright {
                 if tw > 0.3 {
                     PLUS
                 } else {
@@ -254,6 +287,40 @@ impl Scene {
             } else {
                 BLANK
             };
+            out[s.k] = if lay.colour {
+                text::tint(star, if s.bright { BRIGHT } else { DIM })
+            } else {
+                star
+            };
+        }
+    }
+
+    /// The twin's colours over this frame's glyphs: the trees, and the
+    /// curtain by height over its hem, green and teal trading places in slow
+    /// bands along it.
+    fn tint(&self, t: f64, out: &mut [Cell]) {
+        let (cols, hem_w) = (self.cols, self.lay.hem_w[0]);
+        for (k, (o, land)) in out.iter_mut().zip(&self.land).enumerate() {
+            let (c, r) = (k % cols, k / cols);
+            let tone = if land.is_some() {
+                TREES
+            } else if *o == BLANK {
+                continue;
+            } else {
+                let d = self.hem[c] - (r as f64 + 0.5);
+                let f = d / self.reach[c];
+                let swap = (c as f64 * 0.045 + t * 0.07).sin() > 0.35;
+                if d < -0.25 * hem_w {
+                    MAGENTA
+                } else if f < 0.35 {
+                    if swap { TEAL } else { GREEN }
+                } else if f < 0.6 {
+                    if swap { GREEN } else { TEAL }
+                } else {
+                    VIOLET
+                }
+            };
+            *o = text::tint(*o, tone);
         }
     }
 }
@@ -283,7 +350,9 @@ pub struct AuroraWide(Scene);
 impl Canvas for AuroraWide {
     const NAME: &'static str = "aurora-wide";
     const FPS: u32 = Aurora::FPS;
-    const PALETTE: &'static [u32] = Aurora::PALETTE;
+    const PALETTE: &'static [u32] = WIDE_PALETTE;
+    /// A deep night blue rather than black.
+    const GROUND: u32 = hex("#040a1c");
 
     fn new(cols: usize, rows: usize) -> Self {
         Self(Scene::new(cols, rows, Layout::fit(cols, rows)))

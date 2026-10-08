@@ -247,16 +247,58 @@ fn draw_card(sw: usize, sh: usize) -> Vec<Px> {
     card
 }
 
+/// The twin's colours: snow in the set's blue-white (entry 0, which the
+/// snow's cells already carry), the card's bars in their real colours, a
+/// grey bezel and an amber dial.
+const WHITE: u16 = 1;
+/// White, yellow, cyan, green, magenta, red, blue, as the bars run.
+const BAR_TONES: [u16; 7] = [1, 2, 3, 4, 5, 6, 7];
+/// Under the bars, reversed: blue, magenta, cyan and white between black.
+const CASTLE_TONES: [u16; 7] = [7, 0, 5, 0, 3, 0, 1];
+const BEZEL: u16 = 8;
+const DIAL_INK: u16 = 9;
+const WIDE_PALETTE: &[u32] = &[
+    hex("#d8e8ff"),
+    hex("#e8e8e8"),
+    hex("#f0e040"),
+    hex("#40e0e8"),
+    hex("#50e050"),
+    hex("#e050e0"),
+    hex("#f04040"),
+    hex("#4c6cff"),
+    hex("#6a7080"),
+    hex("#ffb347"),
+];
+
+/// Each card cell's colour, for the twin: its bar's, or white for the
+/// circle, the crosshair and the bottom strip.
+fn card_tones(card: &[Px], sw: usize, sh: usize) -> Vec<u16> {
+    (0..sw * sh)
+        .map(|i| {
+            let (r, c) = (i / sw, i % sw);
+            let v = (r as f64 + 0.5) / sh as f64;
+            let bar = (((c as f64 + 0.5) / sw as f64 * 7.0).floor() as usize).min(6);
+            match card[i] {
+                Px::Level(_) if v < 0.67 => BAR_TONES[bar],
+                Px::Level(_) if v < 0.75 => CASTLE_TONES[bar],
+                Px::Glyph(_) | Px::Level(_) => WHITE,
+            }
+        })
+        .collect()
+}
+
 struct Scene {
     lay: Layout,
     set: Vec<Cell>,
     card: Vec<Px>,
+    /// The twin's `card_tones`; empty upstream, whose card is one ink.
+    tone: Vec<u16>,
     /// Which picture cells the curved tube leaves in.
     inside: Vec<bool>,
 }
 
 impl Scene {
-    fn new(lay: Layout, set: Vec<Vec<char>>) -> Self {
+    fn new(lay: Layout, set: Vec<Vec<char>>, colour: bool) -> Self {
         let (sw, sh) = (lay.sw, lay.sh);
         let inside = (0..sw * sh)
             .map(|i| {
@@ -267,9 +309,20 @@ impl Scene {
                 x.powi(6) + y.powi(6) <= 1.02
             })
             .collect();
+        let ink = if colour { BEZEL } else { 0 };
+        let card = draw_card(sw, sh);
         Self {
-            set: set.into_iter().flatten().map(text::cell).collect(),
-            card: draw_card(sw, sh),
+            set: set
+                .into_iter()
+                .flatten()
+                .map(|c| text::tint(text::cell(c), ink))
+                .collect(),
+            tone: if colour {
+                card_tones(&card, sw, sh)
+            } else {
+                Vec::new()
+            },
+            card,
             inside,
             lay,
         }
@@ -305,6 +358,9 @@ impl Scene {
 
         out.copy_from_slice(&self.set);
         out[dial_at] = DIAL[dial as usize];
+        if !self.tone.is_empty() {
+            out[dial_at] = text::tint(out[dial_at], DIAL_INK);
+        }
         for r in 0..sh {
             let (ri, rf) = (r as i32, r as f64);
             let dim = 1.0 - 0.45 * (-((rf - hum) / 2.2).powi(2)).exp();
@@ -345,9 +401,13 @@ impl Scene {
                     if let (true, Px::Level(l)) = (noisy, x) {
                         x = Px::Level((l + if n < 0.5 { -1 } else { 1 }).clamp(0, N));
                     }
-                    match x {
+                    let cell = match x {
                         Px::Level(l) => RAMP[l as usize],
                         Px::Glyph(g) => g,
+                    };
+                    match self.tone.get(pr * sw as usize + pc as usize) {
+                        Some(&tone) if pr < sh => text::tint(cell, tone),
+                        _ => cell,
                     }
                 };
             }
@@ -367,7 +427,7 @@ impl Piece for TvStatic {
     const GROUND: u32 = 0;
 
     fn new() -> Self {
-        Self(Scene::new(ORIGINAL, draw_set()))
+        Self(Scene::new(ORIGINAL, draw_set(), false))
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
@@ -380,10 +440,14 @@ pub struct TvStaticWide(Scene);
 impl Canvas for TvStaticWide {
     const NAME: &'static str = "tv-static-wide";
     const FPS: u32 = FPS;
-    const PALETTE: &'static [u32] = TvStatic::PALETTE;
+    const PALETTE: &'static [u32] = WIDE_PALETTE;
 
     fn new(cols: usize, rows: usize) -> Self {
-        Self(Scene::new(Layout::fit(cols, rows), draw_bezel(cols, rows)))
+        Self(Scene::new(
+            Layout::fit(cols, rows),
+            draw_bezel(cols, rows),
+            true,
+        ))
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {

@@ -96,6 +96,8 @@ struct Layout {
     s: f64,
     reach: f64,
     stars: i64,
+    /// Colour by part (`WIDE_PALETTE`) rather than upstream's one ink.
+    colour: bool,
 }
 
 const ORIGINAL: Layout = Layout {
@@ -105,6 +107,7 @@ const ORIGINAL: Layout = Layout {
     s: 1.0,
     reach: REACH,
     stars: 24,
+    colour: false,
 };
 
 impl Layout {
@@ -120,6 +123,7 @@ impl Layout {
             s,
             reach: REACH * (half / (COLS / 4) as f64).max(1.0),
             stars: (24 * cols / COLS) as i64,
+            colour: true,
         }
     }
 
@@ -130,11 +134,46 @@ impl Layout {
     }
 }
 
+/// The twin's colours, one per part: an amber beam fading to bronze in the
+/// thin haze, a pale-gold lamp, the sea in two blues with the beam's road on
+/// it in amber, a white tower banded red, grey-brown rocks, iron gallery and
+/// roof, white surf, blue-white stars.
+const HAZE: u8 = 0;
+const BEAM_INK: u8 = 1;
+const LIGHT: u8 = 2;
+const DEEP: u8 = 3;
+const SWELL_INK: u8 = 4;
+const ROAD: u8 = 5;
+const WHITE: u8 = 6;
+const RED: u8 = 7;
+const ROCK: u8 = 8;
+const SURF_INK: u8 = 9;
+const STAR: u8 = 10;
+const IRON: u8 = 11;
+const WIDE_PALETTE: &[u32] = &[
+    hex("#a8743a"),
+    hex("#ffc860"),
+    hex("#fff2c0"),
+    hex("#2f5f9a"),
+    hex("#6a9ad8"),
+    hex("#ffd27a"),
+    hex("#ece6dc"),
+    hex("#d8443a"),
+    hex("#8a8070"),
+    hex("#f0f8ff"),
+    hex("#c8d4ff"),
+    hex("#9098a8"),
+];
+
 struct Scene {
     lay: Layout,
     /// The lighthouse and its rocks never move: light as 0..1 where they are,
     /// -1 where they are not.
     still: Vec<f32>,
+    /// What each still cell is, for the twin's colours.
+    still_tone: Vec<u8>,
+    /// What each cell of `out` is this frame, likewise.
+    tone: Vec<u8>,
     rock_at: Vec<i8>,
     stars: Vec<(usize, u8)>,
     /// Where each breaker strikes: x, y, side, phase.
@@ -153,6 +192,7 @@ impl Scene {
         let n = cols * rows;
         let mut still = vec![-1.0f32; n];
         let mut rock_at = vec![-1i8; n];
+        let mut still_tone = vec![0u8; n];
         for r in 0..rows {
             let ro = lay.row(r);
             for c in 0..cols {
@@ -160,7 +200,7 @@ impl Scene {
                 let x = (c as f64 - tc as f64) / 2.0 / sc;
                 let y = (r as f64 + 0.5) / sc;
                 // The rocks behind the tower first, then the tower, then the rocks before it.
-                let boulder = |i: usize, still: &mut [f32], rock_at: &mut [i8]| {
+                let boulder = |i: usize, still: &mut [f32], rock_at: &mut [i8], still_tone: &mut [u8]| {
                     let [bx, by, rx, ry, wl] = ROCKS[i];
                     let (u, v) = ((x - bx) / rx, (y - by) / ry);
                     let q = u * u + v * v;
@@ -173,9 +213,10 @@ impl Scene {
                         + 0.06 * (hash2(c as i64, r as i64) - 0.5))
                         as f32;
                     rock_at[k] = i as i8;
+                    still_tone[k] = ROCK;
                 };
                 for i in 0..BEHIND {
-                    boulder(i, &mut still, &mut rock_at);
+                    boulder(i, &mut still, &mut rock_at, &mut still_tone);
                 }
                 // The shaft: banded, round, a door at its foot and a slit of a light in a band.
                 if (TOP..=FOOT).contains(&ro) {
@@ -194,10 +235,12 @@ impl Scene {
                         }
                         still[k] = v as f32;
                         rock_at[k] = -1;
+                        still_tone[k] = if dark { RED } else { WHITE };
                     }
                 }
                 // The gallery: a rail of posts, and the deck under it in shadow.
                 if ro == TOP - 2 && x.abs() <= 2.9 {
+                    still_tone[k] = IRON;
                     still[k] = if x.abs() > 2.6 {
                         0.55
                     } else if (c as i64 - tc as i64) % 2 != 0 {
@@ -207,6 +250,7 @@ impl Scene {
                     };
                 }
                 if ro == TOP - 1 && x.abs() <= 3.0 {
+                    still_tone[k] = IRON;
                     still[k] = (0.45
                         * (0.25 + 0.75 * moon(x / 3.2, 0.3, (1.0 - (x / 3.2).powf(2.0)).sqrt())))
                         as f32;
@@ -217,13 +261,15 @@ impl Scene {
                     if x.abs() <= rw {
                         let u = x / (rw + 0.3);
                         still[k] = (0.12 + 0.6 * moon(u, -0.4, (1.0 - u * u).sqrt())) as f32;
+                        still_tone[k] = IRON;
                     }
                 }
                 if ro + 4 == LAMP && c == tc {
                     still[k] = 0.5;
+                    still_tone[k] = IRON;
                 }
                 for i in BEHIND..ROCKS.len() {
-                    boulder(i, &mut still, &mut rock_at);
+                    boulder(i, &mut still, &mut rock_at, &mut still_tone);
                 }
             }
         }
@@ -271,6 +317,8 @@ impl Scene {
             stars,
             surf,
             out: vec![b' '; n],
+            tone: vec![0; n],
+            still_tone,
             light: vec![0.0; cols],
             cells,
             lantern: first..last + 1,
@@ -286,7 +334,9 @@ impl Scene {
         let (c, s) = (th.cos(), th.sin());
         let face = s.max(0.0).powf(10.0); // the lens turned square to us
         let (out, still, rock_at) = (&mut self.out, &self.still, &self.rock_at);
+        let tone = &mut self.tone;
         out.fill(b' ');
+        tone.fill(0);
         self.light.fill(0.0);
         let mut hz = rows;
         for r in 0..rows {
@@ -313,6 +363,7 @@ impl Scene {
                         .min(7.0);
                     if i > 0.0 {
                         out[k] = BEAM[i as usize];
+                        tone[k] = if i > 2.0 { BEAM_INK } else { HAZE };
                     }
                     continue;
                 }
@@ -324,23 +375,26 @@ impl Scene {
                 let lit = (f64::from(self.light[cc]) * 0.9 + glare * 0.5).min(1.0)
                     * (-(d - 1.0) / 6.0).exp();
                 if wave > 0.9 - 0.5 * lit {
-                    out[k] = if lit > 0.5 {
-                        b'='
+                    (out[k], tone[k]) = if lit > 0.5 {
+                        (b'=', ROAD)
                     } else if lit > 0.2 || d >= 3.0 {
-                        b'~'
+                        (b'~', SWELL_INK)
                     } else {
-                        b'-'
+                        (b'-', DEEP)
                     };
                 } else if wave > 0.4 - 0.4 * lit && (d < 3.0 || lit > 0.15) {
                     out[k] = if d < 3.0 { b'.' } else { b'-' };
+                    tone[k] = DEEP;
                 } else if r == hz {
                     out[k] = b'_';
+                    tone[k] = DEEP;
                 }
             }
         }
         for &(k, ch) in &self.stars {
             if out[k] == b' ' {
                 out[k] = ch;
+                tone[k] = STAR;
             }
         }
         // The lighthouse and rocks over the rest, each boulder washed by the
@@ -362,6 +416,7 @@ impl Scene {
             }
             let i = js_round(v * 9.0).clamp(1.0, 9.0);
             out[k] = RAMP[i as usize];
+            tone[k] = self.still_tone[k];
         }
         let glow = 0.75 + 0.25 * face;
         let wide = (3.0 * sc).ceil() as i64;
@@ -381,7 +436,9 @@ impl Scene {
                     glow * (1.0 - 0.1 * x.abs() as f64) * row
                 };
                 let i = js_round(v * 9.0).clamp(1.0, 9.0);
-                out[(r * cols + tc).wrapping_add_signed(dc as isize)] = RAMP[i as usize];
+                let k = (r * cols + tc).wrapping_add_signed(dc as isize);
+                out[k] = RAMP[i as usize];
+                tone[k] = if edge || bar { IRON } else { LIGHT };
             }
         }
         // The lamp, and the rays when it faces us.
@@ -393,11 +450,15 @@ impl Scene {
         } else {
             b'o'
         };
+        tone[l] = LIGHT;
         if face > 0.5 && self.lamp > 0 && self.lamp + 1 < rows {
             out[l - cols] = b'|';
             out[l + cols] = b'|';
             out[l - 1] = b'=';
             out[l + 1] = b'=';
+            for k in [l - cols, l + cols, l - 1, l + 1] {
+                tone[k] = LIGHT;
+            }
         }
         // Surf: a breaker bursts on a boulder, its spray thrown up in a fan
         // that falls back as drops.
@@ -419,8 +480,9 @@ impl Scene {
                     && cx < cols as i64
                     && fr < rows as f64
                 {
-                    out[fr as usize * cols + cx as usize] =
-                        if tt < 0.5 && jf < 2.0 * sc { b'=' } else { b'~' };
+                    let k = fr as usize * cols + cx as usize;
+                    out[k] = if tt < 0.5 && jf < 2.0 * sc { b'=' } else { b'~' };
+                    tone[k] = SURF_INK;
                 }
             }
             if side == 0.0 {
@@ -451,6 +513,10 @@ impl Scene {
                     if rock_at[k] >= 0 && tt > 0.2 {
                         continue;
                     }
+                    let spray = back == 0 || out[k] == b' ' || out[k] == b'~';
+                    if spray {
+                        tone[k] = SURF_INK;
+                    }
                     out[k] = if back == 1 {
                         if out[k] == b' ' || out[k] == b'~' {
                             b'\''
@@ -473,8 +539,14 @@ impl Scene {
                 }
             }
         }
-        for (cell, &b) in cells.iter_mut().zip(out.iter()) {
-            *cell = self.cells[b as usize];
+        if self.lay.colour {
+            for ((cell, &b), &k) in cells.iter_mut().zip(out.iter()).zip(tone.iter()) {
+                *cell = text::tint(self.cells[b as usize], u16::from(k));
+            }
+        } else {
+            for (cell, &b) in cells.iter_mut().zip(out.iter()) {
+                *cell = self.cells[b as usize];
+            }
         }
     }
 }
@@ -504,7 +576,9 @@ pub struct LighthouseWide(Scene);
 impl Canvas for LighthouseWide {
     const NAME: &'static str = "lighthouse-wide";
     const FPS: u32 = Lighthouse::FPS;
-    const PALETTE: &'static [u32] = Lighthouse::PALETTE;
+    const PALETTE: &'static [u32] = WIDE_PALETTE;
+    /// A night of deep navy rather than black.
+    const GROUND: u32 = hex("#050b1a");
 
     fn new(cols: usize, rows: usize) -> Self {
         Self(Scene::new(Layout::fit(cols, rows)))

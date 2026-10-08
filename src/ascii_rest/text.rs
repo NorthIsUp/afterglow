@@ -20,3 +20,9 @@ pub const fn cells<const N: usize>(cs: [char; N]) -> [Cell; N] {
     }
     out
 }
+
+/// `c` in palette entry `k`: a `-wide` twin's colour on its original's glyph.
+#[inline]
+pub const fn tint(c: Cell, k: u16) -> Cell {
+    Cell::new(c.glyph() as u16, k)
+}

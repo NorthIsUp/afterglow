@@ -44,6 +44,8 @@ struct Layout {
     peak: i64,
     climb: f64,
     quiet: f64,
+    /// Colour by part (`WIDE_PALETTE`) rather than upstream's one ink.
+    colour: bool,
 }
 
 impl Layout {
@@ -61,6 +63,7 @@ impl Layout {
         peak: 7,
         climb: 1.0,
         quiet: 0.25,
+        colour: false,
     };
 
     /// Upstream's proportions on a `cols x rows` grid: the sky and the floor
@@ -87,6 +90,7 @@ impl Layout {
             peak: (7.0 * sy).round() as i64,
             climb: sy,
             quiet: 0.6 * sun_r / cx,
+            colour: true,
         }
     }
 
@@ -108,6 +112,29 @@ impl Layout {
         usize::from((band(k + 1.0) - s).floor() == (band(k) - s).floor())
     }
 }
+
+/// The twin's colours: the sun from gold at its crown to hot pink at the
+/// horizon, purple mountains, a magenta floor crossed by cyan rails, white
+/// stars.
+const SUN: u16 = 0;
+const SUN_BANDS: usize = 5;
+const RIDGE: u16 = 5;
+const LINE: u16 = 6;
+const RAIL: u16 = 7;
+const STAR: u16 = 8;
+const HAZE: u16 = 9;
+const WIDE_PALETTE: &[u32] = &[
+    hex("#ffe14a"),
+    hex("#ffb238"),
+    hex("#ff7a3c"),
+    hex("#ff4f78"),
+    hex("#ff3fb0"),
+    hex("#a35cff"),
+    hex("#ff3fd0"),
+    hex("#39e6ff"),
+    hex("#f0f0ff"),
+    hex("#b0308a"),
+];
 
 struct Scene {
     lay: Layout,
@@ -315,6 +342,44 @@ impl Scene {
                 both(hi, '/', '\\');
             }
         }
+        if lay.colour {
+            self.tint(out);
+        }
+    }
+
+    /// The twin's colours over this frame's glyphs, by row and glyph.
+    fn tint(&self, out: &mut [Cell]) {
+        const BLOCKS: [Cell; 3] = text::cells(['▀', '▄', '█']);
+        const RIDGES: [Cell; 3] = text::cells(['/', '\\', '_']);
+        const RAILS: [Cell; 6] = text::cells(['/', '\\', '│', '┼', '╪', '_']);
+        let lay = &self.lay;
+        let (cols, hz) = (lay.cols, lay.hz);
+        let top = ((lay.sun_y - lay.sun_r) / 2.0).max(0.0);
+        let span = (hz as f64 - top).max(1.0);
+        for (r, row) in out.chunks_exact_mut(cols).enumerate() {
+            let band = ((r as f64 - top) / span * SUN_BANDS as f64).clamp(0.0, (SUN_BANDS - 1) as f64);
+            for o in row {
+                if *o == text::cell(' ') {
+                    continue;
+                }
+                let tone = if r < hz {
+                    if BLOCKS.contains(o) {
+                        SUN + band as u16
+                    } else if RIDGES.contains(o) {
+                        RIDGE
+                    } else {
+                        STAR
+                    }
+                } else if r == hz {
+                    HAZE
+                } else if RAILS.contains(o) {
+                    RAIL
+                } else {
+                    LINE
+                };
+                *o = text::tint(*o, tone);
+            }
+        }
     }
 }
 
@@ -343,7 +408,9 @@ pub struct SynthwaveWide(Scene);
 impl Canvas for SynthwaveWide {
     const NAME: &'static str = "synthwave-wide";
     const FPS: u32 = Synthwave::FPS;
-    const PALETTE: &'static [u32] = Synthwave::PALETTE;
+    const PALETTE: &'static [u32] = WIDE_PALETTE;
+    /// A night of deep purple rather than black.
+    const GROUND: u32 = hex("#0b0418");
 
     fn new(cols: usize, rows: usize) -> Self {
         Self(Scene::new(Layout::fit(cols, rows)))
