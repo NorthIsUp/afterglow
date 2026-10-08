@@ -50,8 +50,7 @@ macro_rules! each_piece {
         $cb! {
             alpine_dawn::{AlpineDawn, #[no_upstream] AlpineDawnWide},
             aurora::{Aurora},
-            aurora_fjord::{AuroraFjord},
-            aurora_fjord_wide::{#[no_upstream] AuroraFjordWide},
+            aurora_fjord::{AuroraFjord, #[no_upstream] AuroraFjordWide},
             deep_reef::{DeepReef},
             deep_reef_wide::{#[no_upstream] DeepReefWide},
             desert_night::{DesertNight, #[no_upstream] DesertNightWide},
