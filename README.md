@@ -63,6 +63,7 @@ falls back to `ascii` — a headless pod must never crash-loop on a typo.
 | `speeder` | A first-person speeder-bike chase through the forest moon — enormous redwood trunks rush past at parallax while the bike weaves between them on two incommensurate sines, dappled canopy light streams over the mossy floor, and every so often a fallen trunk sweeps up out of frame to be ducked under or another bike flashes across the view. One spawn in twenty is aimed at where the camera WILL be, so the near misses are deliberate; a trunk moving too fast for the eye to hold an edge on is stippled rather than solid. Its grid is SQUARE, so all of the perspective is in cells and `SAVER_PIXEL_ASPECT` corrects it for free — the opposite choice to `warp`'s. | `SPEEDER_CELL` (px, 4..32, default 8, square), `SPEEDER_SPEED` (metres/sec, 10..300, default 58), `SPEEDER_TRUNKS` (8..400, default 60), `SPEEDER_FOV` (focal as a per-cent of COLUMNS, 20..200, default 62 — smaller is wider and faster-looking), `SPEEDER_HORIZON` (eye line as a per-cent of rows, 10..80, default 44), `SPEEDER_WEAVE` (swing off the path in DECIMETRES, 0..200, default 64; 0 flies straight), `SPEEDER_DAPPLE` (per-cent of the floor in a pool of light, 0..100, default 34), `SPEEDER_LOG_SECS` (mean seconds between fallen trunks, 0..600, default 16; 0 = off), `SPEEDER_RIDER_SECS` (mean seconds between other bikes, 0..600, default 12; 0 = off), `SPEEDER_SEED` (0 = roll one from the clock and pid; any other value reproduces the ride exactly) |
 | `xwing` | The Death Star run from the cockpit, in three acts on a loop: the station swelling out of a starfield, a low pass over its greebled surface, then the trench — walls closing in and the targeting computer swinging down over the view. Green fire comes in and red goes out in every act, TIE fighters cross, chase and pass the canopy, and anything a red bolt reaches explodes. | `XWING_SEED`, `XWING_APPROACH_SECS` / `XWING_SURFACE_SECS` / `XWING_TRENCH_SECS` (1..600, default 11 / 9 / 13), `XWING_SPEED` (world units/sec, 50..20000, default 900), `XWING_GREEBLE` (plating block size, 4..2000, default 60), `XWING_FOV` (focal length in thousandths of the visual panel width, 200..3000, default 800), `XWING_STARS` (0..4000, default 170), `XWING_TOWERS` (0..400, default 16), `XWING_BOLTS` (0..400, default 28), `XWING_TIE_SECS` (mean seconds between TIE sorties, 0..600, default 7; 0 = none), `XWING_TIES` (0..200, default 6), `XWING_BOOM_SECS` (mean seconds between surface explosions, 0..600, default 9; 0 = none), `XWING_BOOMS` (0..200, default 6), `XWING_PITCH_MS` (act 2's nose coming up, 0..10000, default 1600), `XWING_RISE_MS` (act 3's walls rising, 0..10000, default 1400), `XWING_CELL_W` / `XWING_CELL_H` (4..32, default 8 / 8) |
 | `alpine-dawn` `aurora-fjord` `deep-reef` `desert-night` `earthrise` `kyoto-dusk` `marine-drive` `misty-forest` `night-coast` `ocean-sunset` `storm-plains` `taj-dawn` `varanasi-ghats` | ascii.rest's thirteen halftone scenes — landscapes shaded cell by cell and drawn as dots whose size is their brightness. See [ascii.rest ports](#about-the-ascii-rest-ports); the camera slowly tours each one ([the tour](#the-scene-tour)). | `ASCII_REST_TOUR` (0..1, default 1; 0 is the fixed cover view), `ASCII_REST_TOUR_HOLD_SECS` (1..3600, default 14, each hold drawn from 60%..140% of it), `ASCII_REST_TOUR_MAX_ZOOM_PCT` (100..600, default 250, of the cover view's cell), `ASCII_REST_TOUR_SEED` (0 = roll one from the clock and pid; any other value reproduces the tour exactly) |
+| `alpine-dawn-wide` `aurora-fjord-wide` `deep-reef-wide` `desert-night-wide` `earthrise-wide` `kyoto-dusk-wide` `marine-drive-wide` `misty-forest-wide` `night-coast-wide` `ocean-sunset-wide` `storm-plains-wide` `taj-dawn-wide` `varanasi-ghats-wide` | The same thirteen scenes recomposed at 320x100 (3.2:1), so they fill pine's glass uncropped. See [ascii.rest ports](#about-the-ascii-rest-ports). | as the scenes |
 | `plasma` `aurora` `synthwave` `tv-static` `vinyl` `lighthouse` `fractal-tree` `reaction-diffusion` `double-pendulum` | ascii.rest's character pieces, one ink each. See [ascii.rest ports](#about-the-ascii-rest-ports). | none |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
@@ -966,15 +967,6 @@ or the Taj's dome stays in frame; on pine's 3.2:1 glass that is about 60% of
 each scene's height. Text pieces keep `Fit::Contain` and sit whole over their
 ground, since a cropped one loses words.
 
-`-wide` variants recompose a scene for a 320x100 canvas, pine's 3.2:1, so it
-fills the glass with nothing cropped. They are ours, not upstream's, so they
-have no golden; the original beside each stays exact.
-
-- `ocean-sunset-wide`: a larger headland, a wider sea and a far island beyond the sun.
-- `storm-plains-wide`: the storm stands further east, its anvil streaming on across the extra sky.
-- `taj-dawn-wide`: the whole garden front, the jawab answering the mosque across the canal.
-- `varanasi-ghats-wide`: longer ghats with more spires and priests, and a broad reach past the glow.
-
 Every port is checked cell for cell against upstream's own output — glyph and
 palette index, four frames each, stateful pieces stepped through every tick
 between. All 22 match exactly. The math is f64 like JavaScript, `Float32Array`
@@ -1011,24 +1003,23 @@ re-describing the mirror for each one would reconnect every viewer a dozen
 times per glide.
 
 **`-wide` variants** are this repo's own: a scene recomposed on a 320x100 grid
-so it fills pine's 3.2:1 glass with nothing cropped. The original stays
-untouched and golden-exact; a wide one has no upstream golden, so its `golden`
-test fails under `--ignored` by design.
+so it fills pine's 3.2:1 glass with nothing cropped, rather than stretched. The
+original stays untouched and golden-exact; a wide one sets `UPSTREAM = false`,
+so its `golden` test skips — there is no upstream output to compare against.
 
 - `alpine-dawn-wide` — a wider camera on the same range, three more peaks at the flanks.
 - `aurora-fjord-wide` — fjord and cabin kept off-centre, two more peaks on each range.
 - `deep-reef-wide` — broader reefs and sand, two more bommies, a hazy third kelp.
 - `desert-night-wide` — a wider dune field; the milky way's arch spans the whole sky.
 - `earthrise-wide` — more highlands and ground, two more bright stars, a longer galaxy band.
-
-**-wide variants** are scenes recomposed for a 320x100 canvas, 3.2:1, so they
-fill pine's glass with nothing cropped. Upstream has no wide pieces, so they have
-no golden; the originals stay untouched.
-
 - `kyoto-dusk-wide` — a temple hall beside the pagoda, hills rising further east.
 - `marine-drive-wide` — a longer necklace and skyline, a liner and a fishing boat past the point.
 - `misty-forest-wide` — the ridges and fog run on west; a young pine between the two framing giants.
 - `night-coast-wide` — a wider sea out to a low far shore with two hummocks; the beam reaches further.
+- `ocean-sunset-wide` — a larger headland, a wider sea and a far island beyond the sun.
+- `storm-plains-wide` — the storm stands further east, its anvil streaming on across the extra sky.
+- `taj-dawn-wide` — the whole garden front, the jawab answering the mosque across the canal.
+- `varanasi-ghats-wide` — longer ghats with more spires and priests, and a broad reach past the glow.
 
 ## Gotchas
 

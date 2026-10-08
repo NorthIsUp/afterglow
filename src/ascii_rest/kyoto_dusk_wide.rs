@@ -317,6 +317,7 @@ impl Piece for KyotoDuskWide {
     const FPS: u32 = 15;
     const CELL: usize = 1;
     const FIT: Fit = Fit::Cover { anchor: 0.25 };
+    const UPSTREAM: bool = false;
     const GROUND: u32 = hex("#0b0a16");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[

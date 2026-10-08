@@ -64,6 +64,7 @@ impl Piece for NightCoastWide {
     const FPS: u32 = 15;
     const CELL: usize = 1;
     const FIT: Fit = Fit::Cover { anchor: 0.5 };
+    const UPSTREAM: bool = false;
     const GROUND: u32 = hex("#080b12");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[

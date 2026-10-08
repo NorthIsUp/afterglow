@@ -124,6 +124,11 @@ pub trait Piece: Sized + 'static {
     const GROUND: u32;
     /// How the picture meets a panel of another shape.
     const FIT: Fit = Fit::Contain;
+    /// False for this repo's own pieces (the `-wide` recompositions), which
+    /// have no upstream output for the golden test to compare against. Only
+    /// the test build reads it.
+    #[cfg_attr(not(test), allow(dead_code))]
+    const UPSTREAM: bool = true;
 
     fn new() -> Self;
 
@@ -628,6 +633,9 @@ pub(crate) mod tests {
     /// Exact, cell for cell: `math` reproduces JavaScriptCore wherever libm
     /// differs, so one stray cell is a port bug, not rounding noise.
     pub fn golden<P: Piece>() {
+        if !P::UPSTREAM {
+            return;
+        }
         let dir = std::env::var("ASCII_REST_GOLDEN").expect("set ASCII_REST_GOLDEN");
         let path = format!("{dir}/{}.golden", P::NAME);
         let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
