@@ -354,9 +354,12 @@ mod tests {
         );
         assert!(toaster.iter().all(|k| k.key.starts_with("TOASTER_")));
 
+        // The tour's timings only exist with it on.
+        set(&num("ASCII_REST_TOUR", 0, 0, 1), "1").unwrap();
         let scene = discover(|| {
             crate::saver::make("night-coast", &panel, 30);
         });
+        reset("ASCII_REST_TOUR");
         let keys: Vec<_> = scene.iter().map(|k| k.key).collect();
         for k in [
             "ASCII_REST_TITLE",
