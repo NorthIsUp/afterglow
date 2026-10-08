@@ -980,6 +980,17 @@ ASCII_REST_GOLDEN=/tmp/golden cargo test --release ascii_rest -- --ignored --noc
 
 Cost: night-coast measures 2.3x matrix per panel frame, plasma 1.0x.
 
+**`-wide` variants** are this repo's own: a scene recomposed on a 320x100 grid
+so it fills pine's 3.2:1 glass with nothing cropped. The original stays
+untouched and golden-exact; a wide one has no upstream golden, so its `golden`
+test fails under `--ignored` by design.
+
+- `alpine-dawn-wide` — a wider camera on the same range, three more peaks at the flanks.
+- `aurora-fjord-wide` — fjord and cabin kept off-centre, two more peaks on each range.
+- `deep-reef-wide` — broader reefs and sand, two more bommies, a hazy third kelp.
+- `desert-night-wide` — a wider dune field; the milky way's arch spans the whole sky.
+- `earthrise-wide` — more highlands and ground, two more bright stars, a longer galaxy band.
+
 ## Gotchas
 
 - **The mirror looks perfect while the panel is wrong** — the mirror publishes `saver.grid().cells()`, the frame we just _wrote_, not a read-back of the scanout. Anything that clobbers the panel downstream of that write (fbcon, another DRM client) is invisible to it, which is why it sat green for four days while the monitor showed console text. Fix: trust the mirror for "is the renderer running", never for "is this what the screen shows".

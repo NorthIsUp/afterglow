@@ -33,12 +33,17 @@ macro_rules! each_piece {
     ($cb:ident) => {
         $cb! {
             alpine_dawn::AlpineDawn,
+            alpine_dawn_wide::AlpineDawnWide,
             aurora::Aurora,
             aurora_fjord::AuroraFjord,
+            aurora_fjord_wide::AuroraFjordWide,
             deep_reef::DeepReef,
+            deep_reef_wide::DeepReefWide,
             desert_night::DesertNight,
+            desert_night_wide::DesertNightWide,
             double_pendulum::DoublePendulum,
             earthrise::Earthrise,
+            earthrise_wide::EarthriseWide,
             fractal_tree::FractalTree,
             kyoto_dusk::KyotoDusk,
             lighthouse::Lighthouse,
