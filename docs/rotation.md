@@ -28,7 +28,7 @@ env lookup, no clock read: see [CLAUDE.md](../CLAUDE.md) on the frame loop.
 is a **shuffled bag**: every saver, in random order, none of them again until all
 of them have been shown, then reshuffled. That is what "rotate through all the
 savers" has to mean — rolling an independent choice each time takes about 230
-turns to show you all 51 turns' worth (72 savers, a pair being one turn; coupon
+turns to show you all 51 turns' worth (64 savers, a scene's pair being one turn; coupon
 collector), nineteen hours at a five-minute interval, where the bag takes
 exactly 51 and four and a quarter.
 
