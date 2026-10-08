@@ -72,7 +72,7 @@ macro_rules! each_piece {
             storm_plains::{StormPlains, #[no_upstream] StormPlainsWide},
             synthwave::{#[fill] Synthwave},
             taj_dawn::{TajDawn, #[no_upstream] TajDawnWide},
-            tv_static::{TvStatic, #[fill] TvStaticWide},
+            tv_static::{#[fill] TvStatic},
             varanasi_ghats::{VaranasiGhats, #[no_upstream] VaranasiGhatsWide},
             vinyl::{#[fill] Vinyl},
         }
