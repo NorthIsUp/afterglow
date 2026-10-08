@@ -463,7 +463,7 @@ impl Driver {
         let cur = mirror::sel_index(self.selected);
         if let Some(i) = self
             .rot
-            .due(now, cur, mirror.rotate_ctl(), |i| mirror.in_rotation(i))
+            .due(now, cur, mirror.rotate_ctl(), |i| mirror.pickable(i))
         {
             mirror.select_at(i);
         }
@@ -960,5 +960,57 @@ mod tests {
         });
         assert_eq!(n, 0);
         assert!(few(cur));
+        // And the Driver's predicate, pairs included, allocates nothing either.
+        let m = Mirror::new(15);
+        let mut picked = 0;
+        let n = crate::testalloc::allocs_during(|| {
+            picked = (0..NSAVERS).filter(|&i| m.pickable(i)).count();
+        });
+        assert_eq!(n, 0);
+        // Every row but the 13 `-wide` halves, which wait for `expanded`.
+        assert_eq!(picked, NSAVERS - 13);
+    }
+
+    /// A scene's pair takes one turn, and which half is the viewer's
+    /// `expanded` choice: the original until the `-wide` is clicked, then the
+    /// `-wide` until the original is. Rotation moving on does not change it.
+    #[test]
+    fn rotation_shows_the_half_of_a_pair_that_expanded_chose() {
+        let mirror = Mirror::new(15);
+        let t0 = Instant::now();
+        mirror.set_rotate_secs(1);
+        assert!(mirror.select("dvd"));
+        let (mut d, panel) = driver(&mirror, t0, 11);
+        let place = |n: &str| (panel, make(n, &panel, 30));
+        for n in names().filter(|n| !["dvd", "night-coast", "night-coast-wide"].contains(n)) {
+            mirror.set_in_rotation(n, false);
+        }
+        let mut turns = |from: u64| {
+            (from..from + 6)
+                .map(|s| {
+                    d.switch(t0 + Duration::from_secs(s), &mirror, place);
+                    d.saver().name()
+                })
+                .collect::<Vec<_>>()
+        };
+        let shown = turns(1);
+        assert!(
+            shown.contains(&"night-coast") && !shown.contains(&"night-coast-wide"),
+            "{shown:?}"
+        );
+
+        assert!(mirror.select("night-coast-wide"));
+        let shown = turns(10);
+        assert!(
+            shown.contains(&"night-coast-wide") && !shown.contains(&"night-coast"),
+            "{shown:?}"
+        );
+
+        assert!(mirror.select("night-coast"));
+        let shown = turns(20);
+        assert!(
+            shown.contains(&"night-coast") && !shown.contains(&"night-coast-wide"),
+            "{shown:?}"
+        );
     }
 }
