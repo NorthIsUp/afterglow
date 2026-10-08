@@ -1,6 +1,6 @@
 # `aurora-fjord`
 
-![`aurora-fjord`](../media/aurora-fjord.webp)
+![`aurora-fjord`](../media/aurora-fjord.gif)
 
 Curtains of aurora ripple over a fjord between snowy mountains. The still water holds a broken shimmer of them, and a red cabin on the far shore keeps its lamps lit.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/aurora_fjord.rs`](../../src/ascii_rest/aurora_fjord.rs)
 
 ## `aurora-fjord-wide`
 
-![`aurora-fjord-wide`](../media/aurora-fjord-wide.webp)
+![`aurora-fjord-wide`](../media/aurora-fjord-wide.gif)
 
 Fjord and cabin kept off-centre, two more peaks on each range.
 

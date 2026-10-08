@@ -1,6 +1,6 @@
 # `matrix`
 
-![`matrix`](../media/matrix.webp)
+![`matrix`](../media/matrix.gif)
 
 Digital rain.
 

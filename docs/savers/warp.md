@@ -1,6 +1,6 @@
 # `warp`
 
-![`warp`](../media/warp.webp)
+![`warp`](../media/warp.gif)
 
 Flying forward through a starfield. Points stream out of a vanishing point at
 the centre, accelerating and brightening as they pass the camera.

@@ -1,6 +1,6 @@
 # `alpine-dawn`
 
-![`alpine-dawn`](../media/alpine-dawn.webp)
+![`alpine-dawn`](../media/alpine-dawn.gif)
 
 Jagged snow peaks catch the first pink light on their east faces while their flanks stay in blue shadow. Mist pools along the far shore and a still lake mirrors it all. The light warms toward gold as the sun clears the ridge, the mist drifts, and slow ripples cross the water.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/alpine_dawn.rs`](../../src/ascii_rest/alpine_dawn.rs).
 
 ## `alpine-dawn-wide`
 
-![`alpine-dawn-wide`](../media/alpine-dawn-wide.webp)
+![`alpine-dawn-wide`](../media/alpine-dawn-wide.gif)
 
 A wider camera on the same range, three more peaks at the flanks.
 

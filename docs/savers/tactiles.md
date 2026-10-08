@@ -1,6 +1,6 @@
 # `tactiles`
 
-![`tactiles`](../media/tactiles.webp)
+![`tactiles`](../media/tactiles.gif)
 
 After Dark's TacTiles — a grid of square tiles carrying one geometric glyph each (bar, diagonal, corner, arc). Shape, rotation and colour are three travelling sine waves quantised into bands, so the tiling rearranges itself continuously without ever looking rolled.
 

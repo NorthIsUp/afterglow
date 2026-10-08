@@ -1,6 +1,6 @@
 # `xwing`
 
-![`xwing`](../media/xwing.webp)
+![`xwing`](../media/xwing.gif)
 
 The Death Star run from the cockpit, in three acts on a loop: the station swelling out of a starfield, a low pass over its greebled surface, then the trench — walls closing in and the targeting computer swinging down over the view. Green fire comes in and red goes out in every act, TIE fighters cross, chase and pass the canopy, and anything a red bolt reaches explodes.
 

@@ -1,6 +1,6 @@
 # `sakura`
 
-![`sakura`](../media/sakura.webp)
+![`sakura`](../media/sakura.gif)
 
 A cherry tree at night, shedding blossom on a slow wind. The tree is grown from
 a seed that changes every time the pod starts, and it stands in one of three

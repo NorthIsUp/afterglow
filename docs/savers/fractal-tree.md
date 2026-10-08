@@ -1,6 +1,6 @@
 # `fractal-tree`
 
-![`fractal-tree`](../media/fractal-tree.webp)
+![`fractal-tree`](../media/fractal-tree.gif)
 
 A trunk that forks, and forks again, seven times over, each limb a little shorter than its parent, the outer twigs gathered into lobes of leaves lit from the upper left. Wind bends every limb, the tips most.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/fractal_tree.rs`](../../src/ascii_rest/fractal_tree.rs)
 
 ## `fractal-tree-wide`
 
-![`fractal-tree-wide`](../media/fractal-tree-wide.webp)
+![`fractal-tree-wide`](../media/fractal-tree-wide.gif)
 
 A grove. Upstream's tree, scaled to the panel's height, stands in the middle. Smaller trees grown from other seeds walk out either side until one stands past each edge, all on one ground line that runs edge to edge. The wind reaches each tree a moment after the one to its left, so a gust crosses the grove.
 

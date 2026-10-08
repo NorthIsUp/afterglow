@@ -1,6 +1,6 @@
 # `earthrise`
 
-![`earthrise`](../media/earthrise.webp)
+![`earthrise`](../media/earthrise.gif)
 
 The Earth coming up over the lunar horizon. The sun is low on the right, so every crater rim and boulder throws a long black shadow across the grey ground, and the same light makes a gibbous Earth with a clean line between day and night. The Earth turns, its clouds drift, it climbs very slowly, and a few bright stars breathe.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/earthrise.rs`](../../src/ascii_rest/earthrise.rs).
 
 ## `earthrise-wide`
 
-![`earthrise-wide`](../media/earthrise-wide.webp)
+![`earthrise-wide`](../media/earthrise-wide.gif)
 
 More highlands and ground, two more bright stars, a longer galaxy band.
 

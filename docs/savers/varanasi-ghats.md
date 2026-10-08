@@ -1,6 +1,6 @@
 # `varanasi-ghats`
 
-![`varanasi-ghats`](../media/varanasi-ghats.webp)
+![`varanasi-ghats`](../media/varanasi-ghats.gif)
 
 Dusk on the Ganga. Stepped ghats run along the bank and away toward the afterglow, temple spires black against an indigo to amber sky. Priests raise the aarti lamps on the steps, diyas drift downstream on the dark water, and a boatman rows slowly across the bright reach.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/varanasi_ghats.rs`](../../src/ascii_rest/varanasi_ghats
 
 ## `varanasi-ghats-wide`
 
-![`varanasi-ghats-wide`](../media/varanasi-ghats-wide.webp)
+![`varanasi-ghats-wide`](../media/varanasi-ghats-wide.gif)
 
 Longer ghats with more spires and priests, and a broad reach past the glow.
 

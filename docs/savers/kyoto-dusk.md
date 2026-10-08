@@ -1,6 +1,6 @@
 # `kyoto-dusk`
 
-![`kyoto-dusk`](../media/kyoto-dusk.webp)
+![`kyoto-dusk`](../media/kyoto-dusk.gif)
 
 A five-storey pagoda dark against an indigo to rose sky with a thin crescent moon, a temple pond holding its reflection, and in front a cherry tree in full bloom lit from below by a stone lantern. Petals fall and drift through the frame, the lantern flickers, the pond shivers.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/kyoto_dusk.rs`](../../src/ascii_rest/kyoto_dusk.rs).
 
 ## `kyoto-dusk-wide`
 
-![`kyoto-dusk-wide`](../media/kyoto-dusk-wide.webp)
+![`kyoto-dusk-wide`](../media/kyoto-dusk-wide.gif)
 
 A temple hall beside the pagoda, hills rising further east.
 

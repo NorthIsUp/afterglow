@@ -1,6 +1,6 @@
 # `lighthouse`
 
-![`lighthouse`](../media/lighthouse.webp)
+![`lighthouse`](../media/lighthouse.gif)
 
 A banded lighthouse on a heap of rocks at night. Its beam turns round the lantern, long when it crosses the frame and a flash when it faces us, lighting the haze and the waves beneath; surf bursts on the rocks.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/lighthouse.rs`](../../src/ascii_rest/lighthouse.rs).
 
 ## `lighthouse-wide`
 
-![`lighthouse-wide`](../media/lighthouse-wide.webp)
+![`lighthouse-wide`](../media/lighthouse-wide.gif)
 
 The same night scaled to the panel's height, with the tower centred. The sea, the horizon and the sky run out to both edges, and the beam reaches far enough to sweep across the whole width and light the waves under it.
 

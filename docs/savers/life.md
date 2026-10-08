@@ -1,6 +1,6 @@
 # `life`
 
-![`life`](../media/life.webp)
+![`life`](../media/life.gif)
 
 Conway's Game of Life on a toroidal board, cells coloured by age — white-hot at birth, cooling to blue — with a fading ash trail. A churn-triggered "meteor" of fresh soup keeps it from settling into still lifes.
 

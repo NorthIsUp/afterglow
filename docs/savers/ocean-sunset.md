@@ -1,6 +1,6 @@
 # `ocean-sunset`
 
-![`ocean-sunset`](../media/ocean-sunset.webp)
+![`ocean-sunset`](../media/ocean-sunset.gif)
 
 Golden hour at sea. The sun rests on the horizon beyond a dark pine headland, heaped cloud overhead lit from below, a glitter path running across the water toward us, and long swells rolling in, their crests catching the light.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/ocean_sunset.rs`](../../src/ascii_rest/ocean_sunset.rs)
 
 ## `ocean-sunset-wide`
 
-![`ocean-sunset-wide`](../media/ocean-sunset-wide.webp)
+![`ocean-sunset-wide`](../media/ocean-sunset-wide.gif)
 
 A larger headland, a wider sea and a far island beyond the sun.
 

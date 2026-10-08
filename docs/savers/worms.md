@@ -1,6 +1,6 @@
 # `worms`
 
-![`worms`](../media/worms.webp)
+![`worms`](../media/worms.gif)
 
 Segmented crawlers wandering a toroidal grid, head bright, body trailing behind
 it in alternating light and dark bands. Each worm turns by a damped random walk

@@ -1,6 +1,6 @@
 # `hypercube`
 
-![`hypercube`](../media/hypercube.webp)
+![`hypercube`](../media/hypercube.gif)
 
 A rotating, inverting tesseract wireframe. The 4D perspective divide renders the
 tesseract's two cubes as one cube inside another, and any rotation that touches

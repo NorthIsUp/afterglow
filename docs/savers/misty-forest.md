@@ -1,6 +1,6 @@
 # `misty-forest`
 
-![`misty-forest`](../media/misty-forest.webp)
+![`misty-forest`](../media/misty-forest.gif)
 
 Morning in a pine forest. Ridge after ridge of pines recedes into fog, each paler than the one in front, with mist lying in sheets in the valleys between them. A low sun sits behind the farthest trees and sends beams slanting down through the fog to a clearing on the forest floor. The fog drifts, the beams shimmer, and motes of dust float in the light.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/misty_forest.rs`](../../src/ascii_rest/misty_forest.rs)
 
 ## `misty-forest-wide`
 
-![`misty-forest-wide`](../media/misty-forest-wide.webp)
+![`misty-forest-wide`](../media/misty-forest-wide.gif)
 
 The ridges and fog run on west; a young pine between the two framing giants.
 

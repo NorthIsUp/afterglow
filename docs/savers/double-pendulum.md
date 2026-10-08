@@ -1,6 +1,6 @@
 # `double-pendulum`
 
-![`double-pendulum`](../media/double-pendulum.webp)
+![`double-pendulum`](../media/double-pendulum.gif)
 
 Two equal rods hung end to end from one pivot, stepped with RK4. Chaotic, so it never repeats; the lower bob leaves a fading trail.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/double_pendulum.rs`](../../src/ascii_rest/double_pendul
 
 ## `double-pendulum-wide`
 
-![`double-pendulum-wide`](../media/double-pendulum-wide.webp)
+![`double-pendulum-wide`](../media/double-pendulum-wide.gif)
 
 As many pendulums as fit side by side, each scaled to the panel's height: three on pine, two at 16:9. Each is let go from a slightly different angle, so they start out nearly in step and soon have nothing in common.
 

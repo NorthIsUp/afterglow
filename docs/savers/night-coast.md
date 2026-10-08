@@ -1,6 +1,6 @@
 # `night-coast`
 
-![`night-coast`](../media/night-coast.webp)
+![`night-coast`](../media/night-coast.gif)
 
 A lighthouse on a wooded headland under moonlit clouds. The beam turns every eight seconds, the clouds drift, and the sea carries the moon's road and the lamp's reflection.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/night_coast.rs`](../../src/ascii_rest/night_coast.rs).
 
 ## `night-coast-wide`
 
-![`night-coast-wide`](../media/night-coast-wide.webp)
+![`night-coast-wide`](../media/night-coast-wide.gif)
 
 A wider sea out to a low far shore with two hummocks; the beam reaches further.
 

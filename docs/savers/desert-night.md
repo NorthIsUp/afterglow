@@ -1,6 +1,6 @@
 # `desert-night`
 
-![`desert-night`](../media/desert-night.webp)
+![`desert-night`](../media/desert-night.gif)
 
 A moonless desert under the milky way. The galaxy's bright core sits low over a lone acacia on a dune crest and arches up across the sky, split by its dark dust lane; a distant town warms the far horizon and catches the dunes' faces. Stars twinkle, sand glints along the ridges, and now and then a meteor crosses.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/desert_night.rs`](../../src/ascii_rest/desert_night.rs)
 
 ## `desert-night-wide`
 
-![`desert-night-wide`](../media/desert-night-wide.webp)
+![`desert-night-wide`](../media/desert-night-wide.gif)
 
 A wider dune field; the milky way's arch spans the whole sky.
 

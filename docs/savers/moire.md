@@ -1,6 +1,6 @@
 # `moire`
 
-![`moire`](../media/moire.webp)
+![`moire`](../media/moire.gif)
 
 Moire interference from overlapping line families. Two gratings — straight,
 concentric or radial — drift and rotate against each other, and what you are

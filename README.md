@@ -1,11 +1,10 @@
 # afterglow — HDMI screensavers on whichever Pi5 holds the monitor
 
-![Two seconds of every saver, with a channel change between each](docs/media/tour.webp)
+![Two seconds of every saver, with a channel change between each](docs/media/tour.gif)
 
 Every saver has a clip on its page, rendered as pine's 3.2:1 glass shows it.
 `mise run media` regenerates them all and the tour from a release build
-([`tools/media.py`](tools/media.py)); [docs/formats.md](docs/formats.md)
-compares WebP, GIF, APNG and AVIF on the same clips.
+([`tools/media.py`](tools/media.py)); they are GIFs in Git LFS.
 
 A deliberately thin workload that paints an animation onto the HDMI display of
 the Talos Pi5 carrying the `hardware.homelab/display: "true"` label. Renderer:

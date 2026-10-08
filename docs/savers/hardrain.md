@@ -1,6 +1,6 @@
 # `hardrain`
 
-![`hardrain`](../media/hardrain.webp)
+![`hardrain`](../media/hardrain.gif)
 
 A downpour: steeply slanted streaks under a gusting wind, a mist the sky is veiled in, squalls sweeping across, and standing water at the bottom that ripples where the rain lands. The storm to `rain`'s drizzle.
 

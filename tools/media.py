@@ -1,14 +1,12 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["numpy", "pillow>=11.3"]
+# dependencies = ["numpy", "pillow"]
 # ///
-"""Render every saver to docs/media/<name>.webp, plus docs/media/tour.webp.
+"""Render every saver to docs/media/<name>.gif, plus docs/media/tour.gif.
 
-Run as `mise run media [--compare] [savers...]`. Frames come from dump mode at
+Run as `mise run media [savers...]`. Frames come from dump mode at
 1920x1080 with SAVER_PIXEL_ASPECT=180, resampled to the 3.2:1 shape pine's glass
 shows. SAVER_HTTP=off: nothing binds a port, and the dump runs unpaced.
-`--compare` also writes docs/media/formats/: the tour and two clips as WebP,
-GIF (gifski), APNG and AVIF, from identical frames.
 """
 
 import os
@@ -18,7 +16,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,8 +49,6 @@ WARMUP = {
     "fractal-tree-wide": 4,
 }
 DEFAULT_WARMUP = 2
-# Every cell changes every frame; a shorter loop beats a muddier one.
-CLIP = {"ascii": 2}
 
 
 def savers() -> list[str]:
@@ -78,7 +73,7 @@ def capture(binary: Path, name: str, scratch: Path) -> list[np.ndarray]:
         "SAVER": name,
         "SAVER_HTTP": "off",
         "SAVER_DUMP": str(dump),
-        "SAVER_DUMP_FRAMES": str((warm + CLIP.get(name, CLIP_SECS)) * DUMP_FPS),
+        "SAVER_DUMP_FRAMES": str((warm + CLIP_SECS) * DUMP_FPS),
         "SAVER_DUMP_EVERY": str(every),
         "SAVER_FPS": str(DUMP_FPS),
         "SAVER_PIXEL_ASPECT": "180",
@@ -97,69 +92,31 @@ def capture(binary: Path, name: str, scratch: Path) -> list[np.ndarray]:
     return frames
 
 
-def pngs(frames: list[np.ndarray], d: str) -> list[str]:
-    paths = []
-    for i, f in enumerate(frames):
-        paths.append(str(Path(d) / f"{i:05}.png"))
-        Image.fromarray(f).save(paths[-1])
-    return paths
+# gifski (quality, lossy): the best that fits the budget wins.
+GIF_LADDER = [(90, 80), (70, 55), (50, 40), (40, 25)]
 
 
-# Lossless first so the glyphs stay crisp; each later rung only if the one
-# before it is over budget.
-WEBP_LADDER = [
-    ["-lossless"],
-    ["-near_lossless", "40"],
-    ["-mixed", "-q", "90"],
-    ["-mixed", "-q", "70"],
-    ["-lossy", "-q", "50"],
-    ["-lossy", "-q", "30"],
-]
-
-
-def webp(frames: list[np.ndarray], out: Path, budget: float = CLIP_BUDGET) -> str:
+def gif(frames: list[np.ndarray], out: Path, budget: float = CLIP_BUDGET) -> str:
     with tempfile.TemporaryDirectory() as d:
-        paths = pngs(frames, d)
-        for rung in WEBP_LADDER:
-            subprocess.run(["img2webp", "-loop", "0", "-d", str(1000 // FPS), *rung, *paths,
-                            "-o", str(out)], check=True, capture_output=True)
+        paths = []
+        for i, f in enumerate(frames):
+            paths.append(str(Path(d) / f"{i:05}.png"))
+            Image.fromarray(f).save(paths[-1])
+        for q, lossy in GIF_LADDER:
+            subprocess.run(
+                ["gifski", "--quiet", "--fps", str(FPS), "--quality", str(q),
+                 "--lossy-quality", str(lossy), "--motion-quality", str(lossy),
+                 "-o", str(out), *paths],
+                check=True,
+            )
             if out.stat().st_size <= budget:
                 break
-    return " ".join(rung)
-
-
-def apng(frames: list[np.ndarray], out: Path) -> None:
-    ims = [Image.fromarray(f) for f in frames]
-    ims[0].save(out, format="PNG", save_all=True, append_images=ims[1:],
-                duration=1000 // FPS, loop=0, optimize=True)
-
-
-def avif(frames: list[np.ndarray], out: Path) -> None:
-    ims = [Image.fromarray(f) for f in frames]
-    ims[0].save(out, save_all=True, append_images=ims[1:], duration=1000 // FPS,
-                loop=0, quality=80, speed=4)
-
-
-def gif(frames: list[np.ndarray], out: Path) -> None:
-    with tempfile.TemporaryDirectory() as d:
-        paths = pngs(frames, d)
-        subprocess.run(["gifski", "--quiet", "--fps", str(FPS), "--quality", "70",
-                        "--lossy-quality", "55", "--motion-quality", "55",
-                        "-o", str(out), *paths], check=True)
-
-
-FORMATS: dict[str, tuple[str, Callable[[list[np.ndarray], Path], object]]] = {
-    "webp": ("webp", webp),
-    "gif": ("gif", gif),
-    "apng": ("png", apng),
-    "avif": ("avif", avif),
-}
-COMPARE = ["night-coast-wide", "vinyl-wide"]
+    return f"quality {q} lossy {lossy}"
 
 
 def static(n: int, size: tuple[int, int], rng: np.random.Generator) -> list[np.ndarray]:
     """Channel-change snow: coarse grey noise, a flash going in, a rolling hum
-    bar, torn scanlines. Drawn at half resolution so the encoders have runs."""
+    bar, torn scanlines. Drawn at half resolution so LZW has runs to eat."""
     w, h = size[0] // 2, size[1] // 2
     out = []
     for i in range(n):
@@ -179,7 +136,6 @@ def static(n: int, size: tuple[int, int], rng: np.random.Generator) -> list[np.n
 @dataclass
 class Args:
     names: list[str]
-    compare: bool
     jobs: int
     bin: Path
     out: Path
@@ -194,7 +150,6 @@ def main() -> int:
     names = shlex.split(os.environ.get("usage_savers", ""))
     args = Args(
         names=names,
-        compare=os.environ.get("usage_compare") == "true",
         jobs=max(1, (os.cpu_count() or 2) // 2),
         bin=ROOT / "target/release/screensaver",
         out=ROOT / "docs/media",
@@ -214,16 +169,15 @@ def main() -> int:
 
         def one(name: str) -> None:
             frames = capture(args.bin, name, Path(scratch))
-            mode = webp(frames, args.out / f"{name}.webp")
-            if name in tour or name in COMPARE:
+            mode = gif(frames, args.out / f"{name}.gif")
+            if name in tour:
                 clips[name] = frames
-            print(f"{name:26} {mb(args.out / f'{name}.webp')}  {mode}", flush=True)
+            print(f"{name:26} {mb(args.out / f'{name}.gif')}  {mode}", flush=True)
 
         with ThreadPoolExecutor(args.jobs) as pool:
             for f in [pool.submit(one, n) for n in want]:
                 f.result()
 
-    movies: dict[str, list[np.ndarray]] = {}
     if tour:
         rng = np.random.default_rng(1)
         frames: list[np.ndarray] = []
@@ -233,24 +187,9 @@ def main() -> int:
                 np.asarray(Image.fromarray(f).resize(TOUR_SIZE, Image.LANCZOS))
                 for f in clips[name][: TOUR_SECS * FPS]
             ]
-        mode = webp(frames, args.out / "tour.webp", TOUR_BUDGET)
+        mode = gif(frames, args.out / "tour.gif", TOUR_BUDGET)
         print(f"tour: {len(tour)} savers, {len(frames) / FPS:.0f} s, "
-              f"{mb(args.out / 'tour.webp')}  {mode}")
-        movies["tour"] = frames
-
-    if args.compare:
-        movies |= {n: clips[n] for n in COMPARE if n in clips}
-        cmp = args.out / "formats"
-        cmp.mkdir(exist_ok=True)
-        jobs = [(n, fmt) for n in movies for fmt in FORMATS]
-        with ThreadPoolExecutor(args.jobs) as pool:
-            def enc(job: tuple[str, str]) -> None:
-                n, fmt = job
-                ext, fn = FORMATS[fmt]
-                out = cmp / f"{n}.{fmt}.{ext}" if fmt == "apng" else cmp / f"{n}.{ext}"
-                fn(movies[n], out)
-                print(f"compare {n:18} {fmt:5} {mb(out)}", flush=True)
-            list(pool.map(enc, jobs))
+              f"{mb(args.out / 'tour.gif')}  {mode}")
     return 0
 
 

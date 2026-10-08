@@ -1,6 +1,6 @@
 # `deep-reef`
 
-![`deep-reef`](../media/deep-reef.webp)
+![`deep-reef`](../media/deep-reef.gif)
 
 Looking along a coral reef from a few metres down. The sun is a bright blaze in the rippled surface, shafts of light fan down from it, kelp sways in the swell, a school of fish wheels through the dark water, bubbles rise and caustics crawl over the sand.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/deep_reef.rs`](../../src/ascii_rest/deep_reef.rs).
 
 ## `deep-reef-wide`
 
-![`deep-reef-wide`](../media/deep-reef-wide.webp)
+![`deep-reef-wide`](../media/deep-reef-wide.gif)
 
 Broader reefs and sand, two more bommies, a hazy third kelp.
 

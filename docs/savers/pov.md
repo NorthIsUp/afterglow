@@ -1,6 +1,6 @@
 # `pov`
 
-![`pov`](../media/pov.webp)
+![`pov`](../media/pov.gif)
 
 Points of View — a rotating platonic solid drawn as a grid of dots on its own surface, changing to the next of the five every ten seconds in a burst that throws the points outward and lands them on the new shape with an overshoot.
 

@@ -1,6 +1,6 @@
 # `marine-drive`
 
-![`marine-drive`](../media/marine-drive.webp)
+![`marine-drive`](../media/marine-drive.gif)
 
 The Queen's Necklace seen from Malabar Hill at night. A string of sodium lamps sweeps round the bay to the towers at Nariman Point, cars trail light along the road beneath them, and the bay carries their long wavering reflections. Ships ride at anchor on the horizon.
 
@@ -10,7 +10,7 @@ Source: [`src/ascii_rest/marine_drive.rs`](../../src/ascii_rest/marine_drive.rs)
 
 ## `marine-drive-wide`
 
-![`marine-drive-wide`](../media/marine-drive-wide.webp)
+![`marine-drive-wide`](../media/marine-drive-wide.gif)
 
 A longer necklace and skyline, a liner and a fishing boat past the point.
 

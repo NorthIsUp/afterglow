@@ -1,6 +1,6 @@
 # `plasma`
 
-![`plasma`](../media/plasma.webp)
+![`plasma`](../media/plasma.gif)
 
 The demo-scene plasma, full screen: four sine fields summed into soft blobs of density, drawn with ascii.rest's ramp `.,-~:;=+*#%@` at the panel's own resolution, any size or shape. Colour is a second, slower field sweeping a deep blue → violet → magenta → coral → orange → gold → mint → sky wheel across the panel, so the blobs swim through bands of hue; brightness follows density, so the cores glow. Loops every 30 s.
 

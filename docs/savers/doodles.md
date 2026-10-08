@@ -1,6 +1,6 @@
 # `doodles`
 
-![`doodles`](../media/doodles.webp)
+![`doodles`](../media/doodles.gif)
 
 After Dark's scribbler: pens wander the panel leaving one continuous freehand line each, looping back over themselves until the sheet is full, then it fades and a new one starts. Each pen's hue sweeps across the life of a doodle, so the scribble shows its own history.
 

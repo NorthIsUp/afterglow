@@ -1,6 +1,6 @@
 # `city`
 
-![`city`](../media/city.webp)
+![`city`](../media/city.gif)
 
 The After Dark night skyline — lit windows on a black silhouette, scattered stars, a beacon on the tallest tower and the odd shooting star.
 
