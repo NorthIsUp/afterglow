@@ -72,8 +72,7 @@ macro_rules! each_piece {
             synthwave::{Synthwave},
             taj_dawn::{TajDawn, #[no_upstream] TajDawnWide},
             tv_static::{TvStatic},
-            varanasi_ghats::{VaranasiGhats},
-            varanasi_ghats_wide::{#[no_upstream] VaranasiGhatsWide},
+            varanasi_ghats::{VaranasiGhats, #[no_upstream] VaranasiGhatsWide},
             vinyl::{Vinyl},
         }
     };

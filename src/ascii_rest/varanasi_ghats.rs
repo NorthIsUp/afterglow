@@ -5,6 +5,10 @@
 //!
 //! Its tail is its own: the dot's colour lift is capped per step and stars take
 //! the last palette entry directly, so the nearest-colour search skips it.
+//!
+//! `varanasi-ghats-wide` is the same evening on a 3.2:1 canvas: the ghats run a
+//! third further before they meet the far bank, and a broad reach of river
+//! opens beyond the glow.
 
 use std::f64::consts::PI;
 
@@ -14,13 +18,9 @@ use super::{Fit, Piece, hex};
 use crate::font;
 use crate::grid::Cell;
 
-const W: usize = 200;
 const H: usize = 100;
-const WF: f64 = W as f64;
 const HF: f64 = H as f64;
 const HZ: f64 = 60.0; // the far bank
-const END: f64 = 150.0; // where the ghats meet the far bank
-const GLOW: [f64; 2] = [156.0, HZ - 1.5]; // the afterglow, sitting on the far bank
 /// How far a dot's colour may be brightened to make up for its size: small
 /// dots in dark areas stay dark instead of turning into a pale speckle.
 const LIFT: [f64; 4] = [0.0, 2.5, 1.7, 1.35];
@@ -60,56 +60,9 @@ const RAMP: [[f64; 4]; 12] = [
 ];
 const RL: usize = 256;
 
-/// Temple spires: [centre x, height in rows, half width at the base].
-const SPIRES: [[f64; 3]; 6] = [
-    [118.0, 33.0, 5.2],
-    [64.0, 19.0, 4.0],
-    [31.0, 15.0, 3.6],
-    [139.0, 8.0, 1.6],
-    [90.0, 11.0, 2.4],
-    [129.0, 10.0, 2.0],
-];
-/// Aarti stations on the near ghat, unevenly spaced: [x, streak width, streak length].
-const AARTI: [[f64; 3]; 4] = [
-    [11.0, 1.15, 1.25],
-    [24.0, 0.8, 0.85],
-    [39.0, 1.25, 1.1],
-    [54.0, 0.75, 0.75],
-];
-/// Umbrellas on the far steps.
-const UMBS: [f64; 4] = [70.0, 83.0, 98.0, 109.0];
-
 /// The heat ramp's index for heat `h`.
 fn ramp_at(h: f64) -> usize {
     (clamp(h) * RL as f64 + 0.5) as usize * 3
-}
-
-/// The waterline along the ghats, near at the left and running away to the right.
-fn wl_f(x: f64) -> f64 {
-    if x < END {
-        HZ + 0.5 + 20.0 * (1.0 - x / END).powf(1.6)
-    } else {
-        HZ + 0.5
-    }
-}
-
-fn sc_f(x: f64) -> f64 {
-    0.45 + 1.75 * (1.0 - x / END).max(0.0).powf(1.3)
-}
-
-fn step_top_f(x: f64) -> f64 {
-    wl_f(x) - 9.5 * sc_f(x) * (0.3 + 0.7 * smooth(END, END - 16.0, x))
-}
-
-/// The dusk sky's heat: low overhead, rising toward the horizon, hottest at the glow.
-fn sky_heat(x: f64, y: f64) -> f64 {
-    let v = clamp(y / HZ);
-    let dx = (x - GLOW[0]).abs();
-    let dy = (GLOW[1] - y).abs();
-    // a wide warm band along the horizon, and a small hot core on the bank
-    let wide = 0.46 * (-dx / 55.0 - dy / 23.0).exp();
-    let core = 0.24 * (-((dx / 13.0).powi(2) + (dy / 4.5).powi(2)).sqrt()).exp();
-    0.06 + 0.42 * v * v + wide + core
 }
 
 /// Stretched, warped noise, gathered into three loose bands of cloud.
@@ -150,7 +103,103 @@ fn boat_at(lx: f64, ly: f64) -> f64 {
     0.0
 }
 
-pub struct VaranasiGhats {
+/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+struct Layout {
+    name: &'static str,
+    w: usize,
+    /// Where the ghats meet the far bank.
+    end: f64,
+    /// The afterglow, sitting on the far bank.
+    glow: [f64; 2],
+    /// Temple spires: [centre x, height in rows, half width at the base].
+    spires: &'static [[f64; 3]],
+    /// Aarti stations on the near ghat, unevenly spaced: [x, streak width, streak
+    /// length].
+    aarti: &'static [[f64; 3]],
+    /// Umbrellas on the far steps.
+    umbs: &'static [f64],
+    /// Where the buildings start to sit lower.
+    low_from: f64,
+    /// Where the far bank's tree clumps rise in.
+    clumps: [f64; 2],
+    /// The diyas on the steps: the column they stop at, and where they gather
+    /// [centre, spread].
+    step_lamps: (usize, [f64; 2]),
+    /// Where the electric lamps along the far ghats start.
+    lamps_from: f64,
+    /// The floating diyas: how many, and the span they wrap over.
+    diyas: (usize, f64),
+    /// The cloud's drift at t = 0: the long streaks start over the glow.
+    drift: f64,
+    /// Where the boatman starts, and the span he wraps over.
+    boat: [f64; 2],
+}
+
+const ORIGINAL: Layout = Layout {
+    name: "varanasi-ghats",
+    w: 200,
+    end: 150.0,
+    glow: [156.0, HZ - 1.5],
+    spires: &[
+        [118.0, 33.0, 5.2],
+        [64.0, 19.0, 4.0],
+        [31.0, 15.0, 3.6],
+        [139.0, 8.0, 1.6],
+        [90.0, 11.0, 2.4],
+        [129.0, 10.0, 2.0],
+    ],
+    aarti: &[
+        [11.0, 1.15, 1.25],
+        [24.0, 0.8, 0.85],
+        [39.0, 1.25, 1.1],
+        [54.0, 0.75, 0.75],
+    ],
+    umbs: &[70.0, 83.0, 98.0, 109.0],
+    low_from: 110.0,
+    clumps: [160.0, 172.0],
+    step_lamps: (118, [33.0, 36.0]),
+    lamps_from: 58.0,
+    diyas: (34, 260.0),
+    drift: 720.0,
+    boat: [159.0, 250.0],
+};
+
+const WIDE: Layout = Layout {
+    name: "varanasi-ghats-wide",
+    w: 320,
+    end: 200.0,
+    glow: [206.0, HZ - 1.5],
+    spires: &[
+        [157.0, 33.0, 5.2],
+        [85.0, 19.0, 4.0],
+        [41.0, 15.0, 3.6],
+        [185.0, 8.0, 1.6],
+        [120.0, 11.0, 2.4],
+        [172.0, 10.0, 2.0],
+        [104.0, 14.0, 2.8],
+        [62.0, 10.0, 2.6],
+    ],
+    aarti: &[
+        [11.0, 1.15, 1.25],
+        [25.0, 0.8, 0.85],
+        [42.0, 1.25, 1.1],
+        [58.0, 0.75, 0.75],
+        [73.0, 0.9, 0.8],
+    ],
+    umbs: &[93.0, 111.0, 131.0, 145.0, 162.0, 176.0],
+    low_from: 147.0,
+    clumps: [210.0, 222.0],
+    step_lamps: (157, [44.0, 48.0]),
+    lamps_from: 77.0,
+    diyas: (52, 380.0),
+    drift: 670.0,
+    boat: [209.0, 370.0],
+};
+
+pub type VaranasiGhats = Scene<false>;
+pub type VaranasiGhatsWide = Scene<true>;
+
+pub struct Scene<const IS_WIDE: bool> {
     dots: Dots,
     rt: Vec<f32>,
     mat: Vec<u8>,
@@ -166,7 +215,7 @@ pub struct VaranasiGhats {
     mir_k: Vec<i32>,
     cover: Vec<f32>,
     clit: Vec<f32>,
-    diyas: [[f64; 4]; 34],
+    diyas: Vec<[f64; 4]>,
     dynl: [Vec<f32>; 3],
     /// Warm light to be reflected.
     dref: Vec<f32>,
@@ -174,83 +223,117 @@ pub struct VaranasiGhats {
     arm: Vec<u8>,
 }
 
-/// A lamp: a white-hot heart inside an orange halo; the priests are not lit.
-fn add_glow(
-    dynl: &mut [Vec<f32>; 3],
-    mat: &[u8],
-    fx: f64,
-    fy: f64,
-    core: f64,
-    halo: f64,
-    amp: f64,
-) {
-    let rr = (halo * 3.2).ceil();
-    let mut r = (fy - rr).floor().max(0.0);
-    while r < HF.min(fy + rr) {
-        let mut x = (fx - rr).floor().max(0.0);
-        while x < WF.min(fx + rr) {
-            let k = r as usize * W + x as usize;
-            let dx = x + 0.5 - fx;
-            let dy = (r + 0.5 - fy) * 0.85;
-            let d = (dx * dx + dy * dy).sqrt();
-            let am = if mat[k] == FIG { amp * 0.15 } else { amp };
-            let c = (-(d / core).powi(2)).exp() * 1.6 * am;
-            let v = (-d / halo).exp() * 0.35 * am;
-            dynl[0][k] = (f64::from(dynl[0][k]) + (c + v * FLAME[0])) as f32;
-            dynl[1][k] = (f64::from(dynl[1][k]) + (c * 0.86 + v * FLAME[1])) as f32;
-            dynl[2][k] = (f64::from(dynl[2][k]) + (c * 0.55 + v * FLAME[2])) as f32;
-            x += 1.0;
-        }
-        r += 1.0;
-    }
-}
+impl<const IS_WIDE: bool> Scene<IS_WIDE> {
+    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
+    const W: usize = Self::L.w;
+    const WF: f64 = Self::W as f64;
 
-/// The lamps' wide warm wash on the stone, by how much each surface takes it.
-fn add_wash(dynl: &mut [Vec<f32>; 3], alb: &[f32], fx: f64, fy: f64, halo: f64, amp: f64) {
-    let rr = (halo * 2.6).ceil();
-    let mut r = (fy - rr).floor().max(0.0);
-    while r < HF.min(fy + rr) {
-        let mut x = (fx - rr).floor().max(0.0);
-        while x < WF.min(fx + rr) {
-            let k = r as usize * W + x as usize;
-            let a = f64::from(alb[k]);
-            if a != 0.0 {
-                let (dx, dy) = (x + 0.5 - fx, r + 0.5 - fy);
-                let v = (-(dx * dx + dy * dy).sqrt() / halo).exp() * amp * a;
-                for c in 0..3 {
-                    dynl[c][k] = (f64::from(dynl[c][k]) + v * WASH[c]) as f32;
+    /// The waterline along the ghats, near at the left and running away to the right.
+    fn wl_f(x: f64) -> f64 {
+        if x < Self::L.end {
+            HZ + 0.5 + 20.0 * (1.0 - x / Self::L.end).powf(1.6)
+        } else {
+            HZ + 0.5
+        }
+    }
+
+    fn sc_f(x: f64) -> f64 {
+        0.45 + 1.75 * (1.0 - x / Self::L.end).max(0.0).powf(1.3)
+    }
+
+    fn step_top_f(x: f64) -> f64 {
+        Self::wl_f(x) - 9.5 * Self::sc_f(x) * (0.3 + 0.7 * smooth(Self::L.end, Self::L.end - 16.0, x))
+    }
+
+    /// The dusk sky's heat: low overhead, rising toward the horizon, hottest at the glow.
+    fn sky_heat(x: f64, y: f64) -> f64 {
+        let v = clamp(y / HZ);
+        let dx = (x - Self::L.glow[0]).abs();
+        let dy = (Self::L.glow[1] - y).abs();
+        // a wide warm band along the horizon, and a small hot core on the bank
+        let wide = 0.46 * (-dx / 55.0 - dy / 23.0).exp();
+        let core = 0.24 * (-((dx / 13.0).powi(2) + (dy / 4.5).powi(2)).sqrt()).exp();
+        0.06 + 0.42 * v * v + wide + core
+    }
+
+    /// A lamp: a white-hot heart inside an orange halo; the priests are not lit.
+    fn add_glow(
+        dynl: &mut [Vec<f32>; 3],
+        mat: &[u8],
+        fx: f64,
+        fy: f64,
+        core: f64,
+        halo: f64,
+        amp: f64,
+    ) {
+        let rr = (halo * 3.2).ceil();
+        let mut r = (fy - rr).floor().max(0.0);
+        while r < HF.min(fy + rr) {
+            let mut x = (fx - rr).floor().max(0.0);
+            while x < Self::WF.min(fx + rr) {
+                let k = r as usize * Self::W + x as usize;
+                let dx = x + 0.5 - fx;
+                let dy = (r + 0.5 - fy) * 0.85;
+                let d = (dx * dx + dy * dy).sqrt();
+                let am = if mat[k] == FIG { amp * 0.15 } else { amp };
+                let c = (-(d / core).powi(2)).exp() * 1.6 * am;
+                let v = (-d / halo).exp() * 0.35 * am;
+                dynl[0][k] = (f64::from(dynl[0][k]) + (c + v * FLAME[0])) as f32;
+                dynl[1][k] = (f64::from(dynl[1][k]) + (c * 0.86 + v * FLAME[1])) as f32;
+                dynl[2][k] = (f64::from(dynl[2][k]) + (c * 0.55 + v * FLAME[2])) as f32;
+                x += 1.0;
+            }
+            r += 1.0;
+        }
+    }
+
+    /// The lamps' wide warm wash on the stone, by how much each surface takes it.
+    fn add_wash(dynl: &mut [Vec<f32>; 3], alb: &[f32], fx: f64, fy: f64, halo: f64, amp: f64) {
+        let rr = (halo * 2.6).ceil();
+        let mut r = (fy - rr).floor().max(0.0);
+        while r < HF.min(fy + rr) {
+            let mut x = (fx - rr).floor().max(0.0);
+            while x < Self::WF.min(fx + rr) {
+                let k = r as usize * Self::W + x as usize;
+                let a = f64::from(alb[k]);
+                if a != 0.0 {
+                    let (dx, dy) = (x + 0.5 - fx, r + 0.5 - fy);
+                    let v = (-(dx * dx + dy * dy).sqrt() / halo).exp() * amp * a;
+                    for c in 0..3 {
+                        dynl[c][k] = (f64::from(dynl[c][k]) + v * WASH[c]) as f32;
+                    }
                 }
+                x += 1.0;
             }
-            x += 1.0;
+            r += 1.0;
         }
-        r += 1.0;
+    }
+
+    fn add_streak(dref: &mut [f32], mat: &[u8], fx: f64, wl: f64, width: f64, len: f64, amp: f64) {
+        let mut r = wl.floor().max(0.0);
+        while r < HF {
+            let dy = r + 0.5 - wl;
+            let a = (-dy / len).exp() * amp * smooth(-0.5, 1.0, dy);
+            if a < 0.01 {
+                break;
+            }
+            let mut x = (fx - 3.0 * width - 1.0).floor().max(0.0);
+            while x < Self::WF.min(fx + 3.0 * width + 1.0) {
+                let k = r as usize * Self::W + x as usize;
+                if mat[k] == WATER {
+                    dref[k] =
+                        (f64::from(dref[k]) + a * (-((x + 0.5 - fx) / width).powi(2)).exp()) as f32;
+                }
+                x += 1.0;
+            }
+            r += 1.0;
+        }
     }
 }
 
-fn add_streak(dref: &mut [f32], mat: &[u8], fx: f64, wl: f64, width: f64, len: f64, amp: f64) {
-    let mut r = wl.floor().max(0.0);
-    while r < HF {
-        let dy = r + 0.5 - wl;
-        let a = (-dy / len).exp() * amp * smooth(-0.5, 1.0, dy);
-        if a < 0.01 {
-            break;
-        }
-        let mut x = (fx - 3.0 * width - 1.0).floor().max(0.0);
-        while x < WF.min(fx + 3.0 * width + 1.0) {
-            let k = r as usize * W + x as usize;
-            if mat[k] == WATER {
-                dref[k] =
-                    (f64::from(dref[k]) + a * (-((x + 0.5 - fx) / width).powi(2)).exp()) as f32;
-            }
-            x += 1.0;
-        }
-        r += 1.0;
-    }
-}
-
-impl Piece for VaranasiGhats {
-    const NAME: &'static str = "varanasi-ghats";
-    const COLS: usize = W;
+impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
+    const NAME: &'static str = Self::L.name;
+    const COLS: usize = Self::W;
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
@@ -277,7 +360,7 @@ impl Piece for VaranasiGhats {
     ];
 
     fn new() -> Self {
-        let n = W * H;
+        let n = Self::W * H;
 
         // The heat ramp, tabulated.
         let mut rt = vec![0f32; (RL + 1) * 3];
@@ -300,11 +383,11 @@ impl Piece for VaranasiGhats {
         // Buildings along the ghats: [x0, x1, height above the steps in scale units, seed]
         let mut blds: Vec<[f64; 4]> = Vec::new();
         let mut x = -6.0;
-        while x < END - 10.0 {
-            let s = sc_f(f64::max(0.0, x));
+        while x < Self::L.end - 10.0 {
+            let s = Self::sc_f(f64::max(0.0, x));
             let w = (8.0 + 10.0 * hash(x, 3.0)) * s;
-            let low = (if x > 110.0 { 0.8 } else { 1.0 })
-                * (0.45 + 0.55 * smooth(END - 8.0, END - 34.0, x));
+            let low = (if x > Self::L.low_from { 0.8 } else { 1.0 })
+                * (0.45 + 0.55 * smooth(Self::L.end - 8.0, Self::L.end - 34.0, x));
             blds.push([x, x + w, (7.0 + 9.0 * hash(x, 4.0)) * low, hash(x, 5.0)]);
             x += w;
         }
@@ -318,18 +401,18 @@ impl Piece for VaranasiGhats {
         let roof_of = |x: f64| {
             for &[x0, x1, h, _] in &blds {
                 if x >= x0 && x < x1 {
-                    return step_top_f(x) - h * sc_f(x);
+                    return Self::step_top_f(x) - h * Self::sc_f(x);
                 }
             }
-            step_top_f(x)
+            Self::step_top_f(x)
         };
-        let spire_base = SPIRES.map(|[sx, _, _]| roof_of(sx) + 1.0);
+        let spire_base: Vec<f64> = Self::L.spires.iter().map(|&[sx, _, _]| roof_of(sx) + 1.0).collect();
 
         for r in 0..H {
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let (xc, y) = (xi as f64 + 0.5, r as f64 + 0.5);
-                let wl = wl_f(xc);
+                let wl = Self::wl_f(xc);
                 if y >= wl {
                     mat[k] = WATER;
                     alb[k] = 0.25;
@@ -338,18 +421,18 @@ impl Piece for VaranasiGhats {
                 let mut m = SKY;
                 let (mut cr, mut cg, mut cb) = (0.0, 0.0, 0.0);
                 let (mut fl, mut al) = (0.06, 0.0);
-                let sc = sc_f(xc);
+                let sc = Self::sc_f(xc);
 
                 // the far bank: an embankment and clumps of trees against the glow
                 let clump =
-                    smooth(0.42, 0.72, fbm(xc * 0.11, 3.0, 3, 0.0)) * smooth(160.0, 172.0, xc);
+                    smooth(0.42, 0.72, fbm(xc * 0.11, 3.0, 3, 0.0)) * smooth(Self::L.clumps[0], Self::L.clumps[1], xc);
                 let bank_top = HZ - 2.2 - 0.6 * fbm(xc * 0.4, 7.0, 2, 0.0) - 4.0 * clump;
-                if xc >= END - 4.0 && y >= bank_top {
+                if xc >= Self::L.end - 4.0 && y >= bank_top {
                     (m, cr, cg, cb, fl) = (BANK, 0.1, 0.07, 0.125, 0.03);
                 }
 
-                if xc < END {
-                    let st = step_top_f(xc);
+                if xc < Self::L.end {
+                    let st = Self::step_top_f(xc);
                     // buildings and their rooftop pavilions
                     let (mut roof, mut bi) = (st, None);
                     for (i, b) in blds.iter().enumerate() {
@@ -449,7 +532,7 @@ impl Piece for VaranasiGhats {
                 }
 
                 // spires
-                for (&[sx, sh, sw], &base) in SPIRES.iter().zip(&spire_base) {
+                for (&[sx, sh, sw], &base) in Self::L.spires.iter().zip(&spire_base) {
                     let h = base - y;
                     if h < -1.0 || h > sh + 2.5 {
                         continue;
@@ -484,9 +567,9 @@ impl Piece for VaranasiGhats {
                 }
 
                 // the big umbrellas on the far steps
-                for ux in UMBS {
-                    let (s2, wl2) = (sc_f(ux), wl_f(ux));
-                    let cy = wl2 - (wl2 - step_top_f(ux)) * 0.55;
+                for &ux in Self::L.umbs {
+                    let (s2, wl2) = (Self::sc_f(ux), Self::wl_f(ux));
+                    let cy = wl2 - (wl2 - Self::step_top_f(ux)) * 0.55;
                     let dx = (xc - ux) / (3.0 * s2);
                     let dy = (cy - y) / (1.4 * s2);
                     if dy > 0.0 && dy < 1.0 && dx.abs() < (1.0 - dy * dy).sqrt() {
@@ -501,10 +584,10 @@ impl Piece for VaranasiGhats {
                 }
 
                 // the priests on their platforms, dark against the lit steps
-                for [ax, _, _] in AARTI {
-                    let s2 = sc_f(ax);
+                for &[ax, _, _] in Self::L.aarti {
+                    let s2 = Self::sc_f(ax);
                     let u = 1.3 * s2;
-                    let base = wl_f(ax) - 2.6 * s2;
+                    let base = Self::wl_f(ax) - 2.6 * s2;
                     let dx = (xc - ax) / u;
                     let fy = (base - y) / u;
                     // a dhoti, a broad-shouldered torso, a neck and the head
@@ -531,7 +614,7 @@ impl Piece for VaranasiGhats {
                 if m == SKY {
                     let (xf, rf) = (xi as f64, r as f64);
                     let veil = 0.92 + 0.16 * fbm(xf * 0.05, rf * 0.1, 3, 0.0);
-                    let hh = sky_heat(xc, y)
+                    let hh = Self::sky_heat(xc, y)
                         + 0.05 * (fbm(xf * 0.07 + 11.0, rf * 0.16, 2, 0.0) - 0.5)
                         + 0.1 * (fbm(xf * 0.025 + 3.0, rf * 0.09 + 5.0, 3, 0.0) - 0.5);
                     warm[k] = smooth(0.3, 0.9, hh) as f32;
@@ -551,15 +634,15 @@ impl Piece for VaranasiGhats {
         // rim light: silhouette edges facing the glow, and their tops, take the sky's colour
         let mut rim = [vec![0f32; n], vec![0f32; n], vec![0f32; n]];
         for r in 1..H - 1 {
-            for x in 2..W - 2 {
-                let k = r * W + x;
+            for x in 2..Self::W - 2 {
+                let k = r * Self::W + x;
                 let m = mat[k];
                 if m == SKY || m == WATER {
                     continue;
                 }
                 // the edge facing the glow takes its orange light, the top the sky's colour
-                let toward = |o: usize| if (x as f64) < GLOW[0] { k + o } else { k - o };
-                let strong = 0.75 * (-(x as f64 - GLOW[0]).abs() / 42.0).exp();
+                let toward = |o: usize| if (x as f64) < Self::L.glow[0] { k + o } else { k - o };
+                let strong = 0.75 * (-(x as f64 - Self::L.glow[0]).abs() / 42.0).exp();
                 let mut a = 0.0;
                 if mat[toward(1)] == SKY {
                     a = strong;
@@ -571,9 +654,9 @@ impl Piece for VaranasiGhats {
                     rim[1][k] = (0.45 * a) as f32;
                     rim[2][k] = (0.26 * a) as f32;
                 }
-                if mat[k - W] == SKY {
+                if mat[k - Self::W] == SKY {
                     for c in 0..3 {
-                        rim[c][k] = (f64::from(rim[c][k]) + f64::from(s[c][k - W]) * 0.3) as f32;
+                        rim[c][k] = (f64::from(rim[c][k]) + f64::from(s[c][k - Self::W]) * 0.3) as f32;
                     }
                 }
             }
@@ -586,16 +669,17 @@ impl Piece for VaranasiGhats {
 
         // small diyas lining the steps near the aarti, twinkling
         let mut step_lamps = Vec::new();
-        for xi in 2..118 {
+        for xi in 2..Self::L.step_lamps.0 {
             let x = xi as f64;
-            let sc = sc_f(x + 0.5);
-            let mut r = step_top_f(x + 0.5).floor();
-            while r < wl_f(x + 0.5) - 1.0 {
-                let k = r as usize * W + xi;
+            let sc = Self::sc_f(x + 0.5);
+            let mut r = Self::step_top_f(x + 0.5).floor();
+            while r < Self::wl_f(x + 0.5) - 1.0 {
+                let k = r as usize * Self::W + xi;
                 if mat[k] == STEPS {
-                    let near = (-((x - 33.0) / 36.0).powi(2)).exp();
+                    let [nc, ns] = Self::L.step_lamps.1;
+                    let near = (-((x - nc) / ns).powi(2)).exp();
                     if hash(x * 3.0 + 7.0, r * 5.0) < 0.035 * near + 0.006
-                        && ((wl_f(x + 0.5) - r - 0.5) / (1.6 * sc)) % 1.0 < 0.3
+                        && ((Self::wl_f(x + 0.5) - r - 0.5) / (1.6 * sc)) % 1.0 < 0.3
                     {
                         step_lamps.push((k, hash(x, r) * 40.0));
                     }
@@ -606,18 +690,18 @@ impl Piece for VaranasiGhats {
 
         // electric lamps along the far ghats, each with its thin road on the water
         let mut sref = vec![0f32; n];
-        let mut x = 58.0;
-        while x < END - 3.0 {
-            let sc = sc_f(x);
+        let mut x = Self::L.lamps_from;
+        while x < Self::L.end - 3.0 {
+            let sc = Self::sc_f(x);
             let ly =
-                step_top_f(x) - 0.4 * sc + (wl_f(x) - step_top_f(x)) * 0.55 * hash(x, 78.0).powi(2);
+                Self::step_top_f(x) - 0.4 * sc + (Self::wl_f(x) - Self::step_top_f(x)) * 0.55 * hash(x, 78.0).powi(2);
             let halo = 1.0 + 3.2 * sc;
             let rr = (halo * 3.0).ceil();
             let mut r = (ly - rr).floor().max(0.0);
             while r < HF.min(ly + rr) {
                 let mut xx = (x - rr).floor().max(0.0);
-                while xx < WF.min(x + rr) {
-                    let k = r as usize * W + xx as usize;
+                while xx < Self::WF.min(x + rr) {
+                    let k = r as usize * Self::W + xx as usize;
                     if mat[k] != WATER && mat[k] != SKY {
                         let (dx, dy) = (xx + 0.5 - x, r + 0.5 - ly);
                         let d = (dx * dx + dy * dy).sqrt();
@@ -632,7 +716,7 @@ impl Piece for VaranasiGhats {
                 }
                 r += 1.0;
             }
-            let wl = wl_f(x);
+            let wl = Self::wl_f(x);
             let (width, len) = (0.35 + 0.35 * sc, 9.0 * sc);
             let mut r = wl.floor();
             while r < HF {
@@ -642,7 +726,7 @@ impl Piece for VaranasiGhats {
                 }
                 let mut xx = (x - 3.0).floor();
                 while xx < x + 3.0 {
-                    let k = r as usize * W + xx as usize;
+                    let k = r as usize * Self::W + xx as usize;
                     sref[k] =
                         (f64::from(sref[k]) + a * (-((xx + 0.5 - x) / width).powi(2)).exp()) as f32;
                     xx += 1.0;
@@ -656,13 +740,13 @@ impl Piece for VaranasiGhats {
         let mut refl = [vec![0f32; n], vec![0f32; n], vec![0f32; n]];
         let mut mir_k = vec![-1i32; n];
         for r in 0..H {
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 if mat[k] != WATER {
                     continue;
                 }
                 let x = xi as f64;
-                let wl = wl_f(x + 0.5);
+                let wl = Self::wl_f(x + 0.5);
                 let d = r as f64 + 0.5 - wl;
                 let (mut ar, mut ag, mut ab) = (0.0, 0.0, 0.0);
                 for o in 0..2 {
@@ -671,10 +755,10 @@ impl Piece for VaranasiGhats {
                     let q = if ym < 0.0 {
                         -1
                     } else {
-                        ym.floor() as i64 * W as i64 + xi as i64
+                        ym.floor() as i64 * Self::W as i64 + xi as i64
                     };
                     // the rippled water stretches the sky's light down toward us
-                    let sky = rgb(ramp_at(sky_heat(
+                    let sky = rgb(ramp_at(Self::sky_heat(
                         x + 0.5,
                         f64::max(0.0, wl - d * 0.36 - 1.0 - of * 0.6),
                     )));
@@ -718,17 +802,19 @@ impl Piece for VaranasiGhats {
         }
 
         // --- the floating diyas ---
-        let diyas = std::array::from_fn(|i| {
+        let diyas = (0..Self::L.diyas.0)
+            .map(|i| {
             let i = i as f64;
             let q = hash(i, 61.0);
             let y = HZ + 5.0 + 34.0 * q.powf(1.3);
             [
-                hash(i, 62.0) * 260.0 - 30.0,
+                hash(i, 62.0) * Self::L.diyas.1 - 30.0,
                 y,
                 hash(i, 63.0) * 50.0,
                 0.6 + 0.6 * hash(i, 64.0),
             ]
-        });
+        })
+            .collect();
 
         Self {
             dots: Dots::new(&Self::PALETTE[..STAR]),
@@ -759,11 +845,11 @@ impl Piece for VaranasiGhats {
 
         // aarti: each lamp is raised and turned in slow circles
         self.arm.fill(0);
-        for (i, &[ax, sw, sl]) in AARTI.iter().enumerate() {
+        for (i, &[ax, sw, sl]) in Self::L.aarti.iter().enumerate() {
             let fi = i as f64;
-            let s = sc_f(ax);
+            let s = Self::sc_f(ax);
             let u = 1.3 * s;
-            let base = wl_f(ax) - 2.6 * s;
+            let base = Self::wl_f(ax) - 2.6 * s;
             let ph = t * 1.1 + fi * 1.3;
             let fx = ax + 0.9 * u + ph.cos() * 1.1 * u;
             let fy = base - 7.2 * u + ph.sin() * 0.6 * u;
@@ -775,11 +861,11 @@ impl Piece for VaranasiGhats {
             while r <= sy0.max(fy) + 1.0 {
                 let mut x = (sx0.min(fx) - 1.0).floor();
                 while x <= sx0.max(fx) + 1.0 {
-                    if (0.0..WF).contains(&x) && (0.0..HF).contains(&r) {
+                    if (0.0..Self::WF).contains(&x) && (0.0..HF).contains(&r) {
                         let (px, py) = (x + 0.5 - sx0, r + 0.5 - sy0);
                         let q = clamp((px * ex + py * ey) / el);
                         if (px - q * ex).hypot(py - q * ey) < 0.28 * u {
-                            self.arm[r as usize * W + x as usize] = 1;
+                            self.arm[r as usize * Self::W + x as usize] = 1;
                         }
                     }
                     x += 1.0;
@@ -787,8 +873,8 @@ impl Piece for VaranasiGhats {
                 r += 1.0;
             }
             let fl = 0.85 + 0.15 * (t * 13.0 + fi * 5.0).sin() * (t * 7.3 + fi).sin();
-            add_glow(&mut self.dynl, &self.mat, fx, fy, 0.6 * u, 1.7 * u, fl);
-            add_wash(
+            Self::add_glow(&mut self.dynl, &self.mat, fx, fy, 0.6 * u, 1.7 * u, fl);
+            Self::add_wash(
                 &mut self.dynl,
                 &self.alb,
                 fx,
@@ -796,11 +882,11 @@ impl Piece for VaranasiGhats {
                 7.5 * s,
                 0.34 * fl,
             );
-            add_streak(
+            Self::add_streak(
                 &mut self.dref,
                 &self.mat,
                 fx,
-                wl_f(fx),
+                Self::wl_f(fx),
                 0.8 * s * sw,
                 15.0 * s * sl,
                 0.75 * fl,
@@ -817,13 +903,13 @@ impl Piece for VaranasiGhats {
         // diyas drifting downstream, nearer ones faster
         for &[x0, y, ph, sz] in &self.diyas {
             let near = (y - HZ) / (HF - HZ);
-            let x = ((x0 + t * (0.25 + 0.9 * near)) % 260.0 + 260.0) % 260.0 - 30.0;
-            if !(-3.0..=WF + 3.0).contains(&x) || y < wl_f(x) + 0.8 {
+            let x = ((x0 + t * (0.25 + 0.9 * near)) % Self::L.diyas.1 + Self::L.diyas.1) % Self::L.diyas.1 - 30.0;
+            if !(-3.0..=Self::WF + 3.0).contains(&x) || y < Self::wl_f(x) + 0.8 {
                 continue;
             }
             let fl = 0.8 + 0.2 * (t * 9.0 + ph).sin();
             let s = (0.35 + 0.9 * near) * sz;
-            add_glow(
+            Self::add_glow(
                 &mut self.dynl,
                 &self.mat,
                 x,
@@ -832,7 +918,7 @@ impl Piece for VaranasiGhats {
                 0.6 + 1.2 * s,
                 fl * 0.8,
             );
-            add_streak(
+            Self::add_streak(
                 &mut self.dref,
                 &self.mat,
                 x,
@@ -843,8 +929,9 @@ impl Piece for VaranasiGhats {
             );
         }
 
-        let drift = t * 0.9 + 720.0; // starts with the long streaks over the glow
-        let bx = ((159.0 - t * 0.1 + 24.0) % 250.0 + 250.0) % 250.0 - 24.0;
+        let drift = t * 0.9 + Self::L.drift; // starts with the long streaks over the glow
+        let [b0, bw] = Self::L.boat;
+        let bx = ((b0 - t * 0.1 + 24.0) % bw + bw) % bw - 24.0;
         let by = 71.0 + (t * 0.9).sin() * 0.15;
         let rt = &self.rt;
         let rgb = |i: usize| [f64::from(rt[i]), f64::from(rt[i + 1]), f64::from(rt[i + 2])];
@@ -852,9 +939,9 @@ impl Piece for VaranasiGhats {
         for r in 0..H {
             let rf = r as f64;
             let y = rf + 0.5;
-            for xi in 0..W {
+            for xi in 0..Self::W {
                 let x = xi as f64;
-                let k = r * W + xi;
+                let k = r * Self::W + xi;
                 let m = self.mat[k];
                 let mut cr = f64::from(self.s[0][k]);
                 let mut cg = f64::from(self.s[1][k]);
@@ -909,8 +996,8 @@ impl Piece for VaranasiGhats {
                     cb = 0.12 * swell;
                     let wob =
                         (noise(x * 0.04 + 7.0, y * 0.3 - t * 0.6, 0.0) - 0.5) * (1.2 + 4.0 * v);
-                    let sx = (x + wob).clamp(0.0, WF - 1.001);
-                    let i0 = r * W + sx as usize;
+                    let sx = (x + wob).clamp(0.0, Self::WF - 1.001);
+                    let i0 = r * Self::W + sx as usize;
                     let fx = sx - sx.trunc();
                     let dash = smooth(0.25, 0.75, noise(x * 0.12 + 3.0, y * 0.8 - t * 1.1, 0.0));
                     let rf_at = |a: &[f32]| {
@@ -918,7 +1005,7 @@ impl Piece for VaranasiGhats {
                         a0 + (a1 - a0) * fx
                     };
                     // broken bands, except in the bright reach under the glow
-                    let reach = (-((x + 0.5 - GLOW[0]) / 15.0).powi(2)).exp()
+                    let reach = (-((x + 0.5 - Self::L.glow[0]) / 15.0).powi(2)).exp()
                         * smooth(HZ + 2.5, HZ + 5.5, y);
                     let da = mix(0.15 + 1.1 * dash, 0.7 + 0.5 * dash, reach);
                     cr += rf_at(&self.refl[0]) * da;
@@ -938,7 +1025,7 @@ impl Piece for VaranasiGhats {
                     cb += fl * FLAME[2];
                     // a narrow road of glitter straight under the glow
                     let gw = 1.3 + (y - HZ) * 0.15;
-                    let gx = (x + 0.5 - GLOW[0]) / gw;
+                    let gx = (x + 0.5 - Self::L.glow[0]) / gw;
                     if gx > -3.0 && gx < 3.0 {
                         let road = (-gx * gx).exp() * (-(y - HZ) / 24.0).exp();
                         let rip = noise(x * 0.45 + y * 0.1 - t * 0.3, y * 1.3 - t * 1.6, 0.0);
