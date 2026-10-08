@@ -70,7 +70,7 @@ macro_rules! each_piece {
             ocean_sunset::{OceanSunset, #[no_upstream] OceanSunsetWide},
             reaction_diffusion::{ReactionDiffusion},
             storm_plains::{StormPlains, #[no_upstream] StormPlainsWide},
-            synthwave::{Synthwave},
+            synthwave::{Synthwave, #[fill] SynthwaveWide},
             taj_dawn::{TajDawn, #[no_upstream] TajDawnWide},
             tv_static::{TvStatic},
             varanasi_ghats::{VaranasiGhats, #[no_upstream] VaranasiGhatsWide},
