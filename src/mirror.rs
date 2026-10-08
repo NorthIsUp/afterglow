@@ -166,7 +166,17 @@ impl Mirror {
             selected: AtomicU64::new(0),
             rotate: AtomicU64::new(0),
             rotation: std::array::from_fn(|_| AtomicU64::new(u64::MAX)),
-            expanded: std::array::from_fn(|_| AtomicU64::new(0)),
+            expanded: std::array::from_fn(|w| {
+                AtomicU64::new(
+                    (w * 64..(w * 64 + 64).min(saver::NSAVERS))
+                        .filter(|&i| {
+                            saver::name_at(i).ends_with("-wide")
+                                && saver::twin_of(saver::name_at(i)).is_some()
+                                && saver::expanded_by_default(i)
+                        })
+                        .fold(0, |bits, i| bits | 1 << (i % 64)),
+                )
+            }),
             twins: saver::names()
                 .map(|n| {
                     saver::twin_of(n)
@@ -256,16 +266,19 @@ impl Mirror {
     }
 
     /// May rotation pick row `i` now: in rotation, and for a scene's pair,
-    /// the half its `expanded` choice names — the original until a viewer
-    /// picks the `-wide`. Allocation-free; called at the rotation boundary.
+    /// the half its `expanded` choice names — `saver::expanded_by_default`
+    /// until a viewer picks. Allocation-free; called at the rotation boundary.
+    /// Is `-wide` row `w` the half its pair shows.
+    fn pickable_half(&self, w: usize) -> bool {
+        self.expanded[w / 64].load(Ordering::Relaxed) & (1 << (w % 64)) != 0
+    }
+
     pub fn pickable(&self, i: usize) -> bool {
-        let expanded =
-            |w: usize| self.expanded[w / 64].load(Ordering::Relaxed) & (1 << (w % 64)) != 0;
         self.in_rotation(i)
             && match self.twins[i] {
                 None => true,
-                Some((_, true)) => expanded(i),
-                Some((t, false)) => !expanded(t),
+                Some((_, true)) => self.pickable_half(i),
+                Some((t, false)) => !self.pickable_half(t),
             }
     }
 
@@ -731,6 +744,19 @@ fn excluded_json(mirror: &Mirror) -> String {
     format!("[{}]", names.join(","))
 }
 
+/// The `-wide` halves whose pair is expanded: what a click on the pair's row
+/// shows and what rotation picks. Live, since a click moves it.
+fn expanded_json(mirror: &Mirror) -> String {
+    let names: Vec<String> = saver::names()
+        .enumerate()
+        .filter(|&(i, n)| {
+            n.ends_with("-wide") && mirror.twins[i].is_some() && mirror.pickable_half(i)
+        })
+        .map(|(_, n)| json_str(n))
+        .collect();
+    format!("[{}]", names.join(","))
+}
+
 /// `/meta`: the JSON cached at modeset, closed with the live values — the
 /// interval and the rotation set move between modesets, and a stale one is
 /// a page showing what the panel is not doing. None before the first
@@ -742,9 +768,10 @@ fn meta_json(mirror: &Mirror) -> Option<String> {
     }
     let _ = write!(
         meta,
-        ",\"rotate_secs\":{},\"excluded\":{}}}",
+        ",\"rotate_secs\":{},\"excluded\":{},\"expanded\":{}}}",
         mirror.rotate_secs(),
-        excluded_json(mirror)
+        excluded_json(mirror),
+        expanded_json(mirror)
     );
     Some(meta)
 }
@@ -1713,6 +1740,37 @@ mod tests {
         }
     }
 
+    /// `/meta`'s `expanded` is the Rust default until a pick moves it: every
+    /// scene starts on its `-wide`, the text pieces on their originals, and a
+    /// pick of either half sticks. Picking by index — rotation, and the
+    /// startup `SAVER` — moves nothing.
+    #[test]
+    fn scenes_start_expanded_and_a_pick_sticks() {
+        let m = Mirror::new(15);
+        scene(&m, "matrix", 2, 2, 8, 16);
+        let expanded = || {
+            let meta = meta_json(&m).unwrap();
+            let tail = meta.rsplit_once(",\"expanded\":").unwrap().1.to_string();
+            tail
+        };
+        let e = expanded();
+        assert!(e.starts_with(r#"["alpine-dawn-wide","#), "{e}");
+        assert!(
+            e.contains(r#""night-coast-wide""#) && !e.contains("vinyl"),
+            "{e}"
+        );
+        assert_eq!(e.matches("-wide").count(), 13, "{e}");
+
+        m.select_at(saver::index_of("night-coast").unwrap());
+        assert!(expanded().contains(r#""night-coast-wide""#));
+        assert!(m.select("night-coast"));
+        assert!(!expanded().contains("night-coast"));
+        assert!(m.select("vinyl-wide"));
+        assert!(expanded().contains(r#""vinyl-wide""#));
+        assert!(m.select("night-coast-wide"));
+        assert!(expanded().contains(r#""night-coast-wide""#));
+    }
+
     #[test]
     fn meta_lists_groups_twins_and_the_rotation() {
         let m = Mirror::new(15);
@@ -1805,7 +1863,7 @@ mod tests {
         assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
         assert!(body.contains(r#"{"saver":"dvd","#), "{body}");
         assert!(body.contains(r#""epoch":2,"#), "{body}");
-        assert!(body.contains(r#""rotate_secs":0,"excluded":[]}"#));
+        assert!(body.contains(r#""rotate_secs":0,"excluded":[],"expanded":["#));
     }
 
     /// No render loop (a node with no monitor): `/select` still answers, after
