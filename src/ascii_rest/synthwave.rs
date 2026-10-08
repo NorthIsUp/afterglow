@@ -396,9 +396,6 @@ impl Scene {
 /// past this a tall panel's sun scales with the width instead.
 const SUN_WIDE: f64 = 1.3;
 
-/// Upstream's one ink.
-const INK: u32 = hex("#ff4fb8");
-
 pub struct Synthwave(Scene);
 
 impl Canvas for Synthwave {
@@ -408,29 +405,14 @@ impl Canvas for Synthwave {
     #[cfg(test)]
     const ROWS: usize = Layout::ORIGINAL.rows;
     const FPS: u32 = 20;
-    #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("SYNTHWAVE_COLOR", "0")];
+    const COLOR: &'static str = "SYNTHWAVE_COLOR";
+    const PALETTE: &'static [u32] = PALETTE;
+    const INK: u32 = hex("#ff4fb8");
+    /// A night of deep purple.
+    const GROUND: u32 = hex("#0b0418");
 
-    fn new(cols: usize, rows: usize) -> Self {
-        let colour = crate::env_num(&["SYNTHWAVE_COLOR"], 1, 0, 1) == 1;
+    fn new(cols: usize, rows: usize, colour: bool) -> Self {
         Self(Scene::new(Layout::fit(cols, rows, colour)))
-    }
-
-    fn palette(&self) -> &'static [u32] {
-        if self.0.lay.colour {
-            PALETTE
-        } else {
-            &[INK]
-        }
-    }
-
-    /// A night of deep purple in colour, upstream's black without.
-    fn ground(&self) -> u32 {
-        if self.0.lay.colour {
-            hex("#0b0418")
-        } else {
-            0
-        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {

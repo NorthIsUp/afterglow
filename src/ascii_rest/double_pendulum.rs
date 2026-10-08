@@ -359,10 +359,7 @@ impl Scene {
     }
 }
 
-pub struct DoublePendulum {
-    scene: Scene,
-    colour: bool,
-}
+pub struct DoublePendulum(Scene);
 
 /// Upstream's grid, whose shape is every slot's.
 const ASPECT: f64 = COLS as f64 / ROWS as f64;
@@ -374,15 +371,15 @@ impl Canvas for DoublePendulum {
     #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = 30;
-    #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("DOUBLE_PENDULUM_COLOR", "0")];
+    const COLOR: &'static str = "DOUBLE_PENDULUM_COLOR";
+    const PALETTE: &'static [u32] = PALETTE;
+    const INK: u32 = hex("#6ee7ff");
 
     /// Rows of slots by how much taller than upstream the panel is, then
     /// slots across each row; a slot is added once one fewer would leave
     /// most of a pendulum's width empty, so a 4:3 panel gets two rather than
     /// one with wide bare margins.
-    fn new(cols: usize, rows: usize) -> Self {
-        let colour = crate::env_num(&["DOUBLE_PENDULUM_COLOR"], 1, 0, 1) == 1;
+    fn new(cols: usize, rows: usize, colour: bool) -> Self {
         let ny = ((rows as f64 * ASPECT / cols as f64).round() as usize).max(1);
         let nx = ((cols as f64 / (ASPECT * (rows / ny) as f64) + 0.15).round() as usize).max(1);
         let n = nx * ny;
@@ -398,24 +395,10 @@ impl Canvas for DoublePendulum {
                 Pendulum::new(hang, [a + 0.04 * k, b - 0.03 * k, p, q], family)
             })
             .collect();
-        Self {
-            scene: Scene { cols, rows, swing },
-            colour,
-        }
-    }
-
-    fn palette(&self) -> &'static [u32] {
-        if self.colour {
-            PALETTE
-        } else {
-            &[INK]
-        }
+        Self(Scene { cols, rows, swing })
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        self.scene.frame(t, out);
+        self.0.frame(t, out);
     }
 }
-
-/// Upstream's one ink.
-const INK: u32 = hex("#6ee7ff");

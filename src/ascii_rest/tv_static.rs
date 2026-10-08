@@ -457,26 +457,19 @@ impl Canvas for TvStatic {
     #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = FPS;
+    const COLOR: &'static str = "TV_STATIC_COLOR";
+    const PALETTE: &'static [u32] = PALETTE;
+    const INK: u32 = PALETTE[0];
     #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)] =
-        &[("TV_STATIC_SET", "1"), ("TV_STATIC_COLOR", "0")];
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("TV_STATIC_SET", "1")];
 
-    fn new(cols: usize, rows: usize) -> Self {
+    fn new(cols: usize, rows: usize, colour: bool) -> Self {
         let set = crate::env_num(&["TV_STATIC_SET"], 0, 0, 1) == 1;
-        let colour = crate::env_num(&["TV_STATIC_COLOR"], 1, 0, 1) == 1;
         let (chars, lay) = set
             .then(|| draw_set(cols, rows))
             .flatten()
             .unwrap_or_else(|| (draw_bezel(cols, rows), Layout::fit(cols, rows)));
         Self(Scene::new(lay, chars, colour))
-    }
-
-    fn palette(&self) -> &'static [u32] {
-        if self.0.tone.is_empty() {
-            &PALETTE[..1]
-        } else {
-            PALETTE
-        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
