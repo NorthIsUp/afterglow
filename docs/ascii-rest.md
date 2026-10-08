@@ -107,7 +107,7 @@ is no upstream output to compare against.
 
 ## Character pieces
 
-ascii.rest's character pieces, one ink each. Knobs: `ASCII_REST_TITLE`.
+ascii.rest's character pieces, one ink each. Knobs: `ASCII_REST_TITLE`. A piece may add colour of its own behind a knob that defaults on (`TV_STATIC_COLOR`); its `Piece::UPSTREAM` lists the values that switch it off, and the golden test builds it with those.
 
 ## Full-screen twins
 
