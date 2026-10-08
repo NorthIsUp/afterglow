@@ -75,8 +75,11 @@ fn moon(u: f64, v: f64, nz: f64) -> f64 {
 /// The beam in the haze through a cell: a cone seen side on, so the more it
 /// turns toward or away from us the shorter, wider and brighter it looks.
 /// `round` gives the two halves of the turn their own depth: brighter
-/// swinging toward us, narrower and dimmer going away behind.
-fn beam_at(dx: f64, dy: f64, c: f64, s: f64, reach: f64, round: bool) -> f64 {
+/// swinging toward us, narrower and dimmer going away behind, where its far
+/// end draws in to the tower and out the other side as `span * |c|` rather
+/// than sitting clipped at the frame's edge until the last moment and
+/// jumping across.
+fn beam_at(dx: f64, dy: f64, c: f64, s: f64, reach: f64, round: bool, span: f64) -> f64 {
     let fore = c.abs().max(0.1);
     let ax = sign_or_one(c);
     let ay = (0.02 / fore).min(0.35);
@@ -92,8 +95,14 @@ fn beam_at(dx: f64, dy: f64, c: f64, s: f64, reach: f64, round: bool) -> f64 {
         (true, true) => (1.0 + 0.4 * s, 0.55 + 0.45 * c.abs()),
         (true, false) => (1.0, 1.0 + 0.25 * s),
     };
+    let tip = if round && s < 0.0 {
+        let x = ((span * c.abs() - a) / (0.2 * span)).clamp(0.0, 1.0);
+        x * x * (3.0 - 2.0 * x)
+    } else {
+        1.0
+    };
     let half = 0.5 + a * (0.11 / fore) * wide;
-    (-(across / half).powf(4.0)).exp()
+    tip * (-(across / half).powf(4.0)).exp()
         * (-a / (reach * fore)).exp()
         * (1.0 / fore.powf(0.3)).min(1.6)
         * gain
@@ -383,6 +392,8 @@ impl Scene {
         let face = s.max(0.0).powf(10.0); // the lens turned square to us
         let round = self.lay.round;
         let reach = self.lay.reach;
+        // Lamp to the frame's edge and a little past, in upstream's units.
+        let span = 1.1 * cols as f64 / 4.0 / sc;
         // Square to us, the cone is seen end on: a round bloom on the lamp
         // rather than a shaft to one side.
         let (bloom, end_on) = if round {
@@ -396,7 +407,7 @@ impl Scene {
         };
         let glare_at =
             |dx: f64, dy: f64| (-(dx.hypot(dy) / bloom).powf(2.0)).exp() * (0.5 + 1.2 * face);
-        let beam = |dx: f64, dy: f64| beam_at(dx, dy, c, s, reach, round) * end_on + glare_at(dx, dy);
+        let beam = |dx: f64, dy: f64| beam_at(dx, dy, c, s, reach, round, span) * end_on + glare_at(dx, dy);
         let haze = |b: f64, r: usize, cc: usize| {
             (b * 6.0 + 0.35 * hash2(cc as i64, r as i64)).floor().min(7.0)
         };
