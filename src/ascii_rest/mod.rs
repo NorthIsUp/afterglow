@@ -59,7 +59,7 @@ macro_rules! each_piece {
             aurora_fjord::{AuroraFjord, #[no_upstream] AuroraFjordWide},
             deep_reef::{DeepReef, #[no_upstream] DeepReefWide},
             desert_night::{DesertNight, #[no_upstream] DesertNightWide},
-            double_pendulum::{DoublePendulum},
+            double_pendulum::{DoublePendulum, #[fill] DoublePendulumWide},
             earthrise::{Earthrise, #[no_upstream] EarthriseWide},
             fractal_tree::{FractalTree, #[fill] FractalTreeWide},
             kyoto_dusk::{KyotoDusk, #[no_upstream] KyotoDuskWide},

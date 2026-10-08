@@ -157,7 +157,7 @@ One ink each. Every piece also has a `-wide` twin drawn at the panel's own size,
 | [`lighthouse`](docs/savers/lighthouse.md)                 | [`lighthouse-wide`](docs/savers/lighthouse.md#lighthouse-wide)                         | A banded lighthouse on a heap of rocks at night.                                |
 | [`fractal-tree`](docs/savers/fractal-tree.md)             | [`fractal-tree-wide`](docs/savers/fractal-tree.md#fractal-tree-wide)                   | A trunk that forks seven times over into lobes of leaves, bending in the wind.  |
 | [`reaction-diffusion`](docs/savers/reaction-diffusion.md) | [`reaction-diffusion-wide`](docs/savers/reaction-diffusion.md#reaction-diffusion-wide) | A Gray-Scott reaction whose spots on the left give way to stripes on the right. |
-| [`double-pendulum`](docs/savers/double-pendulum.md)       |                                                                                        | Two equal rods hung end to end from one pivot, stepped with RK4.                |
+| [`double-pendulum`](docs/savers/double-pendulum.md)       | [`double-pendulum-wide`](docs/savers/double-pendulum.md#double-pendulum-wide)          | Two equal rods hung end to end from one pivot, stepped with RK4.                |
 
 ## Docs
 
