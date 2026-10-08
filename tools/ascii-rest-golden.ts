@@ -1,7 +1,7 @@
 // Render ascii.rest pieces with upstream's own code, for the port's golden test.
 //
 //   git clone https://github.com/bas3line/ascii /tmp/ascii
-//   bun tools/ascii-rest-golden.ts /tmp/ascii /tmp/golden night-coast plasma ...
+//   bun tools/ascii-rest-golden.ts /tmp/ascii /tmp/golden night-coast aurora ...
 //   ASCII_REST_GOLDEN=/tmp/golden cargo test --release ascii_rest -- --ignored --nocapture
 //
 // Every tick from 0 is rendered in order, as `Play` does, so stateful pieces

@@ -15,8 +15,10 @@
 //! extra blits, since a cell whose glyph changed is redrawn anyway.
 
 use std::f32::consts::PI;
+use std::f64::consts::PI as PI64;
 
 use crate::env_num;
+use crate::glyph;
 use crate::grid::{pixel_aspect, Cell, Grid};
 use crate::saver::Saver;
 use crate::surface::{Panel, Surface};
@@ -58,6 +60,7 @@ const HUES: usize = 32;
 /// 4096-step sine is exact to the eye and spares two libm calls a cell.
 const SINES: usize = 4096;
 const TO_SINE: f32 = SINES as f32 / (2.0 * PI);
+const _: () = assert!(SINES.is_power_of_two());
 
 pub struct Plasma {
     /// Cell centres in upstream's units, per column and per row.
@@ -105,7 +108,7 @@ impl Plasma {
             row: vec![[0.0; 4]; rows],
             sine: (0..SINES).map(|i| (i as f32 / TO_SINE).sin()).collect(),
             roam,
-            glyphs: RAMP.map(crate::ascii_rest::text::glyph),
+            glyphs: RAMP.map(glyph::of),
             pal: palette(),
             frame: 0,
             period: (P * fps).round() as u64,
@@ -142,11 +145,13 @@ impl Saver for Plasma {
     fn render(&mut self, s: &mut Surface<'_>) {
         let t = self.frame as f64 / self.fps;
         self.frame = (self.frame + 1) % self.period;
-        let a = (2.0 * std::f64::consts::PI / P * t) as f32;
+        let a = (2.0 * PI64 / P * t) as f32;
         let (ca, sa) = (a.cos(), a.sin());
         let (cx, cy) = (self.roam.0 * a.sin(), self.roam.1 * (2.0 * a).cos());
         let drift = a / (2.0 * PI);
         let sine = &self.sine[..];
+        // `as i32` keeps a negative phase negative; masking its two's complement wraps it
+        // into the table, which is only a modulo because SINES is a power of two.
         let sin = |p: f32| sine[(p * TO_SINE) as i32 as usize & (SINES - 1)];
         for (o, &x) in self.col.iter_mut().zip(&self.xs) {
             *o = [
@@ -198,6 +203,7 @@ impl Saver for Plasma {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::font;
     use crate::grid::with_test_aspect;
     use crate::saver;
     use crate::testalloc::allocs_during;
@@ -230,9 +236,7 @@ mod tests {
                 "{w}x{h}: rows short"
             );
             assert!(
-                g.cells()
-                    .iter()
-                    .all(|c| c.glyph() != crate::font::BLANK as usize),
+                g.cells().iter().all(|c| c.glyph() != font::BLANK as usize),
                 "{w}x{h}@{aspect}: a blank cell"
             );
         }

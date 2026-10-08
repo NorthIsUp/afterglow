@@ -397,6 +397,7 @@ pub const fn hex(s: &str) -> u32 {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::glyph;
     use crate::grid::with_test_aspect;
     use crate::testalloc::allocs_during;
 
@@ -656,7 +657,7 @@ pub(crate) mod tests {
                 let i = " ·•●".chars().position(|d| d == c).expect("halftone char");
                 crate::font::HALFTONE[i]
             } else {
-                text::glyph(c)
+                glyph::of(c)
             }
         };
         let mut piece = P::new();
