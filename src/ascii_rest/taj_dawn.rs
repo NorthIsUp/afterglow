@@ -5,6 +5,10 @@
 //!
 //! Its tail is its own: a per-cell jittered dither, a tone shoulder and a
 //! capped sky lift, so it uses [`Dots::nearest`] rather than [`Dots::ink`].
+//!
+//! `taj-dawn-wide` is the same dawn on a 3.2:1 canvas that takes in the whole
+//! garden front: the mosque on the left and its twin, the jawab, answering it
+//! on the right.
 
 use std::f64::consts::PI;
 
@@ -13,14 +17,10 @@ use super::math::{clamp, fbm, hash, js_round, mix, noise, smooth};
 use super::{Fit, Piece, hex};
 use crate::grid::Cell;
 
-const W: usize = 200;
 const H: usize = 100;
-const CX: f64 = 128.0; // the Taj's axis, and the canal's vanishing point
 const BASE: f64 = 68.0; // where the Taj meets the garden, and the far end of the canal
 const HZ: f64 = 60.0; // eye level
 const S: f64 = 0.7; // cells per metre on the Taj
-const SUN: [f64; 2] = [36.0, 40.0];
-const MX: f64 = 45.0; // the mosque's axis
 const MB: f64 = 67.0; // and its foot
 const KR: f64 = 1.55; // the reflection is foreshortened so the dome reaches the canal
 /// Cloud strip, wrapping at `CW` columns, `CH` rows deep.
@@ -46,7 +46,70 @@ struct Tree {
     s: f64,
 }
 
-pub struct TajDawn {
+/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+struct Layout {
+    name: &'static str,
+    w: usize,
+    /// The Taj's axis, and the canal's vanishing point.
+    cx: f64,
+    sun: [f64; 2],
+    /// The mosque's axis.
+    mx: f64,
+    /// The jawab's axis, the mosque's mirror across the canal.
+    jawab: Option<f64>,
+    /// Where the sky cools and dims away from the sun.
+    far: [f64; 2],
+    /// Dawn cloud banks: [x, y, half-width, height above, depth below, strength].
+    banks: [[f64; 6]; 5],
+    /// Where the birds start, and the span they wrap over.
+    birds: [f64; 2],
+    /// The last stars, in the sky away from the sun: from this column, fading in
+    /// to the next.
+    stars: [f64; 2],
+}
+
+const ORIGINAL: Layout = Layout {
+    name: "taj-dawn",
+    w: 200,
+    cx: 128.0,
+    sun: [36.0, 40.0],
+    mx: 45.0,
+    jawab: None,
+    far: [50.0, 200.0],
+    banks: [
+        [76.0, 28.0, 40.0, 7.0, 3.5, 1.4],  // over the sun's right shoulder
+        [152.0, 36.0, 52.0, 9.0, 4.0, 1.0], // behind the dome
+        [16.0, 13.0, 32.0, 4.0, 2.5, 0.8],  // a high wisp
+        [250.0, 24.0, 40.0, 8.0, 4.0, 1.0],
+        [330.0, 33.0, 36.0, 7.0, 4.0, 0.95],
+    ],
+    birds: [58.0, 260.0],
+    stars: [96.0, 140.0],
+};
+
+const WIDE: Layout = Layout {
+    name: "taj-dawn-wide",
+    w: 320,
+    cx: 176.0,
+    sun: [84.0, 40.0],
+    mx: 93.0,
+    jawab: Some(2.0 * 176.0 - 93.0),
+    far: [98.0, 248.0],
+    banks: [
+        [124.0, 28.0, 40.0, 7.0, 3.5, 1.4],
+        [200.0, 36.0, 52.0, 9.0, 4.0, 1.0],
+        [64.0, 13.0, 32.0, 4.0, 2.5, 0.8],
+        [298.0, 24.0, 40.0, 8.0, 4.0, 1.0],
+        [378.0, 33.0, 36.0, 7.0, 4.0, 0.95],
+    ],
+    birds: [106.0, 380.0],
+    stars: [144.0, 188.0],
+};
+
+pub type TajDawn = Scene<false>;
+pub type TajDawnWide = Scene<true>;
+
+pub struct Scene<const IS_WIDE: bool> {
     dots: Dots,
     mat: Vec<u8>,
     r: Vec<f32>,
@@ -272,153 +335,150 @@ fn taj(x: f64, y: f64) -> Option<(f64, f64)> {
     None
 }
 
-/// The red sandstone mosque that flanks the Taj, in cells: three domes over a
-/// five-bay front with a tall central portal. Returns 0 for wall, 1 for dome,
-/// 2 for a recess, or -1 for air. It stands against the sun, so it is mostly
-/// silhouette.
-fn mosque(xc: f64, y: f64) -> i8 {
-    let dx = xc - MX;
-    let ax = dx.abs();
-    let odd = |v: f64| v.floor() as i64 & 1 != 0;
-    // plinth
-    if (MB - 2.5..MB).contains(&y) && ax <= 22.0 {
-        return 0;
-    }
-    // end towers, each with a small kiosk on top
-    let tx = (ax - 19.5).abs();
-    if tx <= 1.3 && (MB - 13.0..MB - 2.5).contains(&y) {
-        return 0;
-    }
-    if (MB - 15.5..MB - 13.0).contains(&y) {
-        let h = (MB - 13.0 - y) / 2.5;
-        if tx <= 1.8 * onion(h) {
+impl<const IS_WIDE: bool> Scene<IS_WIDE> {
+    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
+    const W: usize = Self::L.w;
+
+    /// The red sandstone mosque that flanks the Taj, in cells: three domes over a
+    /// five-bay front with a tall central portal. Returns 0 for wall, 1 for dome,
+    /// 2 for a recess, or -1 for air. It stands against the sun, so it is mostly
+    /// silhouette.
+    fn mosque(xc: f64, y: f64) -> i8 {
+        let dx = xc - Self::L.mx;
+        let ax = dx.abs();
+        let odd = |v: f64| v.floor() as i64 & 1 != 0;
+        // plinth
+        if (MB - 2.5..MB).contains(&y) && ax <= 22.0 {
+            return 0;
+        }
+        // end towers, each with a small kiosk on top
+        let tx = (ax - 19.5).abs();
+        if tx <= 1.3 && (MB - 13.0..MB - 2.5).contains(&y) {
+            return 0;
+        }
+        if (MB - 15.5..MB - 13.0).contains(&y) {
+            let h = (MB - 13.0 - y) / 2.5;
+            if tx <= 1.8 * onion(h) {
+                return 1;
+            }
+        }
+        if tx < 0.35 && (MB - 16.5..MB - 15.5).contains(&y) {
             return 1;
         }
-    }
-    if tx < 0.35 && (MB - 16.5..MB - 15.5).contains(&y) {
-        return 1;
-    }
-    // central portal, rising above the front
-    if ax <= 5.5 && (MB - 15.0..MB - 2.5).contains(&y) {
-        if y < MB - 14.3 && odd(xc) {
-            return -1;
+        // central portal, rising above the front
+        if ax <= 5.5 && (MB - 15.0..MB - 2.5).contains(&y) {
+            if y < MB - 14.3 && odd(xc) {
+                return -1;
+            }
+            if ax <= arch(3.4, MB - 9.5 - y) && y >= MB - 13.5 {
+                return 2;
+            }
+            return 0;
         }
-        if ax <= arch(3.4, MB - 9.5 - y) && y >= MB - 13.5 {
-            return 2;
+        // the five-bay front and its parapet
+        if ax <= 18.0 && (MB - 10.0..MB - 2.5).contains(&y) {
+            let bay = ((ax - 5.5) % 4.2) - 2.1;
+            if ax > 6.0 && y >= MB - 8.5 && bay.abs() <= arch(1.4, MB - 6.2 - y) {
+                return 2;
+            }
+            return 0;
         }
-        return 0;
-    }
-    // the five-bay front and its parapet
-    if ax <= 18.0 && (MB - 10.0..MB - 2.5).contains(&y) {
-        let bay = ((ax - 5.5) % 4.2) - 2.1;
-        if ax > 6.0 && y >= MB - 8.5 && bay.abs() <= arch(1.4, MB - 6.2 - y) {
-            return 2;
+        if ax <= 18.0 && (MB - 10.8..MB - 10.0).contains(&y) && odd(xc * 0.75) {
+            return 0;
         }
-        return 0;
-    }
-    if ax <= 18.0 && (MB - 10.8..MB - 10.0).contains(&y) && odd(xc * 0.75) {
-        return 0;
-    }
-    // side domes on drums
-    let sx = (ax - 11.5).abs();
-    if sx <= 2.6 && (MB - 12.0..MB - 10.0).contains(&y) {
-        return 0;
-    }
-    if (MB - 17.0..MB - 12.0).contains(&y) {
-        let h = (MB - 12.0 - y) / 5.0;
-        if sx <= 3.6 * onion(h) {
+        // side domes on drums
+        let sx = (ax - 11.5).abs();
+        if sx <= 2.6 && (MB - 12.0..MB - 10.0).contains(&y) {
+            return 0;
+        }
+        if (MB - 17.0..MB - 12.0).contains(&y) {
+            let h = (MB - 12.0 - y) / 5.0;
+            if sx <= 3.6 * onion(h) {
+                return 1;
+            }
+        }
+        if sx < 0.35 && (MB - 18.5..MB - 17.0).contains(&y) {
             return 1;
         }
-    }
-    if sx < 0.35 && (MB - 18.5..MB - 17.0).contains(&y) {
-        return 1;
-    }
-    // the great central dome
-    if ax <= 4.0 && (MB - 16.5..MB - 15.0).contains(&y) {
-        return 0;
-    }
-    if (MB - 23.5..MB - 16.5).contains(&y) {
-        let h = (MB - 16.5 - y) / 7.0;
-        if ax <= 5.2 * onion(h) {
+        // the great central dome
+        if ax <= 4.0 && (MB - 16.5..MB - 15.0).contains(&y) {
+            return 0;
+        }
+        if (MB - 23.5..MB - 16.5).contains(&y) {
+            let h = (MB - 16.5 - y) / 7.0;
+            if ax <= 5.2 * onion(h) {
+                return 1;
+            }
+        }
+        if ax < 0.4 && (MB - 25.5..MB - 23.5).contains(&y) {
             return 1;
         }
+        -1
     }
-    if ax < 0.4 && (MB - 25.5..MB - 23.5).contains(&y) {
-        return 1;
+
+    fn sun_glow(x: f64, y: f64) -> f64 {
+        let dx = x - Self::L.sun[0];
+        let dy = (y - Self::L.sun[1]) * 1.25;
+        let d = (dx * dx + dy * dy).sqrt();
+        (-d / 4.0).exp() * 0.9 + (-d / 13.0).exp() * 0.42 + (-d / 40.0).exp() * 0.3
     }
-    -1
-}
 
-fn sun_glow(x: f64, y: f64) -> f64 {
-    let dx = x - SUN[0];
-    let dy = (y - SUN[1]) * 1.25;
-    let d = (dx * dx + dy * dy).sqrt();
-    (-d / 4.0).exp() * 0.9 + (-d / 13.0).exp() * 0.42 + (-d / 40.0).exp() * 0.3
-}
+    fn sky_at(x: f64, y: f64) -> [f64; 3] {
+        let v = clamp(y / HZ);
+        // deep violet overhead, mauve, then rose and peach toward the horizon
+        let up = smooth(0.05, 0.8, v);
+        let (mut r, mut g, mut b) = (
+            mix(0.055, 0.3, up),
+            mix(0.05, 0.19, up),
+            mix(0.17, 0.36, up),
+        );
+        let low = smooth(0.62, 1.0, v);
+        (r, g, b) = (mix(r, 0.66, low), mix(g, 0.4, low), mix(b, 0.42, low));
+        // cooler and dimmer on the side away from the sun
+        let far = smooth(Self::L.far[0], Self::L.far[1], x) * 0.18;
+        r *= 1.0 - far;
+        g *= 1.0 - far * 0.8;
+        b *= 1.0 - far * 0.3;
+        let glow = Self::sun_glow(x, y)
+            + (-(y - 57.0).abs() / 5.0).exp() * 0.25 * (-(x - Self::L.sun[0]).abs() / 50.0).exp();
+        r += glow * 1.0;
+        g += glow * 0.78;
+        b += glow * 0.48;
+        // faint shafts of light fanning up from the sun through the haze
+        let ang = (y - Self::L.sun[1]).atan2(x - Self::L.sun[0]);
+        let ray = fbm(ang * 9.0 + 3.0, 1.7, 2, 0.0);
+        let rd = (x - Self::L.sun[0]).hypot(y - Self::L.sun[1]);
+        let shaft = smooth(0.5, 0.75, ray) * (-rd / 45.0).exp() * smooth(4.0, 14.0, rd) * 0.12;
+        r += shaft;
+        g += shaft * 0.8;
+        b += shaft * 0.55;
+        [r, g, b]
+    }
 
-fn sky_at(x: f64, y: f64) -> [f64; 3] {
-    let v = clamp(y / HZ);
-    // deep violet overhead, mauve, then rose and peach toward the horizon
-    let up = smooth(0.05, 0.8, v);
-    let (mut r, mut g, mut b) = (
-        mix(0.055, 0.3, up),
-        mix(0.05, 0.19, up),
-        mix(0.17, 0.36, up),
-    );
-    let low = smooth(0.62, 1.0, v);
-    (r, g, b) = (mix(r, 0.66, low), mix(g, 0.4, low), mix(b, 0.42, low));
-    // cooler and dimmer on the side away from the sun
-    let far = smooth(50.0, 200.0, x) * 0.18;
-    r *= 1.0 - far;
-    g *= 1.0 - far * 0.8;
-    b *= 1.0 - far * 0.3;
-    let glow = sun_glow(x, y)
-        + (-(y - 57.0).abs() / 5.0).exp() * 0.25 * (-(x - SUN[0]).abs() / 50.0).exp();
-    r += glow * 1.0;
-    g += glow * 0.78;
-    b += glow * 0.48;
-    // faint shafts of light fanning up from the sun through the haze
-    let ang = (y - SUN[1]).atan2(x - SUN[0]);
-    let ray = fbm(ang * 9.0 + 3.0, 1.7, 2, 0.0);
-    let rd = (x - SUN[0]).hypot(y - SUN[1]);
-    let shaft = smooth(0.5, 0.75, ray) * (-rd / 45.0).exp() * smooth(4.0, 14.0, rd) * 0.12;
-    r += shaft;
-    g += shaft * 0.8;
-    b += shaft * 0.55;
-    [r, g, b]
-}
-
-/// Dawn cloud in a wrapping strip that drifts: broken noise, gathered into a
-/// bank up and right of the sun and a lower one behind the dome.
-fn cdens(x: f64, y: f64) -> f64 {
-    // [x, y, half-width, height above, depth below, strength]
-    const BANKS: [[f64; 6]; 5] = [
-        [76.0, 28.0, 40.0, 7.0, 3.5, 1.4],  // over the sun's right shoulder
-        [152.0, 36.0, 52.0, 9.0, 4.0, 1.0], // behind the dome
-        [16.0, 13.0, 32.0, 4.0, 2.5, 0.8],  // a high wisp
-        [250.0, 24.0, 40.0, 8.0, 4.0, 1.0],
-        [330.0, 33.0, 36.0, 7.0, 4.0, 0.95],
-    ];
-    let cw = CW as f64;
-    let q = fbm(x * 0.01, y * 0.04, 2, cw * 0.01);
-    let n = fbm(x * 0.025 + q * 1.6, y * 0.075 + q * 0.6, 5, cw * 0.025);
-    let mut m = 0.0;
-    for [bx, by, rx, up, down, a] in BANKS {
-        let mut dx = x - bx;
-        dx -= js_round(dx / cw) * cw;
-        let ex = dx / rx;
-        let ey = (y - by) / if y < by { up } else { down };
-        let e = (-ex * ex * ex * ex - ey * ey).exp() * a;
-        if e > m {
-            m = e;
+    /// Dawn cloud in a wrapping strip that drifts: broken noise, gathered into a
+    /// bank up and right of the sun and a lower one behind the dome.
+    fn cdens(x: f64, y: f64) -> f64 {
+        let cw = CW as f64;
+        let q = fbm(x * 0.01, y * 0.04, 2, cw * 0.01);
+        let n = fbm(x * 0.025 + q * 1.6, y * 0.075 + q * 0.6, 5, cw * 0.025);
+        let mut m = 0.0;
+        for [bx, by, rx, up, down, a] in Self::L.banks {
+            let mut dx = x - bx;
+            dx -= js_round(dx / cw) * cw;
+            let ex = dx / rx;
+            let ey = (y - by) / if y < by { up } else { down };
+            let e = (-ex * ex * ex * ex - ey * ey).exp() * a;
+            if e > m {
+                m = e;
+            }
         }
+        0.62 * m + 1.4 * (n - 0.5) + 0.02
     }
-    0.62 * m + 1.4 * (n - 0.5) + 0.02
 }
 
-impl Piece for TajDawn {
-    const NAME: &'static str = "taj-dawn";
-    const COLS: usize = W;
+impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
+    const NAME: &'static str = Self::L.name;
+    const COLS: usize = Self::W;
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
@@ -436,7 +496,7 @@ impl Piece for TajDawn {
     ];
 
     fn new() -> Self {
-        let n = W * H;
+        let n = Self::W * H;
         let hf = H as f64;
         let mut mat = vec![SKY; n];
         let (mut rv, mut gv, mut bv) = (vec![0f32; n], vec![0f32; n], vec![0f32; n]);
@@ -450,10 +510,10 @@ impl Piece for TajDawn {
         for r in 0..CH {
             for x in 0..CW {
                 let (xf, y) = (x as f64, r as f64 + 0.5);
-                let d = cdens(xf, y);
+                let d = Self::cdens(xf, y);
                 cloud[r * CW + x] = smooth(0.46, 0.66, d) as f32;
                 // the side toward the sun (down and left) catches the light
-                let toward = cdens(xf - 2.0, y + 2.5);
+                let toward = Self::cdens(xf - 2.0, y + 2.5);
                 cloud_lit[r * CW + x] = clamp(
                     0.56 + (d - toward) * 0.75 - (d - 0.6) * 0.2
                         + 0.7 * (fbm(xf * 0.09, y * 0.2, 2, cwf * 0.09) - 0.5),
@@ -464,7 +524,7 @@ impl Piece for TajDawn {
         // the far tree line: rounded crowns, lower behind the Taj
         let mut crowns: Vec<[f64; 3]> = Vec::new();
         let (mut x, mut i) = (-12.0, 0.0);
-        while x < W as f64 + 12.0 {
+        while x < Self::W as f64 + 12.0 {
             let rad = 3.0 + hash(i, 61.0) * 4.5;
             crowns.push([
                 x,
@@ -474,7 +534,7 @@ impl Piece for TajDawn {
             x += 4.0 + hash(i, 60.0) * 5.0;
             i += 1.0;
         }
-        let mut tops = [0f32; W];
+        let mut tops = vec![0f32; Self::W];
         for (x, top) in tops.iter_mut().enumerate() {
             let xf = x as f64;
             let mut t0: f64 = 64.0;
@@ -486,7 +546,7 @@ impl Piece for TajDawn {
             }
             *top = (t0 - 0.6 * fbm(xf * 0.5, 7.0, 2, 0.0)) as f32;
         }
-        let tree_top = |x: f64| f64::from(tops[(x.floor().max(0.0) as usize).min(W - 1)]);
+        let tree_top = |x: f64| f64::from(tops[(x.floor().max(0.0) as usize).min(Self::W - 1)]);
         let pool_half = |y: f64| 0.5 * (y - HZ) + 1.0;
         let walk_half = |y: f64| 0.7 * (y - HZ) + 1.5;
 
@@ -502,7 +562,7 @@ impl Piece for TajDawn {
                     if side < 0.0 && s > 30.0 {
                         continue; // leave the sun clear
                     }
-                    let cxp = CX + side * off * s;
+                    let cxp = Self::L.cx + side * off * s;
                     trees.push(Tree {
                         x: cxp + (hash(s * 10.0, side + off) - 0.5) * 0.6,
                         base: HZ + s,
@@ -533,14 +593,19 @@ impl Piece for TajDawn {
         // the mosque's silhouette, and its edges toward the sun
         let mut mq = vec![-1i8; n];
         for r in (MB - 27.0) as usize..MB as usize {
-            for x in (MX - 24.0) as usize..=(MX + 24.0) as usize {
-                mq[r * W + x] = mosque(x as f64 + 0.5, r as f64 + 0.5);
+            for x in (Self::L.mx - 24.0) as usize..=(Self::L.mx + 24.0) as usize {
+                mq[r * Self::W + x] = Self::mosque(x as f64 + 0.5, r as f64 + 0.5);
+            }
+            if let Some(jx) = Self::L.jawab {
+                for x in (jx - 24.0) as usize..=(jx + 24.0) as usize {
+                    mq[r * Self::W + x] = Self::mosque(x as f64 + 0.5 - (jx - Self::L.mx), r as f64 + 0.5);
+                }
             }
         }
 
         for r in 0..H {
-            for x in 0..W {
-                let k = r * W + x;
+            for x in 0..Self::W {
+                let k = r * Self::W + x;
                 let (y, xc) = (r as f64 + 0.5, x as f64 + 0.5);
                 let mut m = SKY;
                 let (mut cr, mut cg, mut cb) = (0.0, 0.0, 0.0);
@@ -550,7 +615,7 @@ impl Piece for TajDawn {
                 if y < BASE && y >= tt {
                     m = BGTREE;
                 } else if y >= BASE {
-                    let dx = (xc - CX).abs();
+                    let dx = (xc - Self::L.cx).abs();
                     m = if dx < pool_half(y) {
                         POOL
                     } else if dx < walk_half(y) {
@@ -560,27 +625,27 @@ impl Piece for TajDawn {
                     };
                 }
                 if m == SKY {
-                    [cr, cg, cb] = sky_at(xc, y);
+                    [cr, cg, cb] = Self::sky_at(xc, y);
                     // never one flat tone: a faint unevenness in the dawn air
                     let veil = 0.88 + 0.24 * fbm(xc * 0.05, y * 0.09, 3, 0.0);
                     cr *= veil;
                     cg *= veil;
                     cb *= veil;
-                    glow[k] = sun_glow(xc, y) as f32;
+                    glow[k] = Self::sun_glow(xc, y) as f32;
                     hz = 0.5 + 0.5 * smooth(20.0, 58.0, y);
                     fl = 0.05 + 0.13 * smooth(18.0, 42.0, y);
                 } else if m == BGTREE {
                     // distant trees, flattened by the haze; rimmed where the sun is close
                     let tex = fbm(xc * 0.25, y * 0.3, 3, 0.0);
                     let depth = smooth(tt, BASE, y);
-                    let sky = sky_at(xc, tt);
+                    let sky = Self::sky_at(xc, tt);
                     let a = 0.46 - 0.12 * depth + 0.12 * tex;
                     (cr, cg, cb) = (
                         mix(0.1, sky[0], a),
                         mix(0.09, sky[1], a),
                         mix(0.15, sky[2], a),
                     );
-                    let rim = smooth(tt + 1.8, tt, y) * (-(xc - SUN[0]).abs() / 18.0).exp();
+                    let rim = smooth(tt + 1.8, tt, y) * (-(xc - Self::L.sun[0]).abs() / 18.0).exp();
                     cr += 0.4 * rim;
                     cg += 0.27 * rim;
                     cb += 0.14 * rim;
@@ -588,7 +653,7 @@ impl Piece for TajDawn {
                     let patch =
                         0.45 + 0.75 * smooth(0.3, 0.7, fbm(xc * 0.035 + 11.0, y * 0.18, 3, 0.0));
                     let mist = smooth(tt + 1.0, BASE + 1.0, y) * 0.75 * patch.min(1.0);
-                    let mw = (-(xc - SUN[0]).abs() / 90.0).exp();
+                    let mw = (-(xc - Self::L.sun[0]).abs() / 90.0).exp();
                     cr = mix(cr, 0.62 + 0.25 * mw, mist);
                     cg = mix(cg, 0.46 + 0.16 * mw, mist);
                     cb = mix(cb, 0.55 + 0.02 * mw, mist);
@@ -596,7 +661,7 @@ impl Piece for TajDawn {
                     hz = 0.8;
                 } else if m == LAWN {
                     let v = (y - BASE) / (hf - BASE);
-                    let u = (xc - CX) / (y - HZ); // across the ground plane
+                    let u = (xc - Self::L.cx) / (y - HZ); // across the ground plane
                     let tex = fbm(u * 3.0, 40.0 / (y - HZ), 3, 0.0);
                     // mown bands that run toward the Taj
                     let stripe = if (u * 1.4).floor() as i64 & 1 != 0 {
@@ -606,17 +671,17 @@ impl Piece for TajDawn {
                     };
                     // low sun raking across the grass from the left: gold where it
                     // lands, violet sky-light in the shade
-                    let mut lit = (0.6 + 0.4 * (-(xc - SUN[0]).abs() / 60.0).exp())
+                    let mut lit = (0.6 + 0.4 * (-(xc - Self::L.sun[0]).abs() / 60.0).exp())
                         * stripe
                         * (0.85 + 0.3 * tex);
                     lit *= shadow_at(xc, y);
                     let vig = 1.0
                         - 0.45
                             * smooth(0.5, 1.0, v)
-                            * (0.6 + 0.4 * smooth(40.0, 0.0, xc.min(W as f64 - xc)));
+                            * (0.6 + 0.4 * smooth(40.0, 0.0, xc.min(Self::W as f64 - xc)));
                     let fall = 1.0 - 0.35 * v;
                     // sunlit grass turns from gold near the sun to rose further off
-                    let warm = (-(xc - SUN[0]).abs() / 80.0).exp();
+                    let warm = (-(xc - Self::L.sun[0]).abs() / 80.0).exp();
                     // the shade holds the violet of the sky overhead, brighter in the open
                     let amb = 0.75 + 0.5 * stripe - 0.25 * v;
                     cr = (0.12 * amb + 0.56 * lit * fall) * vig;
@@ -624,7 +689,7 @@ impl Piece for TajDawn {
                     cb = (0.24 * amb + (0.26 - 0.1 * warm) * lit * fall) * vig;
                     // the far lawn sits in the haze
                     let far = smooth(BASE + 10.0, BASE, y) * 0.7;
-                    let mw = (-(xc - SUN[0]).abs() / 90.0).exp();
+                    let mw = (-(xc - Self::L.sun[0]).abs() / 90.0).exp();
                     cr = mix(cr, 0.62 + 0.25 * mw, far);
                     cg = mix(cg, 0.46 + 0.16 * mw, far);
                     cb = mix(cb, 0.55 + 0.02 * mw, far);
@@ -632,7 +697,7 @@ impl Piece for TajDawn {
                     hz = 0.7 * (1.0 - v);
                 } else if m == WALK {
                     let v = (y - BASE) / (hf - BASE);
-                    let lit = if xc < CX { 1.0 } else { 0.86 };
+                    let lit = if xc < Self::L.cx { 1.0 } else { 0.86 };
                     // paving joints, closer together into the distance
                     let joint = (if (90.0 / (y - HZ)) % 1.0 < 0.14 {
                         0.72
@@ -652,7 +717,7 @@ impl Piece for TajDawn {
                 let q = mq[k];
                 if q >= 0 {
                     m = MOSQUE;
-                    let sg = sun_glow(xc, y);
+                    let sg = Self::sun_glow(xc, y);
                     let mut a = if q == 1 {
                         [0.2, 0.11, 0.19]
                     } else {
@@ -669,9 +734,9 @@ impl Piece for TajDawn {
                     );
                     // rim light where the cell faces open sky toward the sun
                     let lft = if x > 0 { mq[k - 1] } else { -1 };
-                    let up = if r > 0 { mq[k - W] } else { -1 };
-                    let toward = if xc < SUN[0] {
-                        if x < W - 1 {
+                    let up = if r > 0 { mq[k - Self::W] } else { -1 };
+                    let toward = if xc < Self::L.sun[0] {
+                        if x < Self::W - 1 {
                             mq[k + 1]
                         } else {
                             -1
@@ -691,7 +756,7 @@ impl Piece for TajDawn {
                 }
                 // the Taj in front of the sky and the trees
                 if y < BASE + 0.01 {
-                    if let Some((lit, rec)) = taj((xc - CX) / S, (BASE - y) / S) {
+                    if let Some((lit, rec)) = taj((xc - Self::L.cx) / S, (BASE - y) / S) {
                         m = MARBLE;
                         // lavender shadow, pink-white front, gold where it faces the sun
                         const SH: [f64; 3] = [0.42, 0.36, 0.56];
@@ -720,7 +785,7 @@ impl Piece for TajDawn {
                         cg *= g;
                         cb *= g;
                         let low = smooth(40.0, BASE, y) * 0.2;
-                        let sky = sky_at(xc, y);
+                        let sky = Self::sky_at(xc, y);
                         cr = mix(cr, sky[0], low);
                         cg = mix(cg, sky[1], low);
                         cb = mix(cb, sky[2], low);
@@ -740,7 +805,7 @@ impl Piece for TajDawn {
         // cypresses, far to near: dark, with a warm rim on the side toward the sun
         for tr in &trees {
             let top = tr.base - tr.h;
-            let sun_side = if tr.x < CX { 0.9 } else { 0.6 };
+            let sun_side = if tr.x < Self::L.cx { 0.9 } else { 0.6 };
             let r0 = top.floor().max(0.0) as usize;
             let r1 = (tr.base + 0.6).ceil().min(hf) as usize;
             for r in r0..r1 {
@@ -757,7 +822,7 @@ impl Piece for TajDawn {
                     ((1.0 - u) / 0.7).powf(0.8)
                 };
                 let x0 = (tr.x - tr.w - 2.0).floor().max(0.0) as usize;
-                let x1 = (tr.x + tr.w + 2.0).ceil().min(W as f64) as usize;
+                let x1 = (tr.x + tr.w + 2.0).ceil().min(Self::W as f64) as usize;
                 for x in x0..x1 {
                     let xc = x as f64 + 0.5;
                     let nz = noise(xc * 0.9, y * 0.55 + tr.s, 0.0);
@@ -766,11 +831,11 @@ impl Piece for TajDawn {
                     if dx.abs() > 1.0 {
                         continue;
                     }
-                    let k = r * W + x;
+                    let k = r * Self::W + x;
                     let leaf = fbm(xc * 0.6, y * 0.35 + tr.s * 3.0, 2, 0.0);
                     let rim = smooth(-0.2, -0.9, dx)
                         * (0.4 + 0.6 * leaf)
-                        * (0.5 + 0.5 * (-(tr.x - SUN[0]).abs() / 80.0).exp());
+                        * (0.5 + 0.5 * (-(tr.x - Self::L.sun[0]).abs() / 80.0).exp());
                     // clumps of foliage, each a little lit on top
                     let clump = smooth(0.45, 0.7, fbm(xc * 0.45, y * 0.3 + tr.s * 3.0, 3, 0.0));
                     let base = 0.5 + 0.5 * leaf + 0.5 * clump;
@@ -817,14 +882,14 @@ impl Piece for TajDawn {
         let birds = std::array::from_fn(|i| {
             let i = i as f64;
             [
-                58.0 + i * 8.0 + hash(i, 40.0) * 4.0,
+                Self::L.birds[0] + i * 8.0 + hash(i, 40.0) * 4.0,
                 30.0 - i * 2.5 + hash(i, 41.0) * 2.0,
                 hash(i, 42.0) * 6.28,
             ]
         });
         // ordered dither, nudged per cell so its grid does not show in flat light
         let dith = (0..n)
-            .map(|k| (BAYER[((k / W) & 3) * 4 + ((k % W) & 3)] * 0.85) as f32)
+            .map(|k| (BAYER[((k / Self::W) & 3) * 4 + ((k % Self::W) & 3)] * 0.85) as f32)
             .collect();
         let jit = (0..n)
             .map(|k| (hash(k as f64, 77.0) - 0.5) as f32)
@@ -874,7 +939,7 @@ impl Piece for TajDawn {
         // where the birds are this frame
         let (mut bx, mut by, mut bu) = ([0.0; 3], [0.0; 3], [false; 3]);
         for (i, &[x0, y0, ph]) in self.birds.iter().enumerate() {
-            bx[i] = ((x0 + t * 3.2) % 260.0 + 260.0) % 260.0 - 30.0;
+            bx[i] = ((x0 + t * 3.2) % Self::L.birds[1] + Self::L.birds[1]) % Self::L.birds[1] - 30.0;
             by[i] = y0 + (t * 0.4 + ph).sin() * 1.3;
             bu[i] = (t * 7.0 + ph).sin() > 0.0;
         }
@@ -883,9 +948,9 @@ impl Piece for TajDawn {
             let rf = r as f64;
             let y = rf + 0.5;
             let hr = f64::from(self.haze_row[r]);
-            for xi in 0..W {
+            for xi in 0..Self::W {
                 let x = xi as f64;
-                let k = r * W + xi;
+                let k = r * Self::W + xi;
                 let m = self.mat[k];
                 let (mut cr, mut cg, mut cb);
                 let mut fl = f64::from(self.floor[k]);
@@ -897,14 +962,14 @@ impl Piece for TajDawn {
                     let depth = (y - BASE) / (hf - BASE);
                     let wob = (y * 1.9 - t * 2.4 + (x * 0.11 + t * 0.7).sin() * 1.5).sin()
                         * (0.2 + 0.7 * depth);
-                    let sx = js_round(x + wob).clamp(0.0, (W - 1) as f64);
+                    let sx = js_round(x + wob).clamp(0.0, (Self::W - 1) as f64);
                     let flick = if (x * 0.3 + t * 1.3 + y).sin() > 0.6 {
                         1.0
                     } else {
                         0.0
                     };
                     let sr = js_round(BASE - 0.5 - (y - BASE) * KR - flick).clamp(0.0, BASE - 1.0);
-                    let j = sr as usize * W + sx as usize;
+                    let j = sr as usize * Self::W + sx as usize;
                     // stone reflects brighter than the sky does, so the Taj holds its shape
                     let src = if self.mat[j] == MARBLE { 1.0 } else { 0.85 };
                     let dim = src - 0.1 * depth;
@@ -976,18 +1041,18 @@ impl Piece for TajDawn {
                             cb = mix(cb, kb, a);
                         }
                     }
-                    if m == SKY && r < 24 && xi > 96 && hash(x, rf * 3.0 + 11.0) > 0.988 {
+                    if m == SKY && r < 24 && xi > Self::L.stars[0] as usize && hash(x, rf * 3.0 + 11.0) > 0.988 {
                         // the last few stars, fading where the dawn reaches
                         let tw =
                             0.7 + 0.3 * (t * (1.2 + hash(x, rf) * 2.0) + hash(rf, x) * 6.28).sin();
-                        let s = tw * 0.62 * smooth(24.0, 8.0, rf) * smooth(96.0, 140.0, x);
+                        let s = tw * 0.62 * smooth(24.0, 8.0, rf) * smooth(Self::L.stars[0], Self::L.stars[1], x);
                         cr = cr.max(s * 0.85);
                         cg = cg.max(s * 0.85);
                         cb = cb.max(s);
                     }
                     if m == SKY {
                         // the sun's disc, softened by the haze
-                        let (dx, dy) = (x + 0.5 - SUN[0], y - SUN[1]);
+                        let (dx, dy) = (x + 0.5 - Self::L.sun[0], y - Self::L.sun[1]);
                         let dd = dx * dx + dy * dy;
                         if dd < 22.0 {
                             let a = smooth(22.0, 9.0, dd);

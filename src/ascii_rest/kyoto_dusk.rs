@@ -5,6 +5,11 @@
 //!
 //! Its dither is its own (Bayer at 0.4 plus hashed noise) and its colours go
 //! through a soft-knee tone curve first; the rest is [`Dots::ink`].
+//!
+//! `kyoto-dusk-wide` is the same dusk recomposed for a 3.2:1 panel. The cherry
+//! tree and lantern keep the left; the far bank runs on with a temple hall
+//! beside the pagoda, the hills rise further east, and the moon moves out with
+//! the frame.
 
 use super::halftone::{Dots, BAYER};
 use super::math::{clamp, fbm, hash, js_round, mix, noise, smooth};
@@ -12,14 +17,10 @@ use super::{Fit, Piece, hex};
 use crate::font;
 use crate::grid::Cell;
 
-const W: usize = 200;
 const H: usize = 100;
-const N: usize = W * H;
 /// The far bank of the pond, where the pagoda stands.
 const SHORE: f64 = 80.0;
 /// The pagoda's axis.
-const PX: f64 = 141.0;
-const MOON: [i32; 2] = [176, 17];
 /// The lantern's axis, foot and scale.
 const LX: f64 = 53.0;
 const LB: f64 = 98.0;
@@ -122,6 +123,43 @@ fn pagoda(dx: f64, y: f64) -> u8 {
     0
 }
 
+/// The main hall beside the pagoda, in the pagoda's shade codes: a low body of
+/// lit shoji under one deep hipped roof.
+fn hall(dx: f64, y: f64) -> u8 {
+    let ax = dx.abs();
+    if (77.5..SHORE + 0.5).contains(&y) {
+        return u8::from(ax <= 13.0 - if y < 78.5 { 1.0 } else { 0.0 });
+    }
+    let (e, r) = (70.5, 16.5);
+    let u = ax / r;
+    if u <= 1.0 {
+        let lift = 2.6 * u * u * u * u;
+        let bottom = e - lift + 0.6;
+        let top = e - lift - 1.2 - 5.4 * (1.0 - u).powf(1.3);
+        if y >= top.max(e - 6.2) && y < bottom {
+            if y < top.max(e - 6.2) + 0.9 {
+                return 4;
+            }
+            if y > bottom - 1.0 {
+                return 3;
+            }
+            return 2;
+        }
+    }
+    if y >= e + 0.6 && y < 77.5 && ax <= 10.5 {
+        if y < e + 1.8 {
+            return 3;
+        }
+        // shoji between the posts, lit from inside
+        let bay = ((dx + 10.5) / 3.0).floor();
+        if ax <= 9.5 && y > 72.6 && y < 76.4 && (dx + 10.5) % 3.0 > 0.9 && hash(bay, 23.0) > 0.35 {
+            return 6;
+        }
+        return 1;
+    }
+    0
+}
+
 /// The stone lantern in its plan: 1 stone, 2 lit opening, 3 roof, 0 air.
 fn lantern(dx: f64, y: f64) -> u8 {
     let ax = dx.abs();
@@ -160,37 +198,6 @@ fn lantern(dx: f64, y: f64) -> u8 {
 /// The lantern drawn a size up from its plan, standing on the bank.
 fn lantern_at(xc: f64, y: f64) -> u8 {
     lantern((xc - LX) / LS, LB - (LB - y) / LS)
-}
-
-fn sky_at(x: f64, y: f64) -> [f64; 3] {
-    let v = clamp(y / SHORE);
-    // indigo overhead, through violet, to rose and peach low in the west (left)
-    let west = (-(x - 80.0).abs() / 120.0).exp();
-    let mut a = smooth(0.0, 0.5, v);
-    let (mut r, mut g, mut b) = (mix(0.07, 0.22, a), mix(0.07, 0.14, a), mix(0.25, 0.38, a));
-    a = smooth(0.42, 0.86, v);
-    (r, g, b) = (mix(r, 0.52, a), mix(g, 0.32, a), mix(b, 0.58, a));
-    a = smooth(0.78, 0.98, v) * (0.55 + 0.45 * west);
-    (r, g, b) = (mix(r, 1.0, a), mix(g, 0.62, a), mix(b, 0.48, a));
-    let band = (-(y - 74.0).abs() / 4.0).exp() * west * 0.18;
-    r += band;
-    g += band * 0.66;
-    b += band * 0.45;
-    // a faint unevenness, so no stretch of sky is one flat tone
-    let veil = 0.86 + 0.28 * fbm(x * 0.035, y * 0.09, 3, 0.0);
-    r *= veil;
-    g *= veil;
-    b *= veil;
-    // the moon's halo
-    let (dx, dy) = (x - f64::from(MOON[0]), y - f64::from(MOON[1]));
-    let d = (dx * dx + dy * dy).sqrt();
-    let halo = (-d / 5.0).exp() * 0.24 + (-d / 16.0).exp() * 0.07;
-    [r + halo * 0.75, g + halo * 0.72, b + halo]
-}
-
-/// Low in the west where the glow is, rising behind the pagoda and the town.
-fn hill_a(x: f64) -> f64 {
-    77.5 - (3.0 + 13.0 * smooth(70.0, 175.0, x)) * (0.3 + 1.1 * fbm(x * 0.022 + 3.0, 1.0, 4, 0.0))
 }
 
 fn hill_b(x: f64) -> f64 {
@@ -233,7 +240,49 @@ struct Petal {
     tum: f64,
 }
 
-pub struct KyotoDusk {
+/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+struct Layout {
+    name: &'static str,
+    w: usize,
+    /// The pagoda's axis.
+    px: f64,
+    /// The temple hall's axis.
+    hall: Option<f64>,
+    moon: [i32; 2],
+    /// The glow low in the west: its centre column, and how far it spreads.
+    west: [f64; 2],
+    /// How far the glow lights the clouds' undersides.
+    west_cloud: f64,
+    /// Where the far hills rise from low in the west to full height.
+    hills: [f64; 2],
+}
+
+const ORIGINAL: Layout = Layout {
+    name: "kyoto-dusk",
+    w: 200,
+    px: 141.0,
+    hall: None,
+    moon: [176, 17],
+    west: [80.0, 120.0],
+    west_cloud: 90.0,
+    hills: [70.0, 175.0],
+};
+
+const WIDE: Layout = Layout {
+    name: "kyoto-dusk-wide",
+    w: 320,
+    px: 226.0,
+    hall: Some(166.0),
+    moon: [284, 17],
+    west: [90.0, 170.0],
+    west_cloud: 140.0,
+    hills: [90.0, 270.0],
+};
+
+pub type KyotoDusk = Scene<false>;
+pub type KyotoDuskWide = Scene<true>;
+
+pub struct Scene<const IS_WIDE: bool> {
     dots: Dots,
     mat: Vec<u8>,
     r: Vec<f32>,
@@ -266,9 +315,46 @@ pub struct KyotoDusk {
     floater_ink: Cell,
 }
 
-impl Piece for KyotoDusk {
-    const NAME: &'static str = "kyoto-dusk";
-    const COLS: usize = W;
+impl<const IS_WIDE: bool> Scene<IS_WIDE> {
+    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
+    const W: usize = Self::L.w;
+    const N: usize = Self::W * H;
+
+    fn sky_at(x: f64, y: f64) -> [f64; 3] {
+        let v = clamp(y / SHORE);
+        // indigo overhead, through violet, to rose and peach low in the west (left)
+        let west = (-(x - Self::L.west[0]).abs() / Self::L.west[1]).exp();
+        let mut a = smooth(0.0, 0.5, v);
+        let (mut r, mut g, mut b) = (mix(0.07, 0.22, a), mix(0.07, 0.14, a), mix(0.25, 0.38, a));
+        a = smooth(0.42, 0.86, v);
+        (r, g, b) = (mix(r, 0.52, a), mix(g, 0.32, a), mix(b, 0.58, a));
+        a = smooth(0.78, 0.98, v) * (0.55 + 0.45 * west);
+        (r, g, b) = (mix(r, 1.0, a), mix(g, 0.62, a), mix(b, 0.48, a));
+        let band = (-(y - 74.0).abs() / 4.0).exp() * west * 0.18;
+        r += band;
+        g += band * 0.66;
+        b += band * 0.45;
+        // a faint unevenness, so no stretch of sky is one flat tone
+        let veil = 0.86 + 0.28 * fbm(x * 0.035, y * 0.09, 3, 0.0);
+        r *= veil;
+        g *= veil;
+        b *= veil;
+        // the moon's halo
+        let (dx, dy) = (x - f64::from(Self::L.moon[0]), y - f64::from(Self::L.moon[1]));
+        let d = (dx * dx + dy * dy).sqrt();
+        let halo = (-d / 5.0).exp() * 0.24 + (-d / 16.0).exp() * 0.07;
+        [r + halo * 0.75, g + halo * 0.72, b + halo]
+    }
+
+    /// Low in the west where the glow is, rising behind the pagoda and the town.
+    fn hill_a(x: f64) -> f64 {
+        77.5 - (3.0 + 13.0 * smooth(Self::L.hills[0], Self::L.hills[1], x)) * (0.3 + 1.1 * fbm(x * 0.022 + 3.0, 1.0, 4, 0.0))
+    }
+}
+
+impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
+    const NAME: &'static str = Self::L.name;
+    const COLS: usize = Self::W;
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
@@ -290,12 +376,12 @@ impl Piece for KyotoDusk {
     ];
 
     fn new() -> Self {
-        let mut mat = vec![SKY; N];
-        let mut rv = vec![0f32; N];
-        let mut gv = vec![0f32; N];
-        let mut bv = vec![0f32; N];
-        let mut floor = vec![0.12f32; N];
-        let mut warmth = vec![0f32; N];
+        let mut mat = vec![SKY; Self::N];
+        let mut rv = vec![0f32; Self::N];
+        let mut gv = vec![0f32; Self::N];
+        let mut bv = vec![0f32; Self::N];
+        let mut floor = vec![0.12f32; Self::N];
+        let mut warmth = vec![0f32; Self::N];
 
         // the cherry tree's skeleton: [ax, ay, bx, by, w0, w1]
         #[rustfmt::skip]
@@ -364,21 +450,21 @@ impl Piece for KyotoDusk {
 
         // build the static picture
         for r in 0..H {
-            for x in 0..W {
-                let k = r * W + x;
+            for x in 0..Self::W {
+                let k = r * Self::W + x;
                 let y = r as f64 + 0.5;
                 let xc = x as f64 + 0.5;
                 let (mut m, mut fl, mut warm) = (SKY, 0.12, 0.0);
                 let (mut cr, mut cg, mut cb) = (0.0, 0.0, 0.0);
                 if y < SHORE {
-                    [cr, cg, cb] = sky_at(xc, y);
+                    [cr, cg, cb] = Self::sky_at(xc, y);
                     fl = 0.04;
                     // distant hills in haze, then a nearer ridge
-                    let ha = hill_a(xc);
+                    let ha = Self::hill_a(xc);
                     if y >= ha {
                         // the Higashiyama hills, flat and violet in the haze
                         m = HILL;
-                        let s = sky_at(xc, ha);
+                        let s = Self::sky_at(xc, ha);
                         let d = smooth(ha, ha + 8.0, y);
                         // wooded slopes: clumps of trees in the haze
                         let tex = fbm(xc * 0.3, y * 0.45, 3, 0.0);
@@ -421,10 +507,12 @@ impl Piece for KyotoDusk {
                             (cr, cg, cb, fl) = (1.0, 0.66, 0.32, 0.3);
                         }
                     }
-                    let p = pagoda(xc - PX, y);
+                    let (p, dx) = match (pagoda(xc - Self::L.px, y), Self::L.hall) {
+                        (0, Some(hx)) => (hall(xc - hx, y), xc - hx),
+                        (p, _) => (p, xc - Self::L.px),
+                    };
                     if p != 0 {
                         m = PAGODA;
-                        let dx = xc - PX;
                         let rim = (-(dx + 4.0).abs() / 30.0).exp(); // the sky to the west lights its left
                                                                     // dark timber; the tiled roofs pick up the sky, their ridges most of all
                         match p {
@@ -482,7 +570,7 @@ impl Piece for KyotoDusk {
                 if l == 0 {
                     continue;
                 }
-                let k = r * W + x;
+                let k = r * Self::W + x;
                 let py = LB - (LB - y) / LS;
                 let pdx = (xc - LX) / LS;
                 if l == 2 {
@@ -522,7 +610,7 @@ impl Piece for KyotoDusk {
         // the cherry tree
         for r in 0..H {
             for x in 0..130 {
-                let k = r * W + x;
+                let k = r * Self::W + x;
                 let y = r as f64 + 0.5;
                 let xc = x as f64 + 0.5;
                 // blossom density: soft clouds, broken up by noise into clumps
@@ -582,10 +670,10 @@ impl Piece for KyotoDusk {
         }
 
         // the lantern's light: how far each cell sits from the lit opening
-        let mut glow = vec![0f32; N];
+        let mut glow = vec![0f32; Self::N];
         for r in 0..H {
-            for x in 0..W {
-                let k = r * W + x;
+            for x in 0..Self::W {
+                let k = r * Self::W + x;
                 let dx = x as f64 + 0.5 - LAMP[0];
                 let dy = (r as f64 + 0.5 - LAMP[1]) * 1.1;
                 let d = (dx * dx + dy * dy).sqrt();
@@ -610,9 +698,9 @@ impl Piece for KyotoDusk {
         let mut stars = Vec::new();
         for i in 0..400 {
             let i = f64::from(i);
-            let x = (hash(i, 91.0) * W as f64).floor() as usize;
+            let x = (hash(i, 91.0) * Self::W as f64).floor() as usize;
             let r = (hash(i, 92.0) * 40.0).floor() as usize;
-            let k = r * W + x;
+            let k = r * Self::W + x;
             if mat[k] == SKY && hash(i, 93.0) > 0.72 {
                 stars.push((k, hash(i, 94.0) * 6.28, 0.6 + hash(i, 95.0) * 1.6));
             }
@@ -651,16 +739,16 @@ impl Piece for KyotoDusk {
             .map(|i| {
                 let i = f64::from(i);
                 [
-                    hash(i, 111.0) * W as f64,
+                    hash(i, 111.0) * Self::W as f64,
                     SHORE + 3.0 + hash(i, 112.0) * 20.0,
                     0.3 + hash(i, 113.0) * 0.5,
                 ]
             })
             .collect();
 
-        let dith = (0..N)
+        let dith = (0..Self::N)
             .map(|k| {
-                (BAYER[((k / W) & 3) * 4 + ((k % W) & 3)] * 0.4
+                (BAYER[((k / Self::W) & 3) * 4 + ((k % Self::W) & 3)] * 0.4
                     + (hash(k as f64, 77.0) - 0.5) * 0.5) as f32
             })
             .collect();
@@ -706,10 +794,10 @@ impl Piece for KyotoDusk {
             floaters,
             dith,
             tone,
-            pr: vec![0f32; N],
-            pg: vec![0f32; N],
-            pb: vec![0f32; N],
-            pmask: vec![false; N],
+            pr: vec![0f32; Self::N],
+            pg: vec![0f32; Self::N],
+            pb: vec![0f32; Self::N],
+            pmask: vec![false; Self::N],
             moon_ink,
             star_dim,
             star_bright,
@@ -718,7 +806,7 @@ impl Piece for KyotoDusk {
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        let (wf, hf, cw) = (W as f64, H as f64, CW as f64);
+        let (wf, hf, cw) = (Self::W as f64, H as f64, CW as f64);
         // the flame breathes, with now and then a gutter
         let flick = 0.82
             + 0.1 * (t * 7.3).sin() * (t * 3.1 + 1.0).sin()
@@ -739,7 +827,7 @@ impl Piece for KyotoDusk {
             if x < 0.0 || x >= wf || r < 0.0 || r >= hf {
                 continue;
             }
-            let k = r as usize * W + x as usize;
+            let k = r as usize * Self::W + x as usize;
             // tumbling, catching light; dim against the dark bank and water
             let dim = if self.mat[k] == POND || self.mat[k] == BANK {
                 0.6
@@ -756,8 +844,8 @@ impl Piece for KyotoDusk {
 
         for r in 0..H {
             let y = r as f64 + 0.5;
-            for x in 0..W {
-                let k = r * W + x;
+            for x in 0..Self::W {
+                let k = r * Self::W + x;
                 let m = self.mat[k];
                 let xf = x as f64;
                 let (mut cr, mut cg, mut cb);
@@ -775,7 +863,7 @@ impl Piece for KyotoDusk {
                     let sr =
                         js_round(SHORE - 1.0 - (r as f64 - SHORE) * 1.35 + (w - 0.5) * 3.0 * depth)
                             .clamp(0.0, SHORE - 1.0);
-                    let j = sr as usize * W + sx as usize;
+                    let j = sr as usize * Self::W + sx as usize;
                     // crisp and bright right under the bank, darker further out
                     let lit = mix(0.95, 0.6, smooth(SHORE + 1.0, SHORE + 6.0, y)) * (0.8 + 0.4 * w);
                     cr = f64::from(self.rr[j]) * lit * 0.9;
@@ -815,7 +903,7 @@ impl Piece for KyotoDusk {
                             // brighter undersides toward the west and the horizon
                             let sun = l
                                 * (0.45 + 0.55 * smooth(C0 as f64, C1 as f64, y))
-                                * (0.6 + 0.4 * (-(xf - 80.0).abs() / 90.0).exp());
+                                * (0.6 + 0.4 * (-(xf - Self::L.west[0]).abs() / Self::L.west_cloud).exp());
                             let a = c * 0.85;
                             cr = mix(cr, mix(0.2, 1.0, sun), a);
                             cg = mix(cg, mix(0.12, 0.58, sun), a);
@@ -856,14 +944,14 @@ impl Piece for KyotoDusk {
             }
         }
         // the moon: a thin crescent, lit on the side toward the set sun
-        for r in MOON[1] - 6..=MOON[1] + 6 {
-            for x in MOON[0] - 6..=MOON[0] + 6 {
-                let dx = f64::from(x) + 0.5 - f64::from(MOON[0]);
-                let dy = f64::from(r) + 0.5 - f64::from(MOON[1]);
+        for r in Self::L.moon[1] - 6..=Self::L.moon[1] + 6 {
+            for x in Self::L.moon[0] - 6..=Self::L.moon[0] + 6 {
+                let dx = f64::from(x) + 0.5 - f64::from(Self::L.moon[0]);
+                let dy = f64::from(r) + 0.5 - f64::from(Self::L.moon[1]);
                 let inside = dx * dx + dy * dy < 5.2 * 5.2;
                 let (ex, ey) = (dx - 2.2, dy + 1.6); // the shadowed disc, offset up and right
                 if inside && ex * ex + ey * ey > 4.9 * 4.9 {
-                    out[r as usize * W + x as usize] = self.moon_ink;
+                    out[r as usize * Self::W + x as usize] = self.moon_ink;
                 }
             }
         }
@@ -885,10 +973,10 @@ impl Piece for KyotoDusk {
             if r >= hf {
                 continue;
             }
-            // x can round up to W, which upstream's flat index wraps onto
+            // x can round up to Self::W, which upstream's flat index wraps onto
             // the next row's first cell
-            let k = r as usize * W + x as usize;
-            if k >= N || self.mat[k] != POND {
+            let k = r as usize * Self::W + x as usize;
+            if k >= Self::N || self.mat[k] != POND {
                 continue;
             }
             out[k] = self.floater_ink;

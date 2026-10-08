@@ -7,18 +7,20 @@
 //! that moves (shafts, ripples, caustics) and draws what swims or sways on top.
 //! Every cell is then a halftone dot sized by its brightness, ordered-dithered,
 //! in the palette colour nearest its hue.
+//!
+//! `deep-reef-wide` is the same dive recomposed for a 3.2:1 panel. Both reefs
+//! broaden with more coral heads on them, the open sand between them widens
+//! with two more bommies, the sun moves 60 columns right with the view's
+//! centre, and a third, hazier kelp stands out on the sand.
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, js_hypot, js_round, mix, noise, smooth, Mulberry32};
 use super::{Fit, Piece, hex};
 use crate::grid::Cell;
 
-const W: usize = 200;
 const H: usize = 100;
-const N: usize = W * H;
 const SURF: f64 = 15.0; // the surface band
 const HZ: usize = 61; // where the sea floor would meet the haze
-const SUNX: f64 = 136.0; // where the sun shows through the surface
 const SUNY: f64 = -12.0;
 const RAYS: usize = 320;
 const RAY0: f64 = 160.0; // the shaft straight down from the sun
@@ -43,24 +45,6 @@ const ROCK: [f64; 3] = [0.016, 0.03, 0.042];
 // both reefs are rounded masses, shouldering down toward the open sand
 fn dome(u: f64) -> f64 {
     1.0 - (1.0 - u * u).max(0.0).sqrt()
-}
-
-fn left_top(x: f64) -> f64 {
-    47.0 + 56.0 * dome((x / 86.0).min(1.0)) - 8.0 * fbm(x * 0.06, 3.1, 4, 0.0)
-        + 3.0 * ((10.0 - x) / 10.0).max(0.0)
-}
-
-fn right_top(x: f64) -> f64 {
-    69.0 + 34.0 * dome(((196.0 - x) / 48.0).min(1.0))
-        - 5.0 * fbm(x * 0.08, 8.3, 3, 0.0)
-        - 3.0 * (-((x - 191.0) / 6.0).powi(2)).exp()
-}
-
-fn far_top(x: f64) -> f64 {
-    HZ as f64
-        - 1.0
-        - 6.0 * fbm(x * 0.035 + 2.0, 1.7, 3, 0.0)
-        - 3.0 * (-((x - 120.0) / 18.0).powi(2)).exp()
 }
 
 /// A reef's crest row at a column.
@@ -98,7 +82,150 @@ struct Speck {
     b: f64,
 }
 
-pub struct DeepReef {
+/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+struct Layout {
+    name: &'static str,
+    w: usize,
+    anchor: f64,
+    /// Where the sun shows through the surface.
+    sunx: f64,
+    /// The column the sand runs away from.
+    cam: f64,
+    /// Left of here a cell belongs to the left reef.
+    split: f64,
+    /// Which side of a kelp the sun lies on.
+    sun_side: f64,
+    /// The left reef's reach, and where its fog thins out.
+    left: [f64; 2],
+    /// The right reef: where it ends, its reach, and the dip by its end.
+    right: [f64; 3],
+    /// The dip in the far reef.
+    far_dip: f64,
+    /// The middle of the open water, and how far its haze and its light reach.
+    mid: [f64; 3],
+    /// Where the sides start to darken.
+    mid_dark: f64,
+    /// Where the sand brightens toward the sun.
+    lit: [f64; 2],
+    /// The open sand between the reefs.
+    open_sand: [f64; 2],
+    /// Brain corals, domes on the crests: [x, depth of the centre below the
+    /// crest, radius, kind].
+    domes: &'static [[f64; 4]],
+    /// Bommies on the sand: [x, crest row, half width, fog, coral kind].
+    bommies: &'static [[f64; 5]],
+    /// The sea fan's column.
+    fan: f64,
+    /// Branching coral on each crest: [seed, count, from, span].
+    branches: [(u32, usize, f64, f64); 2],
+    /// The right-hand kelp's column.
+    kelp_x: f64,
+    far_kelp: Option<Kelp>,
+    /// Bubble streams: [x, y, bubbles].
+    streams: &'static [(f64, f64, usize)],
+    /// Specks of marine snow.
+    snow: usize,
+    /// The school's loop: its centre column and its sway.
+    school: [f64; 2],
+}
+
+const ORIGINAL: Layout = Layout {
+    name: "deep-reef",
+    w: 200,
+    anchor: 0.4,
+    sunx: 136.0,
+    cam: 100.0,
+    split: 100.0,
+    sun_side: 100.0,
+    left: [86.0, 80.0],
+    right: [196.0, 48.0, 191.0],
+    far_dip: 120.0,
+    mid: [112.0, 100.0, 104.0],
+    mid_dark: 50.0,
+    lit: [100.0, 130.0],
+    open_sand: [87.0, 147.0],
+    domes: &[
+        [16.0, 3.0, 7.0, 0.0],
+        [41.0, 2.5, 6.5, 1.0],
+        [53.0, 2.0, 4.5, 3.0],
+        [65.0, 2.0, 5.0, 2.0],
+        [158.0, 2.0, 4.0, 2.0],
+        [186.0, 3.0, 5.0, 1.0],
+        [196.0, 3.0, 4.5, 3.0],
+    ],
+    bommies: &[
+        [114.0, 69.0, 9.0, 0.18, 0.0],
+        [94.0, 63.6, 4.0, 0.5, 2.0],
+        [139.0, 64.4, 4.0, 0.42, 1.0],
+    ],
+    fan: 167.0,
+    branches: [(31, 10, 3.0, 60.0), (53, 3, 178.0, 20.0)],
+    kelp_x: 189.0,
+    far_kelp: None,
+    streams: &[(44.0, 52.0, 8), (168.0, 66.0, 7), (116.0, 96.0, 6)],
+    snow: 90,
+    school: [95.0, 24.0],
+};
+
+const WIDE: Layout = Layout {
+    name: "deep-reef-wide",
+    w: 320,
+    anchor: 0.5,
+    sunx: 196.0,
+    cam: 160.0,
+    split: 180.0,
+    sun_side: 196.0,
+    left: [130.0, 120.0],
+    right: [316.0, 80.0, 311.0],
+    far_dip: 180.0,
+    mid: [172.0, 160.0, 164.0],
+    mid_dark: 80.0,
+    lit: [160.0, 190.0],
+    open_sand: [131.0, 235.0],
+    domes: &[
+        [24.0, 3.0, 7.0, 0.0],
+        [44.0, 2.5, 5.5, 2.0],
+        [62.0, 2.5, 6.5, 1.0],
+        [80.0, 2.0, 4.5, 3.0],
+        [98.0, 2.0, 5.0, 2.0],
+        [118.0, 2.0, 4.0, 1.0],
+        [253.0, 2.0, 4.0, 2.0],
+        [276.0, 2.5, 5.0, 0.0],
+        [299.0, 3.0, 5.0, 1.0],
+        [314.0, 3.0, 4.5, 3.0],
+    ],
+    bommies: &[
+        [174.0, 69.0, 9.0, 0.18, 0.0],
+        [154.0, 63.6, 4.0, 0.5, 2.0],
+        [199.0, 64.4, 4.0, 0.42, 1.0],
+        [224.0, 65.2, 5.0, 0.36, 3.0],
+        [141.0, 66.8, 3.5, 0.3, 1.0],
+    ],
+    fan: 268.0,
+    branches: [(31, 15, 4.0, 92.0), (53, 5, 280.0, 34.0)],
+    kelp_x: 309.0,
+    far_kelp: Some(Kelp {
+        bx: 238.0,
+        base: 94,
+        len: 70,
+        sz: 2.4,
+        ph: 2.6,
+        haze: 0.5,
+    }),
+    streams: &[
+        (66.0, 53.0, 8),
+        (262.0, 70.0, 7),
+        (176.0, 96.0, 6),
+        (112.0, 74.0, 5),
+    ],
+    snow: 144,
+    school: [155.0, 34.0],
+};
+
+pub type DeepReef = Scene<false>;
+pub type DeepReefWide = Scene<true>;
+
+pub struct Scene<const IS_WIDE: bool> {
     dots: Dots,
     caus: Vec<f32>,
     wr: Vec<f32>,
@@ -124,7 +251,29 @@ pub struct DeepReef {
     rays: Vec<f32>,
 }
 
-impl DeepReef {
+impl<const IS_WIDE: bool> Scene<IS_WIDE> {
+    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
+    const W: usize = Self::L.w;
+    const N: usize = Self::W * H;
+
+    fn left_top(x: f64) -> f64 {
+        47.0 + 56.0 * dome((x / Self::L.left[0]).min(1.0)) - 8.0 * fbm(x * 0.06, 3.1, 4, 0.0)
+            + 3.0 * ((10.0 - x) / 10.0).max(0.0)
+    }
+
+    fn right_top(x: f64) -> f64 {
+        69.0 + 34.0 * dome(((Self::L.right[0] - x) / Self::L.right[1]).min(1.0))
+            - 5.0 * fbm(x * 0.08, 8.3, 3, 0.0)
+            - 3.0 * (-((x - Self::L.right[2]) / 6.0).powi(2)).exp()
+    }
+
+    fn far_top(x: f64) -> f64 {
+        HZ as f64
+            - 1.0
+            - 6.0 * fbm(x * 0.035 + 2.0, 1.7, 3, 0.0)
+            - 3.0 * (-((x - Self::L.far_dip) / 18.0).powi(2)).exp()
+    }
+
     fn caus_at(&self, u: f64, v: f64) -> f64 {
         let ct = CT as f64;
         let u = ((u % ct) + ct) % ct;
@@ -140,33 +289,35 @@ impl DeepReef {
     }
 
     fn add(&mut self, x: f64, r: f64, rgb: [f64; 3]) {
-        if x < 0.0 || x >= W as f64 || r < 0.0 || r >= H as f64 {
+        if x < 0.0 || x >= Self::W as f64 || r < 0.0 || r >= H as f64 {
             return;
         }
-        let k = r as usize * W + x as usize;
+        let k = r as usize * Self::W + x as usize;
         self.cr[k] = (f64::from(self.cr[k]) + rgb[0]) as f32;
         self.cg[k] = (f64::from(self.cg[k]) + rgb[1]) as f32;
         self.cb[k] = (f64::from(self.cb[k]) + rgb[2]) as f32;
     }
 
     fn put(&mut self, x: f64, r: f64, rgb: [f64; 3], a: f64) {
-        if x < 0.0 || x >= W as f64 || r < 0.0 || r >= H as f64 {
+        if x < 0.0 || x >= Self::W as f64 || r < 0.0 || r >= H as f64 {
             return;
         }
-        let k = r as usize * W + x as usize;
+        let k = r as usize * Self::W + x as usize;
         self.cr[k] = mix(f64::from(self.cr[k]), rgb[0], a) as f32;
         self.cg[k] = mix(f64::from(self.cg[k]), rgb[1], a) as f32;
         self.cb[k] = mix(f64::from(self.cb[k]), rgb[2], a) as f32;
     }
 }
 
-impl Piece for DeepReef {
-    const NAME: &'static str = "deep-reef";
-    const COLS: usize = W;
+impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
+    const NAME: &'static str = Self::L.name;
+    const COLS: usize = Self::W;
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
-    const FIT: Fit = Fit::Cover { anchor: 0.4 };
+    const FIT: Fit = Fit::Cover {
+        anchor: Self::L.anchor,
+    };
     const GROUND: u32 = hex("#03101a");
     // A dot is never drawn darker than about half brightness (dot size carries
     // the darkness), so the palette starts at mid tones.
@@ -219,72 +370,64 @@ impl Piece for DeepReef {
         }
 
         // --- the water: deep navy, lit from the surface and the sun ---------
-        let (mut wr, mut wg, mut wb) = (vec![0f32; N], vec![0f32; N], vec![0f32; N]);
+        let (mut wr, mut wg, mut wb) = (vec![0f32; Self::N], vec![0f32; Self::N], vec![0f32; Self::N]);
         // which shaft each cell sits in: shafts fan out from the sun, above the frame
-        let mut ray_at = vec![0u16; N];
+        let mut ray_at = vec![0u16; Self::N];
         for r in 0..H {
             let rf = r as f64;
-            for xi in 0..W {
+            for xi in 0..Self::W {
                 let x = xi as f64;
-                let k = r * W + xi;
+                let k = r * Self::W + xi;
                 let v = (rf + 0.5) / H as f64;
                 let up = (1.0 - v).powf(2.2);
-                let sun = (-((x - SUNX) / 52.0).powi(2) - ((rf - 4.0) / 34.0).powi(2)).exp();
+                let sun = (-((x - Self::L.sunx) / 52.0).powi(2) - ((rf - 4.0) / 34.0).powi(2)).exp();
                 // looking level, the distance is a lit blue haze the reefs stand against
                 let haze = (-((rf - 54.0) / 15.0).powi(2)).exp()
-                    * (1.0 - 0.6 * smooth(30.0, 100.0, (x - 112.0).abs()));
+                    * (1.0 - 0.6 * smooth(30.0, Self::L.mid[1], (x - Self::L.mid[0]).abs()));
                 // darker toward the sides and the floor, but the upper water stays lit
                 // so the kelp stands dark against it
                 let edge = 1.0
-                    - 0.4 * smooth(50.0, 104.0, (x - 112.0).abs()) * smooth(8.0, 70.0, rf)
+                    - 0.4 * smooth(Self::L.mid_dark, Self::L.mid[2], (x - Self::L.mid[0]).abs()) * smooth(8.0, 70.0, rf)
                     - 0.3 * smooth(66.0, 100.0, rf);
                 // soft clouds of plankton haze, so open water is never one flat tone
                 let veil = 0.78 + 0.44 * fbm(x * 0.022 + 5.0, rf * 0.04, 4, 0.0);
                 wr[k] = ((0.012 + 0.09 * up + 0.05 * sun + 0.04 * haze) * edge * veil) as f32;
                 wg[k] = ((0.1 + 0.32 * up + 0.14 * sun + 0.15 * haze) * edge * veil) as f32;
                 wb[k] = ((0.15 + 0.27 * up + 0.12 * sun + 0.17 * haze) * edge * veil) as f32;
-                let a = (x + 0.5 - SUNX).atan2(rf + 0.5 - SUNY);
+                let a = (x + 0.5 - Self::L.sunx).atan2(rf + 0.5 - SUNY);
                 ray_at[k] = js_round((a + 1.6) * 100.0).clamp(0.0, (RAYS - 1) as f64) as u16;
             }
         }
 
         // --- the static scene: sand, the reef, a far reef in the haze, a sea fan
-        let mut mat = vec![NONE; N];
+        let mut mat = vec![NONE; Self::N];
         // lit colour
-        let (mut ar, mut ag, mut ab) = (vec![0f32; N], vec![0f32; N], vec![0f32; N]);
-        let mut fog = vec![0f32; N]; // how much water stands between us and it
+        let (mut ar, mut ag, mut ab) = (vec![0f32; Self::N], vec![0f32; Self::N], vec![0f32; Self::N]);
+        let mut fog = vec![0f32; Self::N]; // how much water stands between us and it
                                      // caustic coords, weight
-        let (mut cu, mut cv, mut cw) = (vec![0f32; N], vec![0f32; N], vec![0f32; N]);
+        let (mut cu, mut cv, mut cw) = (vec![0f32; Self::N], vec![0f32; Self::N], vec![0f32; Self::N]);
         // brain corals: domes on the crests
-        // [x, depth of the centre below the crest, radius, kind]
-        let domes: [[f64; 4]; 7] = [
-            [16.0, 3.0, 7.0, 0.0],
-            [41.0, 2.5, 6.5, 1.0],
-            [53.0, 2.0, 4.5, 3.0],
-            [65.0, 2.0, 5.0, 2.0],
-            [158.0, 2.0, 4.0, 2.0],
-            [186.0, 3.0, 5.0, 1.0],
-            [196.0, 3.0, 4.5, 3.0],
-        ]
-        .map(|[x, d, r, kind]| {
-            let top = if x < 100.0 { left_top(x) } else { right_top(x) };
-            [x, top + d, r, kind]
-        });
-        // [x, crest row, half width, fog, coral kind]
-        const BOMMIES: [[f64; 5]; 3] = [
-            [114.0, 69.0, 9.0, 0.18, 0.0],
-            [94.0, 63.6, 4.0, 0.5, 2.0],
-            [139.0, 64.4, 4.0, 0.42, 1.0],
-        ];
-        let fan_c = [167.0, right_top(167.0) + 1.5];
+        let domes: Vec<[f64; 4]> = Self::L
+            .domes
+            .iter()
+            .map(|&[x, d, r, kind]| {
+                let top = if x < Self::L.split {
+                    Self::left_top(x)
+                } else {
+                    Self::right_top(x)
+                };
+                [x, top + d, r, kind]
+            })
+            .collect();
+        let fan_c = [Self::L.fan, Self::right_top(Self::L.fan) + 1.5];
         const FAN_R: f64 = 27.0;
         let hz = HZ as f64;
         for r in 0..H {
             let rf = r as f64;
             let y = rf + 0.5;
-            for xi in 0..W {
+            for xi in 0..Self::W {
                 let x = xi as f64;
-                let k = r * W + xi;
+                let k = r * Self::W + xi;
                 // the sea floor, a plane running off into the haze
                 if r >= HZ + 2 {
                     let d = y - hz;
@@ -293,7 +436,7 @@ impl Piece for DeepReef {
                                        // haze; spacing grows as it comes nearer, and fades out before it
                                        // gets too fine to draw
                     let near = 0.4 + 0.6 * (d / 38.0);
-                    let sx = (x + 0.5 - 100.0) / near;
+                    let sx = (x + 0.5 - Self::L.cam) / near;
                     let sy = 30.0 * d.ln();
                     let aa = smooth(2.2, 1.4, 30.0 / d);
                     // ripples in the sand run across our view, bending a little: thin
@@ -305,7 +448,7 @@ impl Piece for DeepReef {
                         + aa * (0.5 * crest - 0.12)
                         + 0.12 * (fbm(sx * 0.08, sy * 0.15, 3, 0.0) - 0.5);
                     mat[k] = SAND;
-                    let lit = 0.6 + 0.15 * smooth(100.0, 130.0, x) - 0.3 * smooth(84.0, 100.0, rf);
+                    let lit = 0.6 + 0.15 * smooth(Self::L.lit[0], Self::L.lit[1], x) - 0.3 * smooth(84.0, 100.0, rf);
                     ar[k] = (0.38 * rip * lit) as f32;
                     ag[k] = (0.37 * rip * lit) as f32;
                     ab[k] = (0.3 * rip * lit) as f32;
@@ -314,11 +457,11 @@ impl Piece for DeepReef {
                     cv[k] = (sy * 2.3) as f32;
                     cw[k] = (0.5 * smooth(14.0, 26.0, d)) as f32;
                 }
-                if y >= far_top(x) && r < HZ + 6 {
+                if y >= Self::far_top(x) && r < HZ + 6 {
                     mat[k] = FAR;
                     // lit along its crest, dim below, half lost in the blue
                     let s = (0.45 + 0.55 * fbm(x * 0.15, y * 0.15, 2, 0.0))
-                        * (0.5 + 0.8 * (-(y - far_top(x)) / 2.0).exp());
+                        * (0.5 + 0.8 * (-(y - Self::far_top(x)) / 2.0).exp());
                     ar[k] = (0.06 * s) as f32;
                     ag[k] = (0.11 * s) as f32;
                     ab[k] = (0.14 * s) as f32;
@@ -353,7 +496,7 @@ impl Piece for DeepReef {
                     }
                 }
                 // small coral heads out on the sand, half lost in the blue
-                for &[bx, crest, hw, f0, kind] in &BOMMIES {
+                for &[bx, crest, hw, f0, kind] in Self::L.bommies {
                     let u = (x + 0.5 - bx) / hw;
                     let top = crest + u * u * u * u * hw * 0.5 - 1.6 * fbm(x * 0.35, crest, 2, 0.0);
                     if u.abs() < 1.1
@@ -377,8 +520,8 @@ impl Piece for DeepReef {
                     }
                 }
                 // reef masses, left and right: dark rock, rimmed with lit coral
-                let top = if x < 100.0 { left_top(x) } else { right_top(x) };
-                if y >= top && !(87.0..=147.0).contains(&x) {
+                let top = if x < Self::L.split { Self::left_top(x) } else { Self::right_top(x) };
+                if y >= top && !(Self::L.open_sand[0]..=Self::L.open_sand[1]).contains(&x) {
                     mat[k] = REEF;
                     let below = y - top;
                     let n = fbm(x * 0.18, y * 0.22, 4, 0.0);
@@ -404,8 +547,8 @@ impl Piece for DeepReef {
                     ar[k] = (mix(rr, cr0, living) * lit) as f32;
                     ag[k] = (mix(rg, cg0, living) * lit) as f32;
                     ab[k] = (mix(rb, cb0, living) * lit) as f32;
-                    fog[k] = if x < 100.0 {
-                        0.04 + 0.04 * smooth(0.0, 80.0, x)
+                    fog[k] = if x < Self::L.split {
+                        0.04 + 0.04 * smooth(0.0, Self::L.left[1], x)
                     } else {
                         0.08
                     } as f32;
@@ -428,8 +571,8 @@ impl Piece for DeepReef {
                         ar[k] = (cr0 * s) as f32;
                         ag[k] = (cg0 * s) as f32;
                         ab[k] = (cb0 * s) as f32;
-                        fog[k] = if dx0 < 100.0 {
-                            0.04 + 0.04 * smooth(0.0, 80.0, dx0)
+                        fog[k] = if dx0 < Self::L.split {
+                            0.04 + 0.04 * smooth(0.0, Self::L.left[1], dx0)
                         } else {
                             0.08
                         } as f32;
@@ -441,11 +584,8 @@ impl Piece for DeepReef {
             }
         }
         // branching coral standing up off both crests
-        let groups: [(u32, usize, f64, f64, TopAt); 2] = [
-            (31, 10, 3.0, 60.0, left_top),
-            (53, 3, 178.0, 20.0, right_top),
-        ];
-        for (seed, count, x0, span, top_at) in groups {
+        let tops: [TopAt; 2] = [Self::left_top, Self::right_top];
+        for ((seed, count, x0, span), top_at) in Self::L.branches.into_iter().zip(tops) {
             let mut rnd = Mulberry32(seed);
             for i in 0..count {
                 let bx = x0 + rnd.next() * span;
@@ -466,11 +606,11 @@ impl Piece for DeepReef {
                     let x = js_round(bx + lean * s + branch);
                     let r = js_round(base - s);
                     // upstream's typed arrays drop writes past the end
-                    if x < 0.0 || x >= W as f64 || r < 0.0 || r >= H as f64 {
+                    if x < 0.0 || x >= Self::W as f64 || r < 0.0 || r >= H as f64 {
                         s += 0.5;
                         continue;
                     }
-                    let k = r as usize * W + x as usize;
+                    let k = r as usize * Self::W + x as usize;
                     mat[k] = REEF;
                     let tip = s / h;
                     let [cr0, cg0, cb0] = CORAL[kind];
@@ -487,8 +627,8 @@ impl Piece for DeepReef {
             }
         }
         // the water's colour filters what is behind it: reds go first
-        let (mut br, mut bg, mut bb) = (vec![0f32; N], vec![0f32; N], vec![0f32; N]);
-        for k in 0..N {
+        let (mut br, mut bg, mut bb) = (vec![0f32; Self::N], vec![0f32; Self::N], vec![0f32; Self::N]);
+        for k in 0..Self::N {
             if mat[k] == NONE {
                 (br[k], bg[k], bb[k]) = (wr[k], wg[k], wb[k]);
                 continue;
@@ -527,7 +667,7 @@ impl Piece for DeepReef {
             })
             .collect();
         // kelp: x, base row, length, width, phase, and how much water hides it
-        let kelp = vec![
+        let mut kelp = vec![
             Kelp {
                 bx: 14.0,
                 base: 100,
@@ -537,7 +677,7 @@ impl Piece for DeepReef {
                 haze: 0.0,
             },
             Kelp {
-                bx: 189.0,
+                bx: Self::L.kelp_x,
                 base: 100,
                 len: 96,
                 sz: 3.5,
@@ -545,9 +685,10 @@ impl Piece for DeepReef {
                 haze: 0.0,
             },
         ];
-        let streams = [(44.0, 52.0, 8), (168.0, 66.0, 7), (116.0, 96.0, 6)];
+        // further off, out on the sand, half lost in the blue
+        kelp.extend(Self::L.far_kelp);
         let mut bubbles = Vec::new();
-        for (x0, y0, n) in streams {
+        for &(x0, y0, n) in Self::L.streams {
             for _ in 0..n {
                 bubbles.push(Bubble {
                     x0,
@@ -558,9 +699,9 @@ impl Piece for DeepReef {
                 });
             }
         }
-        let snow = (0..90)
+        let snow = (0..Self::L.snow)
             .map(|_| Speck {
-                x: rnd.next() * W as f64,
+                x: rnd.next() * Self::W as f64,
                 y: rnd.next() * H as f64,
                 sp: 0.3 + rnd.next() * 0.7,
                 ph: rnd.next() * 6.28,
@@ -587,10 +728,10 @@ impl Piece for DeepReef {
             kelp,
             bubbles,
             snow,
-            cr: vec![0f32; N],
-            cg: vec![0f32; N],
-            cb: vec![0f32; N],
-            floor: vec![0f32; N],
+            cr: vec![0f32; Self::N],
+            cg: vec![0f32; Self::N],
+            cb: vec![0f32; Self::N],
+            floor: vec![0f32; Self::N],
             rays: vec![0f32; RAYS],
         }
     }
@@ -607,15 +748,15 @@ impl Piece for DeepReef {
         }
         let (cx0, cy0, cx1, cy1) = (t * 0.9, t * 0.35, -t * 0.6 + 21.0, t * 0.5 + 9.0);
         // the sun's blaze wobbles as the swell passes over it
-        let hx = SUNX + 1.6 * (t * 0.6).sin() + 0.8 * (t * 1.7 + 1.0).sin();
+        let hx = Self::L.sunx + 1.6 * (t * 0.6).sin() + 0.8 * (t * 1.7 + 1.0).sin();
 
         for r in 0..H {
             let rf = r as f64;
             let y = rf + 0.5;
             let depth_fade = (-rf / 30.0).exp() * smooth(0.0, 14.0, rf + 6.0);
-            for xi in 0..W {
+            for xi in 0..Self::W {
                 let x = xi as f64;
-                let k = r * W + xi;
+                let k = r * Self::W + xi;
                 let (mut cr, mut cg, mut cb) = (
                     f64::from(self.br[k]),
                     f64::from(self.bg[k]),
@@ -629,9 +770,9 @@ impl Piece for DeepReef {
                         let dist = SURF + 7.0 - y;
                         let q = 30.0 / dist;
                         let a =
-                            self.caus_at(((x - 100.0) / dist) * 1.6 + t * 1.6, q * 6.0 + t * 0.8);
+                            self.caus_at(((x - Self::L.cam) / dist) * 1.6 + t * 1.6, q * 6.0 + t * 0.8);
                         let b2 = self.caus_at(
-                            ((x - 100.0) / dist) * 1.2 - t * 1.1 + 31.0,
+                            ((x - Self::L.cam) / dist) * 1.2 - t * 1.1 + 31.0,
                             q * 4.5 - t * 0.6 + 17.0,
                         );
                         let lit = smooth(SURF + 6.0, 0.0, y).powf(1.3);
@@ -689,12 +830,13 @@ impl Piece for DeepReef {
         }
 
         // the school: one body turning along a slow loop, each fish a beat behind
-        let path_x = |s: f64| 95.0 + 24.0 * (0.11 * s + 0.4).sin();
+        let [px0, sway] = Self::L.school;
+        let path_x = |s: f64| px0 + sway * (0.11 * s + 0.4).sin();
         let path_y = |s: f64| 44.0 + 8.0 * (0.17 * s + 2.2).sin();
         for i in 0..self.fish.len() {
             let Fish { a, b, ph, sp } = self.fish[i];
             let s = t - a * 0.08;
-            let vx = 24.0 * 0.11 * (0.11 * s + 0.4).cos();
+            let vx = sway * 0.11 * (0.11 * s + 0.4).cos();
             let vy = 8.0 * 0.17 * (0.17 * s + 2.2).cos();
             let th = vy.atan2(vx);
             let (ct, st) = (th.cos(), th.sin());
@@ -732,7 +874,7 @@ impl Piece for DeepReef {
                 ph,
                 haze,
             } = self.kelp[i];
-            let side = if bx < 100.0 { 1.0 } else { -1.0 }; // which way the sun lies
+            let side = if bx < Self::L.sun_side { 1.0 } else { -1.0 }; // which way the sun lies
             for r in (base.saturating_sub(len)..base).rev() {
                 let rf = r as f64;
                 let s01 = (base - r) as f64 / len as f64;
@@ -751,17 +893,17 @@ impl Piece for DeepReef {
                 let drag = (t * 0.55 + ph - s01 * 4.2).cos() * 0.8 * sz;
                 let x0 = x - stem - lobe_l + drag.min(0.0);
                 let x1 = x + stem + lobe_r + drag.max(0.0);
-                let col = js_round(x).clamp(0.0, (W - 1) as f64) as usize;
+                let col = js_round(x).clamp(0.0, (Self::W - 1) as f64) as usize;
                 let ray =
-                    f64::from(self.rays[self.ray_at[r * W + col] as usize]) * (-rf / 30.0).exp();
+                    f64::from(self.rays[self.ray_at[r * Self::W + col] as usize]) * (-rf / 30.0).exp();
                 let lit = smooth(0.3, 0.6, ray);
                 let (xa, xb) = (js_round(x0) as i64, js_round(x1) as i64);
                 for xx in xa..=xb {
-                    if xx < 0 || xx >= W as i64 {
+                    if xx < 0 || xx >= Self::W as i64 {
                         continue;
                     }
                     let xf = xx as f64;
-                    let k = r * W + xx as usize;
+                    let k = r * Self::W + xx as usize;
                     // backlit: dark through the middle, the edges glowing, the sun-facing
                     // edge most of all and gold where a shaft catches it
                     let sun = if side > 0.0 { xx == xb } else { xx == xa };
@@ -802,7 +944,7 @@ impl Piece for DeepReef {
             self.add(js_round(x), js_round(y), [0.7 * v, 0.95 * v, 1.0 * v]);
         }
         // specks drifting in the water
-        let (wf, hf) = (W as f64, H as f64);
+        let (wf, hf) = (Self::W as f64, H as f64);
         for i in 0..self.snow.len() {
             let Speck { x, y, sp, ph, b } = self.snow[i];
             let x = (((x + t * sp + 2.0 * (t * 0.3 + ph).sin()) % wf) + wf) % wf;
@@ -811,8 +953,8 @@ impl Piece for DeepReef {
         }
 
         for r in 0..H {
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let rgb = [
                     f64::from(self.cr[k]),
                     f64::from(self.cg[k]),

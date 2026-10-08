@@ -12,4 +12,4 @@ The storm stands further east, its anvil streaming on across the extra sky.
 
 Recomposed at 320x100 (3.2:1) to fill pine's glass uncropped; see [`-wide` variants](../ascii-rest.md#-wide-variants).
 
-Source: [`src/ascii_rest/storm_plains_wide.rs`](../../src/ascii_rest/storm_plains_wide.rs).
+Source: the `WIDE` layout in [`src/ascii_rest/storm_plains.rs`](../../src/ascii_rest/storm_plains.rs), the original's own module.

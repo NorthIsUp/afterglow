@@ -4,6 +4,10 @@
 //!
 //! The land is built once; each frame shades the sky, then mirrors it into the
 //! water. Upstream's `Float32Array`s stay `f32` here, as in `night_coast`.
+//!
+//! `aurora-fjord-wide` is the same night recomposed for a 3.2:1 panel. The
+//! fjord and cabin move 60 columns right to stay off-centre, and each range
+//! gains two more peaks in the new width; the curtains span it all.
 
 use std::f64::consts::PI;
 
@@ -12,7 +16,6 @@ use super::math::{clamp, fbm, hash, js_round, mix, noise, sign_or_one, smooth};
 use super::{Fit, Piece, hex};
 use crate::grid::Cell;
 
-const W: usize = 200;
 const H: usize = 100;
 const WL: usize = 62; // the waterline
 
@@ -25,11 +28,6 @@ const ROOF: u8 = 5;
 const PANE: u8 = 6;
 const TREE: u8 = 7;
 const DOOR: u8 = 8;
-const CAB: [usize; 2] = [142, 161]; // the cabin's walls, x from and to
-const PANES: [[usize; 2]; 2] = [[145, 148], [156, 159]];
-const DOOR_X: [usize; 2] = [150, 152];
-const LAMPS: [[f64; 2]; 2] = [[147.0, 1.0], [158.0, 0.8]]; // pane centres and their strength
-const RAYS: usize = 4 * W;
 
 // Ranges as tent peaks [x, height, slope], roughened.
 const LEFT: [[f64; 3]; 4] = [
@@ -51,6 +49,30 @@ const DISTANT: [[f64; 3]; 4] = [
     [134.0, 8.0, 0.5],
 ];
 
+// The wide ranges: upstream's moved with the fjord, two more peaks each.
+const LEFT_WIDE: [[f64; 3]; 6] = [
+    [85.0, 38.0, 1.3],
+    [66.0, 29.0, 0.9],
+    [110.0, 25.0, 1.0],
+    [132.0, 13.0, 0.6],
+    [34.0, 34.0, 1.05],
+    [6.0, 27.0, 0.8],
+];
+const RIGHT_WIDE: [[f64; 3]; 6] = [
+    [232.0, 30.0, 1.15],
+    [254.0, 24.0, 0.85],
+    [211.0, 16.0, 1.0],
+    [272.0, 22.0, 0.6],
+    [292.0, 35.0, 1.2],
+    [316.0, 28.0, 0.9],
+];
+const DISTANT_WIDE: [[f64; 3]; 4] = [
+    [160.0, 10.0, 0.5],
+    [179.0, 12.0, 0.55],
+    [146.0, 7.0, 0.45],
+    [194.0, 8.0, 0.5],
+];
+
 /// A range's height at `x` and the peak it belongs to.
 fn range(x: f64, peaks: &[[f64; 3]], seed: f64, rough: f64) -> (f64, f64) {
     let (mut m, mut px) = (-99.0, 0.0);
@@ -66,15 +88,10 @@ fn range(x: f64, peaks: &[[f64; 3]], seed: f64, rough: f64) -> (f64, f64) {
     (m + j * (m.max(0.0) / 6.0).min(1.0), px)
 }
 
-fn shore_top(x: f64) -> f64 {
-    WL as f64
-        - 2.2 * smooth(134.0, 140.0, x) * smooth(178.0, 168.0, x)
-        - 0.6 * noise(x * 0.3, 2.0, 0.0)
-}
-
 
 /// The land layers, shared by the builders below.
 struct Land {
+    w: usize,
     mat: Vec<u8>,
     sr: Vec<f32>,
     sg: Vec<f32>,
@@ -96,10 +113,10 @@ impl Land {
             }
             let tier = (dy + th * 0.3) / 1.8;
             let w = (dy / th) * tw * (0.7 + 0.45 * (tier - tier.floor())) + 0.35;
-            let x_hi = ((W - 1) as f64).min(tx + tw + 1.0);
+            let x_hi = ((self.w - 1) as f64).min(tx + tw + 1.0);
             let mut x = (tx - tw - 1.0).floor().max(0.0) as usize;
             while x as f64 <= x_hi {
-                let k = r * W + x;
+                let k = r * self.w + x;
                 let ex = x as f64 + 0.5 - tx;
                 if ex.abs() > w || guard.is_some_and(|g| g(self.mat[k])) {
                     x += 1;
@@ -124,7 +141,42 @@ impl Land {
     }
 }
 
-pub struct AuroraFjord {
+/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+struct Layout {
+    name: &'static str,
+    w: usize,
+    anchor: f64,
+    /// How far right of upstream's the fjord, the shelf and the cabin stand.
+    fjord: usize,
+    left: &'static [[f64; 3]],
+    right: &'static [[f64; 3]],
+    distant: &'static [[f64; 3]],
+}
+
+const ORIGINAL: Layout = Layout {
+    name: "aurora-fjord",
+    w: 200,
+    anchor: 0.15,
+    fjord: 0,
+    left: &LEFT,
+    right: &RIGHT,
+    distant: &DISTANT,
+};
+
+const WIDE: Layout = Layout {
+    name: "aurora-fjord-wide",
+    w: 320,
+    anchor: 0.5,
+    fjord: 60,
+    left: &LEFT_WIDE,
+    right: &RIGHT_WIDE,
+    distant: &DISTANT_WIDE,
+};
+
+pub type AuroraFjord = Scene<false>;
+pub type AuroraFjordWide = Scene<true>;
+
+pub struct Scene<const IS_WIDE: bool> {
     dots: Dots,
     mat: Vec<u8>,
     sr: Vec<f32>,
@@ -153,22 +205,47 @@ pub struct AuroraFjord {
     light_x: Vec<f32>,
 }
 
-fn ray(arr: &[f32], u: f64) -> f64 {
-    let s = u * 4.0;
-    let i = s.floor();
-    let f = s - i;
-    let i = (i as i64).rem_euclid(RAYS as i64) as usize;
-    let (a, b) = (f64::from(arr[i]), f64::from(arr[i + 1]));
-    a + (b - a) * f
+impl<const IS_WIDE: bool> Scene<IS_WIDE> {
+    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
+    const W: usize = Self::L.w;
+    /// [`Layout::fjord`] as a distance.
+    const DX: f64 = Self::L.fjord as f64;
+    const RAYS: usize = 4 * Self::W;
+    /// The cabin's walls, x from and to.
+    const CAB: [usize; 2] = [142 + Self::L.fjord, 161 + Self::L.fjord];
+    const PANES: [[usize; 2]; 2] = [
+        [145 + Self::L.fjord, 148 + Self::L.fjord],
+        [156 + Self::L.fjord, 159 + Self::L.fjord],
+    ];
+    const DOOR_X: [usize; 2] = [150 + Self::L.fjord, 152 + Self::L.fjord];
+    /// Pane centres and their strength.
+    const LAMPS: [[f64; 2]; 2] = [[147.0 + Self::DX, 1.0], [158.0 + Self::DX, 0.8]];
+
+    fn shore_top(x: f64) -> f64 {
+        WL as f64
+            - 2.2 * smooth(134.0 + Self::DX, 140.0 + Self::DX, x) * smooth(178.0 + Self::DX, 168.0 + Self::DX, x)
+            - 0.6 * noise(x * 0.3, 2.0, 0.0)
+    }
+
+    fn ray(arr: &[f32], u: f64) -> f64 {
+        let s = u * 4.0;
+        let i = s.floor();
+        let f = s - i;
+        let i = (i as i64).rem_euclid(Self::RAYS as i64) as usize;
+        let (a, b) = (f64::from(arr[i]), f64::from(arr[i + 1]));
+        a + (b - a) * f
+    }
 }
 
-impl Piece for AuroraFjord {
-    const NAME: &'static str = "aurora-fjord";
-    const COLS: usize = W;
+impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
+    const NAME: &'static str = Self::L.name;
+    const COLS: usize = Self::W;
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
-    const FIT: Fit = Fit::Cover { anchor: 0.15 };
+    const FIT: Fit = Fit::Cover {
+        anchor: Self::L.anchor,
+    };
     const GROUND: u32 = hex("#05080f");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[
@@ -184,9 +261,10 @@ impl Piece for AuroraFjord {
     ];
 
     fn new() -> Self {
-        let n = W * H;
+        let n = Self::W * H;
         let wl = WL as f64;
         let mut land = Land {
+            w: Self::W,
             mat: vec![AIR; n],
             sr: vec![0f32; n],
             sg: vec![0f32; n],
@@ -196,14 +274,14 @@ impl Piece for AuroraFjord {
         };
 
         // --- the land, built once --------------------------------------------
-        let mut near_top = vec![0f32; W];
-        let mut far_top = vec![0f32; W];
-        let mut peak_x = vec![0f32; W];
-        for x in 0..W {
+        let mut near_top = vec![0f32; Self::W];
+        let mut far_top = vec![0f32; Self::W];
+        let mut peak_x = vec![0f32; Self::W];
+        for x in 0..Self::W {
             let xc = x as f64 + 0.5;
-            let (hl, pl) = range(xc, &LEFT, 3.1, 4.0);
-            let (hr, pr) = range(xc, &RIGHT, 7.7, 4.0);
-            let (hd, _) = range(xc, &DISTANT, 11.3, 2.2);
+            let (hl, pl) = range(xc, Self::L.left, 3.1, 4.0);
+            let (hr, pr) = range(xc, Self::L.right, 7.7, 4.0);
+            let (hd, _) = range(xc, Self::L.distant, 11.3, 2.2);
             near_top[x] = (wl - hl.max(hr).max(0.0)) as f32;
             peak_x[x] = (if hl > hr { pl } else { pr }) as f32;
             far_top[x] = (wl - hd.max(0.0)) as f32;
@@ -211,8 +289,8 @@ impl Piece for AuroraFjord {
         let cab_base = wl - 2.2;
 
         for r in 0..WL {
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let (x, rf) = (xi as f64, r as f64);
                 let y = rf + 0.5;
                 let nt = f64::from(near_top[xi]);
@@ -226,7 +304,7 @@ impl Piece for AuroraFjord {
                     // Faces turned toward the fjord catch the aurora; the ridge
                     // between the faces wanders as it comes down from the peak.
                     let ridge = px + (depth + 1.0) * 0.6 * (noise(y * 0.1, px, 0.0) - 0.5);
-                    let inward = if px < 100.0 { 1.0 } else { -1.0 };
+                    let inward = if px < 100.0 + Self::DX { 1.0 } else { -1.0 };
                     let face = smooth(-4.0, 4.0, (x + 0.5 - ridge) * inward);
                     // ribs and couloirs running down the fall line, each with a lit side
                     let u = x + depth * 0.45 * sign_or_one(side);
@@ -237,7 +315,7 @@ impl Piece for AuroraFjord {
                     let streak = smooth(0.56, 0.64, fbm(u * 0.32, y * 0.035 + px, 3, 0.0))
                         * smooth(1.0, 5.0, depth);
                     // a stand of spruce climbing the slope behind the cabin, jagged on top
-                    let cx = x + 0.5 - 152.0;
+                    let cx = x + 0.5 - (152.0 + Self::DX);
                     let wood = wl - 18.5
                         + 9.0 * (cx / 19.0).powi(2)
                         + 1.5 * (noise(x * 0.7, 9.0, 0.0) - 0.5)
@@ -286,7 +364,7 @@ impl Piece for AuroraFjord {
                     land.rec[k] = (0.2 + 0.3 * snow) as f32;
                 }
                 // the shelf the cabin stands on, snowed over
-                if xi > 132 && xi < 180 && y >= shore_top(x) {
+                if xi > 132 + Self::L.fjord && xi < 180 + Self::L.fjord && y >= Self::shore_top(x) {
                     land.mat[k] = SHORE;
                     let f = 0.6 + 0.3 * fbm(x * 0.3, y * 0.5, 2, 0.0);
                     land.sr[k] = (0.26 * f) as f32;
@@ -303,11 +381,11 @@ impl Piece for AuroraFjord {
             m == WALL || m == ROOF || m == PANE || m == DOOR || m == SHORE
         }
         let mut x = -1.0f64;
-        while x < W as f64 + 2.0 {
+        while x < Self::W as f64 + 2.0 {
             let h = hash((x * 7.0).floor(), 21.0);
-            let open = smooth(96.0, 80.0, x) + smooth(122.0, 136.0, x);
-            let on_shelf = x > 132.0 && x < 180.0;
-            if open > 0.05 && !(x > 136.0 && x < 166.0) {
+            let open = smooth(96.0 + Self::DX, 80.0 + Self::DX, x) + smooth(122.0 + Self::DX, 136.0 + Self::DX, x);
+            let on_shelf = x > 132.0 + Self::DX && x < 180.0 + Self::DX;
+            if open > 0.05 && !(x > 136.0 + Self::DX && x < 166.0 + Self::DX) {
                 let th = (3.2
                     + hash((x * 3.0).floor(), 5.0) * 3.0
                     + if hash((x * 5.0).floor(), 8.0) > 0.7 {
@@ -323,7 +401,7 @@ impl Piece for AuroraFjord {
                         th,
                         1.0 + hash(x.floor(), 4.0) * 0.6,
                         if on_shelf {
-                            shore_top(x) - 0.4
+                            Self::shore_top(x) - 0.4
                         } else {
                             wl + 0.3
                         },
@@ -337,15 +415,15 @@ impl Piece for AuroraFjord {
         // The cabin: red boards, a snowed roof, two warm panes, a door, a chimney.
         let eave = cab_base - 7.0;
         let roof_top = eave - 8.0;
-        let (chim, chim_top) = (CAB[1] - 5, eave - 8.5);
-        let (c0, c1) = (CAB[0] as f64, CAB[1] as f64);
+        let (chim, chim_top) = (Self::CAB[1] - 5, eave - 8.5);
+        let (c0, c1) = (Self::CAB[0] as f64, Self::CAB[1] as f64);
         let cx = (c0 + c1 + 1.0) / 2.0;
         for r in 0..WL {
-            for xi in CAB[0] - 3..=CAB[1] + 3 {
-                let k = r * W + xi;
+            for xi in Self::CAB[0] - 3..=Self::CAB[1] + 3 {
+                let k = r * Self::W + xi;
                 let x = xi as f64;
                 let y = r as f64 + 0.5;
-                if xi >= CAB[0] && xi <= CAB[1] && y >= eave && y < cab_base + 0.5 {
+                if xi >= Self::CAB[0] && xi <= Self::CAB[1] && y >= eave && y < cab_base + 0.5 {
                     land.mat[k] = WALL;
                     let boards = if r & 1 != 0 { 0.82 } else { 1.0 };
                     let s = (0.5 + 0.5 * ((c1 - x) / (c1 - c0))) * boards;
@@ -353,12 +431,12 @@ impl Piece for AuroraFjord {
                     land.sg[k] = (0.14 * s) as f32;
                     land.sb[k] = (0.11 * s) as f32;
                     land.rim[k] = 0.0;
-                    for &[a, b] in &PANES {
+                    for &[a, b] in &Self::PANES {
                         if xi >= a && xi <= b && y >= eave + 1.5 && y < cab_base - 2.0 {
                             land.mat[k] = PANE;
                         }
                     }
-                    if xi >= DOOR_X[0] && xi <= DOOR_X[1] && y >= eave + 1.5 {
+                    if xi >= Self::DOOR_X[0] && xi <= Self::DOOR_X[1] && y >= eave + 1.5 {
                         land.mat[k] = DOOR;
                         (land.sr[k], land.sg[k], land.sb[k]) = (0.16, 0.06, 0.05);
                     }
@@ -400,10 +478,12 @@ impl Piece for AuroraFjord {
             [170.0, 6.0],
             [174.5, 8.0],
         ] {
-            land.spruce(tx, th, 2.2, shore_top(tx) + 0.5, Some(cabin));
+            let tx = tx + Self::DX;
+            land.spruce(tx, th, 2.2, Self::shore_top(tx) + 0.5, Some(cabin));
         }
 
         let Land {
+            w: _,
             mat,
             sr,
             sg,
@@ -413,16 +493,16 @@ impl Piece for AuroraFjord {
         } = land;
 
         // the warm light the panes throw on the snow and the air around them
-        let mut lamp_land = vec![0f32; WL * W];
+        let mut lamp_land = vec![0f32; WL * Self::W];
         for r in 0..WL {
-            for x in 0..W {
-                let k = r * W + x;
+            for x in 0..Self::W {
+                let k = r * Self::W + x;
                 let m = mat[k];
                 if cabin(m) {
                     continue;
                 }
                 let mut g = 0.0;
-                for &[lx, s] in &LAMPS {
+                for &[lx, s] in &Self::LAMPS {
                     let (wx, wy) = (x as f64 + 0.5 - lx, r as f64 + 0.5 - (cab_base - 2.5));
                     let d = (wx * wx * 0.6 + wy * wy * 2.2).sqrt();
                     g += s * (-d / 5.5).exp() * 0.6;
@@ -437,12 +517,12 @@ impl Piece for AuroraFjord {
         }
 
         // the sky's unevenness and its stars
-        let haze = (0..WL * W)
-            .map(|k| fbm((k % W) as f64 * 0.04, (k / W) as f64 * 0.07, 3, 0.0) as f32)
+        let haze = (0..WL * Self::W)
+            .map(|k| fbm((k % Self::W) as f64 * 0.04, (k / Self::W) as f64 * 0.07, 3, 0.0) as f32)
             .collect();
-        let star = (0..WL * W)
+        let star = (0..WL * Self::W)
             .map(|k| {
-                let h = hash((k % W) as f64, (k / W) as f64 + 101.0);
+                let h = hash((k % Self::W) as f64, (k / Self::W) as f64 + 101.0);
                 if h > 0.986 {
                     (0.35 + (h - 0.986) * 45.0) as f32
                 } else {
@@ -468,17 +548,17 @@ impl Piece for AuroraFjord {
             star,
             gap,
             eave,
-            base_a: vec![0.0; W],
-            tall_a: vec![0.0; W],
-            env_a: vec![0.0; W],
-            base_b: vec![0.0; W],
-            env_b: vec![0.0; W],
-            rays_a: vec![0.0; RAYS + 2],
-            rays_b: vec![0.0; RAYS + 2],
-            r: vec![0.0; WL * W],
-            g: vec![0.0; WL * W],
-            b: vec![0.0; WL * W],
-            light_x: vec![0.0; W],
+            base_a: vec![0.0; Self::W],
+            tall_a: vec![0.0; Self::W],
+            env_a: vec![0.0; Self::W],
+            base_b: vec![0.0; Self::W],
+            env_b: vec![0.0; Self::W],
+            rays_a: vec![0.0; Self::RAYS + 2],
+            rays_b: vec![0.0; Self::RAYS + 2],
+            r: vec![0.0; WL * Self::W],
+            g: vec![0.0; WL * Self::W],
+            b: vec![0.0; WL * Self::W],
+            light_x: vec![0.0; Self::W],
         }
     }
 
@@ -486,9 +566,9 @@ impl Piece for AuroraFjord {
         let wl = WL as f64;
         let hf = H as f64;
         // --- the curtains ----------------------------------------------------
-        for xi in 0..W {
+        for xi in 0..Self::W {
             let x = xi as f64;
-            let u = x / W as f64;
+            let u = x / Self::W as f64;
             // the main curtain sweeps down from the upper left, low over the
             // fjord, and lifts again to the right; ripples travel along it and
             // fold it
@@ -513,18 +593,18 @@ impl Piece for AuroraFjord {
                 * (0.25 + 0.5 * fbm(x * 0.03 + t * 0.05, 3.3, 2, 0.0)))
                 as f32;
         }
-        for i in 0..=RAYS + 1 {
+        for i in 0..=Self::RAYS + 1 {
             let u = i as f64 / 4.0;
             self.rays_a[i] =
                 (0.14 + fbm(u * 0.6 + t * 0.35, t * 0.12, 3, 0.0).powf(2.4) * 2.5) as f32;
             self.rays_b[i] =
                 (0.1 + fbm(u * 0.45 - t * 0.2, 5.0 + t * 0.1, 3, 0.0).powf(2.2) * 2.0) as f32;
         }
-        for x in 0..W {
+        for x in 0..Self::W {
             let mut s = 0.0;
             let mut d = -24i32;
             while d <= 24 {
-                let xx = (x as i32 + d).clamp(0, W as i32 - 1) as usize;
+                let xx = (x as i32 + d).clamp(0, Self::W as i32 - 1) as usize;
                 s += f64::from(self.env_a[xx]) + 0.4 * f64::from(self.env_b[xx]);
                 d += 6;
             }
@@ -537,8 +617,8 @@ impl Piece for AuroraFjord {
             let rf = r as f64;
             let y = rf + 0.5;
             let v = y / wl;
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let x = xi as f64;
                 let m = self.mat[k];
                 let light_x = f64::from(self.light_x[xi]);
@@ -554,11 +634,11 @@ impl Piece for AuroraFjord {
                     let mut a = 0.0;
                     let d = base_a - y;
                     if d > -4.0 && d < 46.0 {
-                        let bend = (f64::from(self.base_a[(xi + 1).min(W - 1)])
+                        let bend = (f64::from(self.base_a[(xi + 1).min(Self::W - 1)])
                             - f64::from(self.base_a[xi.saturating_sub(1)]))
                         .abs();
                         let hc = f64::from(self.tall_a[xi]);
-                        let lean = ray(&self.rays_a, x + d * 0.22);
+                        let lean = Self::ray(&self.rays_a, x + d * 0.22);
                         let prof = if d < 0.0 {
                             (-d * d * 0.9).exp()
                         } else {
@@ -597,7 +677,7 @@ impl Piece for AuroraFjord {
                             (1.0 - (-(db + 0.4)).exp()) * (-db / 9.0).exp()
                         };
                         let b = prof
-                            * ray(&self.rays_b, x + db * 0.18)
+                            * Self::ray(&self.rays_b, x + db * 0.18)
                             * f64::from(self.env_b[xi])
                             * 0.85
                             * smooth(0.0, 8.0, y);
@@ -655,7 +735,7 @@ impl Piece for AuroraFjord {
                     if m == PANE {
                         let f = flick + 0.04 * (t * 5.3 + x).sin();
                         (cr, cg, cb) = (f, 0.76 * f, 0.38 * f);
-                    } else if m == DOOR && xi == DOOR_X[1] && rf > self.eave + 1.0 {
+                    } else if m == DOOR && xi == Self::DOOR_X[1] && rf > self.eave + 1.0 {
                         // light through the crack of the door
                         (cr, cg, cb) = (0.55 * flick, 0.36 * flick, 0.14 * flick);
                     }
@@ -684,11 +764,11 @@ impl Piece for AuroraFjord {
                 - 1
                 - (r as i64 - WL as i64)
                 - js_round(0.4 * (rf * 0.9 + t * 0.6).sin()) as i64;
-            let r0 = ry.max(0) as usize * W;
-            let r1 = (ry - 1).max(0) as usize * W;
-            let r2 = (ry - 2).max(0) as usize * W;
-            for xi in 0..W {
-                let k = r * W + xi;
+            let r0 = ry.max(0) as usize * Self::W;
+            let r1 = (ry - 1).max(0) as usize * Self::W;
+            let r2 = (ry - 2).max(0) as usize * Self::W;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let x = xi as f64;
                 let (mut cr, mut cg, mut cb, floor);
                 if r < WL {
@@ -707,7 +787,7 @@ impl Piece for AuroraFjord {
                     let sx = x + (0.5 + dw * 0.12) * (rf * 1.3 + t * 1.6 + wave * 4.0).sin();
                     let ix = sx.floor();
                     let fx = sx - ix;
-                    let ix = ix.clamp(0.0, (W - 2) as f64) as usize;
+                    let ix = ix.clamp(0.0, (Self::W - 2) as f64) as usize;
                     let (a0, a1, a2) = (r0 + ix, r1 + ix, r2 + ix);
                     let ms = self.mat[a0];
                     let sky = ms == AIR;
@@ -746,9 +826,9 @@ impl Piece for AuroraFjord {
                         cb += e;
                     }
                     // the lamplight laid on the water as a broken golden road
-                    if dw < 14.0 && xi > 138 && xi < 166 {
+                    if dw < 14.0 && xi > 138 + Self::L.fjord && xi < 166 + Self::L.fjord {
                         let rip = noise(x * 0.5 - t * 0.2, rf * 1.4 - t * 1.5, 0.0);
-                        for &[lx, s] in &LAMPS {
+                        for &[lx, s] in &Self::LAMPS {
                             let lw = 1.0 + dw * 0.1;
                             let q = (x + 0.5 - lx) / lw;
                             let g = (-q * q).exp()

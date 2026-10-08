@@ -6,6 +6,10 @@
 //!
 //! Upstream's `Float32Array`s stay `f32` here: their rounding is part of the
 //! picture.
+//!
+//! `misty-forest-wide` is the same forest recomposed for a 3.2:1 panel: the sun
+//! and its clearing keep the right third, the ridges and fog run on west, and a
+//! young pine stands in front between the two framing giants.
 
 use std::f64::consts::PI;
 
@@ -14,9 +18,7 @@ use super::math::{clamp, fbm, hash, mix, noise, smooth};
 use super::{Fit, Piece, hex};
 use crate::grid::Cell;
 
-const W: usize = 200;
 const H: usize = 100;
-const SUN: [f64; 2] = [146.0, 45.5];
 const SUN_R: f64 = 3.4;
 const SKY: i8 = -1;
 const FLOOR: i8 = 5;
@@ -63,7 +65,41 @@ fn fog_b(s: f64) -> f64 {
     mix(0.9, 0.6, s)
 }
 
-pub struct MistyForest {
+/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+struct Layout {
+    name: &'static str,
+    w: usize,
+    sun: [f64; 2],
+    /// The columns where the nearest trees leave a clearing under the sun.
+    clearing: [f64; 2],
+    /// The pines in front: [column, tip row, spread, tier height].
+    giants: &'static [[f64; 4]],
+}
+
+const ORIGINAL: Layout = Layout {
+    name: "misty-forest",
+    w: 200,
+    sun: [146.0, 45.5],
+    clearing: [92.0, 140.0],
+    giants: &[[9.0, -12.0, 15.0, 7.0], [192.0, 12.0, 7.0, 5.0]],
+};
+
+const WIDE: Layout = Layout {
+    name: "misty-forest-wide",
+    w: 320,
+    sun: [233.0, 45.5],
+    clearing: [179.0, 227.0],
+    giants: &[
+        [9.0, -12.0, 15.0, 7.0],
+        [104.0, 34.0, 7.0, 5.0],
+        [312.0, 12.0, 7.0, 5.0],
+    ],
+};
+
+pub type MistyForest = Scene<false>;
+pub type MistyForestWide = Scene<true>;
+
+pub struct Scene<const IS_WIDE: bool> {
     dots: Dots,
     sr: Vec<f32>,
     sg: Vec<f32>,
@@ -87,9 +123,14 @@ pub struct MistyForest {
     mote_cells: Vec<usize>,
 }
 
-impl Piece for MistyForest {
-    const NAME: &'static str = "misty-forest";
-    const COLS: usize = W;
+impl<const IS_WIDE: bool> Scene<IS_WIDE> {
+    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
+    const W: usize = Self::L.w;
+}
+
+impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
+    const NAME: &'static str = Self::L.name;
+    const COLS: usize = Self::W;
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
@@ -110,7 +151,7 @@ impl Piece for MistyForest {
     ];
 
     fn new() -> Self {
-        let n = W * H;
+        let n = Self::W * H;
         let hf = H as f64;
 
         // --- the layers, rasterised far to near so nearer ones cover farther
@@ -127,25 +168,25 @@ impl Piece for MistyForest {
                     * (fbm(x * (0.018 + fi * 0.003), fi * 13.0 + 2.0, 3, 0.0) - 0.5)
                     * (if i < 3 { 4.0 } else { 3.0 })
                     + if i > 0 && i < NEAR {
-                        (2.0 + fi * 2.0) * (-((x - SUN[0] - 4.0) / 38.0).powi(2)).exp()
+                        (2.0 + fi * 2.0) * (-((x - Self::L.sun[0] - 4.0) / 38.0).powi(2)).exp()
                     } else {
                         0.0
                     }
             };
-            let base: Vec<f32> = (0..W).map(|x| ridge(x as f64) as f32).collect();
+            let base: Vec<f32> = (0..Self::W).map(|x| ridge(x as f64) as f32).collect();
             let mut fill = vec![0u8; n];
             let mut spire = vec![0u8; n];
-            for x in 0..W {
+            for x in 0..Self::W {
                 let r0 = ridge(x as f64).floor().max(0.0) as usize;
                 for r in r0..H {
-                    fill[r * W + x] = 1;
+                    fill[r * Self::W + x] = 1;
                 }
             }
             // pines: a spire of tiers, each tier flaring out and stepping back in
             let mut tx = -2.0 + hash(fi, 1.0) * gap;
-            while tx < (W + 2) as f64 {
+            while tx < (Self::W + 2) as f64 {
                 // the nearest trees leave a clearing under the sun for the light to land in
-                if !(i == NEAR && tx > 92.0 && tx < 140.0) {
+                if !(i == NEAR && tx > Self::L.clearing[0] && tx < Self::L.clearing[1]) {
                     let th = h0 + (h1 - h0) * hash(tx * 7.0, fi + 5.0);
                     let tip = ridge(tx) - th;
                     let tier = 2.0 + th * 0.12;
@@ -157,13 +198,13 @@ impl Piece for MistyForest {
                             let saw = (d % tier) / tier;
                             let half = d * 0.3 * (0.6 + 0.5 * saw) + 0.35;
                             let x0 = (tx - half).floor().max(0.0) as i64;
-                            let x1 = ((W - 1) as f64).min((tx + half).ceil()) as i64;
+                            let x1 = ((Self::W - 1) as f64).min((tx + half).ceil()) as i64;
                             for x in x0..=x1 {
                                 let dx = (x as f64 + 0.5 - tx).abs();
                                 if dx > half {
                                     continue;
                                 }
-                                let k = r as usize * W + x as usize;
+                                let k = r as usize * Self::W + x as usize;
                                 fill[k] = 1;
                                 spire[k] = 1;
                                 if i == NEAR {
@@ -181,27 +222,27 @@ impl Piece for MistyForest {
             }
             // where the silhouette starts in each column, smoothed a little so the
             // mist line follows the forest rather than every single spire
-            let mut top = vec![H as f32; W];
+            let mut top = vec![H as f32; Self::W];
             for (x, t) in top.iter_mut().enumerate() {
-                if let Some(r) = (0..H).find(|&r| fill[r * W + x] != 0) {
+                if let Some(r) = (0..H).find(|&r| fill[r * Self::W + x] != 0) {
                     *t = r as f32;
                 }
             }
-            let line: Vec<f32> = (0..W)
+            let line: Vec<f32> = (0..Self::W)
                 .map(|x| {
                     let mut s = 0.0;
                     for d in -3i64..=3 {
-                        s += f64::from(top[(x as i64 + d).clamp(0, W as i64 - 1) as usize]);
+                        s += f64::from(top[(x as i64 + d).clamp(0, Self::W as i64 - 1) as usize]);
                     }
                     (s / 7.0).max(f64::from(top[x])) as f32
                 })
                 .collect();
             let open = |xx: i64, rr: i64| {
-                xx >= 0 && xx < W as i64 && (rr < 0 || fill[rr as usize * W + xx as usize] == 0)
+                xx >= 0 && xx < Self::W as i64 && (rr < 0 || fill[rr as usize * Self::W + xx as usize] == 0)
             };
             for r in 0..H {
-                for x in 0..W {
-                    let k = r * W + x;
+                for x in 0..Self::W {
+                    let k = r * Self::W + x;
                     if fill[k] == 0 {
                         continue;
                     }
@@ -216,7 +257,7 @@ impl Piece for MistyForest {
                     below[k] = (r as f64 + 0.5 - f64::from(line[x])) as f32;
                     ground[k] = base[x];
                     // a rim where the sky (or a farther layer) shows beside or above
-                    let toward = if (x as f64) < SUN[0] { 1 } else { -1 };
+                    let toward = if (x as f64) < Self::L.sun[0] { 1 } else { -1 };
                     let (xi, ri) = (x as i64, r as i64);
                     edge[k] = if open(xi + toward, ri) || open(xi, ri - 1) {
                         1.0
@@ -231,8 +272,9 @@ impl Piece for MistyForest {
 
         // --- what stands in front: a giant pine cut by the left of the frame, and a
         // smaller one at the right edge, so the frame is not a symmetric curtain
+        // (wide: and a young one between, off-centre, so the middle is not empty)
         let mut giant = vec![0u8; n];
-        for [gx, tip, spread, tier] in [[9.0f64, -12.0, 15.0, 7.0], [192.0, 12.0, 7.0, 5.0]] {
+        for &[gx, tip, spread, tier] in Self::L.giants {
             for r in tip.floor().max(0.0) as usize..H {
                 let d = r as f64 + 0.5 - tip;
                 let saw = (d % tier) / tier;
@@ -240,19 +282,21 @@ impl Piece for MistyForest {
                 // of points rather than a straight edge where it meets the frame
                 let half = (spread * (0.5 + 0.5 * saw)).min(d * 0.34 * (0.45 + 0.7 * saw) + 0.5);
                 let x0 = (gx - half).floor().max(0.0) as i64;
-                let x1 = ((W - 1) as f64).min((gx + half).ceil()) as i64;
+                let x1 = ((Self::W - 1) as f64).min((gx + half).ceil()) as i64;
                 for x in x0..=x1 {
                     let xf = x as f64;
                     let dx = (xf + 0.5 - gx).abs();
                     // the side toward the frame stays full, so no sliver of sky shows there
-                    let outer = if (xf + 0.5 - gx) * (gx - (W / 2) as f64) > 0.0 {
+                    // (the young pine stands clear of the frame, so both its sides are ragged)
+                    let framed = gx < 20.0 || gx > (Self::W - 20) as f64;
+                    let outer = if framed && (xf + 0.5 - gx) * (gx - (Self::W / 2) as f64) > 0.0 {
                         1.6
                     } else {
                         1.0
                     };
                     let ragged = half * outer * (0.82 + 0.3 * noise(xf * 0.5, r as f64 * 0.4, 0.0));
                     if dx <= ragged || dx < 0.9 {
-                        let k = r * W + x as usize;
+                        let k = r * Self::W + x as usize;
                         giant[k] = 1;
                         tex[k] = (smooth(0.66, 0.96, saw)
                             * smooth(0.25, 0.8, dx / ragged)
@@ -271,15 +315,15 @@ impl Piece for MistyForest {
         // a rim two cells deep on the side that faces the sun
         {
             let open = |x: i64, r: i64| {
-                x >= 0 && x < W as i64 && (r < 0 || giant[r as usize * W + x as usize] == 0)
+                x >= 0 && x < Self::W as i64 && (r < 0 || giant[r as usize * Self::W + x as usize] == 0)
             };
             for r in 0..H {
-                for x in 0..W {
-                    let k = r * W + x;
+                for x in 0..Self::W {
+                    let k = r * Self::W + x;
                     if giant[k] == 0 {
                         continue;
                     }
-                    let tx = if (x as f64) < SUN[0] { 1 } else { -1 };
+                    let tx = if (x as f64) < Self::L.sun[0] { 1 } else { -1 };
                     let (xi, ri) = (x as i64, r as i64);
                     edge[k] = if open(xi + tx, ri) || open(xi, ri - 1) {
                         1.0
@@ -307,12 +351,12 @@ impl Piece for MistyForest {
         let mut dist = vec![0f32; n];
         let ra = RA as f64;
         for r in 0..H {
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let x = xi as f64;
                 let y = r as f64 + 0.5;
                 let l = layer[k];
-                let (dx, dy) = (x + 0.5 - SUN[0], y - SUN[1]);
+                let (dx, dy) = (x + 0.5 - Self::L.sun[0], y - Self::L.sun[1]);
                 let ang = dy.atan2(dx);
                 abin[k] = (((ang / (PI * 2.0)) * ra + ra) % ra) as f32;
                 let d = (dx * dx + dy * dy).sqrt();
@@ -504,7 +548,7 @@ impl Piece for MistyForest {
             .map(|i| {
                 let i = f64::from(i);
                 [
-                    hash(i, 1.0) * W as f64,
+                    hash(i, 1.0) * Self::W as f64,
                     50.0 + hash(i, 2.0) * 44.0,
                     0.3 + hash(i, 3.0) * 0.8,
                     hash(i, 4.0) * 6.28,
@@ -538,7 +582,7 @@ impl Piece for MistyForest {
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        let (wf, hf) = (W as f64, H as f64);
+        let (wf, hf) = (Self::W as f64, H as f64);
         for &k in &self.mote_cells {
             self.mote[k] = 0.0;
         }
@@ -549,7 +593,7 @@ impl Piece for MistyForest {
             if y < 0.0 || y >= hf {
                 continue;
             }
-            let k = y as usize * W + x.floor() as usize;
+            let k = y as usize * Self::W + x.floor() as usize;
             self.mote[k] = (0.5 + 0.5 * sz) as f32;
             self.mote_cells.push(k);
         }
@@ -562,8 +606,8 @@ impl Piece for MistyForest {
             |v: &[f32], a: f64| f64::from(v[(a.floor() as i64).rem_euclid(RA as i64) as usize]);
 
         for r in 0..H {
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let x = xi as f64;
                 let (mut cr, mut cg, mut cb) = (
                     f64::from(self.sr[k]),

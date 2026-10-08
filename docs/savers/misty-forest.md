@@ -12,4 +12,4 @@ The ridges and fog run on west; a young pine between the two framing giants.
 
 Recomposed at 320x100 (3.2:1) to fill pine's glass uncropped; see [`-wide` variants](../ascii-rest.md#-wide-variants).
 
-Source: [`src/ascii_rest/misty_forest_wide.rs`](../../src/ascii_rest/misty_forest_wide.rs).
+Source: the `WIDE` layout in [`src/ascii_rest/misty_forest.rs`](../../src/ascii_rest/misty_forest.rs), the original's own module.

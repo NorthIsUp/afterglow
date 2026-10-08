@@ -4,6 +4,10 @@
 //!
 //! Upstream's `Float32Array`s stay `f32` here: their rounding is part of the
 //! picture, and an f64 copy drifts off the golden at dither boundaries.
+//!
+//! `night-coast-wide` is the same coast recomposed for a 3.2:1 panel. The
+//! headland keeps the left; the open sea runs on to a low far shore with two
+//! hummocks either side of the moon's road, and the beam reaches further.
 
 use std::f64::consts::PI;
 
@@ -12,10 +16,8 @@ use super::math::{clamp, fbm, hash, mix, noise, smooth};
 use super::{Fit, Piece, hex};
 use crate::grid::Cell;
 
-const W: usize = 200;
 const H: usize = 100;
 const HORIZON: f64 = 60.0;
-const MOON: [f64; 2] = [150.0, 19.0];
 const LAMP_X: f64 = 30.0;
 /// Cloud field width: the clouds wrap at this many columns.
 const CW: usize = 640;
@@ -31,7 +33,60 @@ const PANE: u8 = 7;
 const ROOF: u8 = 8;
 const ISLE: u8 = 9;
 
-pub struct NightCoast {
+/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+struct Layout {
+    name: &'static str,
+    w: usize,
+    anchor: f64,
+    moon: [f64; 2],
+    /// Where the headland falls from its crown to the sea.
+    shoulder: [f64; 2],
+    /// The woods: the column they stop at, and where they shrink from and to.
+    trees: [f64; 3],
+    /// The headland's seaward end, and where its foot starts to fade.
+    shore: [f64; 2],
+    /// Where the far shore starts.
+    far_shore: f64,
+    /// Its hummocks: [height, centre, half width].
+    hummocks: &'static [[f64; 3]],
+    /// The buoy light's column, on row 55.
+    buoy: usize,
+    /// How far the beam reaches when it runs across the frame.
+    reach: f64,
+}
+
+const ORIGINAL: Layout = Layout {
+    name: "night-coast",
+    w: 200,
+    anchor: 0.3,
+    moon: [150.0, 19.0],
+    shoulder: [86.0, 50.0],
+    trees: [76.0, 78.0, 56.0],
+    shore: [90.0, 74.0],
+    far_shore: 148.0,
+    hummocks: &[[4.5, 180.0, 26.0]],
+    buoy: 184,
+    reach: 115.0,
+};
+
+const WIDE: Layout = Layout {
+    name: "night-coast-wide",
+    w: 320,
+    anchor: 0.5,
+    moon: [236.0, 19.0],
+    shoulder: [102.0, 58.0],
+    trees: [92.0, 94.0, 66.0],
+    shore: [106.0, 88.0],
+    far_shore: 178.0,
+    hummocks: &[[6.0, 288.0, 32.0], [3.2, 205.0, 18.0]],
+    buoy: 294,
+    reach: 165.0,
+};
+
+pub type NightCoast = Scene<false>;
+pub type NightCoastWide = Scene<true>;
+
+pub struct Scene<const IS_WIDE: bool> {
     dots: Dots,
     mat: Vec<u8>,
     shade: Vec<f32>,
@@ -39,12 +94,6 @@ pub struct NightCoast {
     cover: Vec<f32>,
     lit: Vec<f32>,
     tower_top: f64,
-}
-
-fn top(x: f64) -> f64 {
-    HORIZON
-        - 15.0 * smooth(86.0, 50.0, x) * (1.0 - 0.12 * smooth(24.0, 0.0, x))
-        - 1.6 * fbm(x * 0.15, 3.7, 3, 0.0)
 }
 
 fn density(x: f64, y: f64) -> f64 {
@@ -57,13 +106,26 @@ fn density(x: f64, y: f64) -> f64 {
         - 0.16 * smooth(36.0, HORIZON - 4.0, y)
 }
 
-impl Piece for NightCoast {
-    const NAME: &'static str = "night-coast";
-    const COLS: usize = W;
+impl<const IS_WIDE: bool> Scene<IS_WIDE> {
+    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
+    const W: usize = Self::L.w;
+
+    fn top(x: f64) -> f64 {
+        HORIZON
+            - 15.0 * smooth(Self::L.shoulder[0], Self::L.shoulder[1], x) * (1.0 - 0.12 * smooth(24.0, 0.0, x))
+            - 1.6 * fbm(x * 0.15, 3.7, 3, 0.0)
+    }
+}
+
+impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
+    const NAME: &'static str = Self::L.name;
+    const COLS: usize = Self::W;
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
-    const FIT: Fit = Fit::Cover { anchor: 0.3 };
+    const FIT: Fit = Fit::Cover {
+        anchor: Self::L.anchor,
+    };
     const GROUND: u32 = hex("#080b12");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[
@@ -76,35 +138,37 @@ impl Piece for NightCoast {
     ];
 
     fn new() -> Self {
-        let n = W * H;
+        let n = Self::W * H;
         let mut mat = vec![AIR; n];
         let mut shade = vec![0f32; n];
-        let base = top(LAMP_X);
+        let base = Self::top(LAMP_X);
         let tower_top = base - 15.0;
         let mut trees: Vec<[f64; 3]> = Vec::new();
         let mut x = 1.0;
-        while x < 76.0 {
+        while x < Self::L.trees[0] {
             // the clearing for the tower and the cottage
             if !(x > 22.0 && x < 49.0) {
                 trees.push([
                     x + hash(x, 2.0) * 1.2,
-                    (4.0 + hash(x, 3.0) * 7.0) * smooth(78.0, 56.0, x),
+                    (4.0 + hash(x, 3.0) * 7.0) * smooth(Self::L.trees[1], Self::L.trees[2], x),
                     2.0 + hash(x, 4.0) * 1.6,
                 ]);
             }
             x += 2.6 + hash(x * 7.0, 1.0) * 2.6;
         }
-        let cottage = top(41.0);
+        let cottage = Self::top(41.0);
         for r in 0..H {
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let x = xi as f64;
                 let y = r as f64 + 0.5;
-                let t0 = top(x);
-                let isle = HORIZON
-                    - 4.5 * (1.0 - ((x - 180.0) / 26.0).powi(2)).max(0.0)
-                    - 1.4 * fbm(x * 0.2, 9.0, 2, 0.0);
-                if y >= t0 && y < HORIZON + 4.0 && x < 90.0 {
+                let t0 = Self::top(x);
+                let mut isle = HORIZON;
+                for &[hh, hx, hw] in Self::L.hummocks {
+                    isle -= hh * (1.0 - ((x - hx) / hw).powi(2)).max(0.0);
+                }
+                isle -= 1.4 * fbm(x * 0.2, 9.0, 2, 0.0);
+                if y >= t0 && y < HORIZON + 4.0 && x < Self::L.shore[0] {
                     mat[k] = LAND;
                     // rock and scrub, the brow of the slope catching the moon
                     shade[k] = (0.2
@@ -112,14 +176,14 @@ impl Piece for NightCoast {
                         + 0.5 * smooth(t0 + 3.0, t0, y)
                         - 0.2 * smooth(HORIZON - 4.0, HORIZON + 4.0, y))
                         as f32;
-                } else if x > 148.0 && y >= isle && y < HORIZON {
+                } else if x > Self::L.far_shore && y >= isle && y < HORIZON {
                     mat[k] = ISLE;
                 }
                 for &[tx, th, tw] in &trees {
                     if th < 1.0 {
                         continue;
                     }
-                    let tb = top(tx);
+                    let tb = Self::top(tx);
                     let dy = y - (tb - th);
                     if dy >= 0.0 && y < tb + 2.0 && (x + 0.5 - tx).abs() <= (dy / th) * tw + 0.4 {
                         mat[k] = TREE;
@@ -171,7 +235,7 @@ impl Piece for NightCoast {
 
         // a faint unevenness in the clear sky, so it is never one flat tone
         let haze = (0..n)
-            .map(|k| fbm((k % W) as f64 * 0.05, (k / W) as f64 * 0.08, 3, 0.0) as f32)
+            .map(|k| fbm((k % Self::W) as f64 * 0.05, (k / Self::W) as f64 * 0.08, 3, 0.0) as f32)
             .collect();
 
         // the clouds: heaps of noise that wrap, so they can drift forever
@@ -210,15 +274,15 @@ impl Piece for NightCoast {
         let hf = H as f64;
 
         for r in 0..H {
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let x = xi as f64;
                 let rf = r as f64;
                 let y = rf + 0.5;
                 let m = self.mat[k];
                 let (mut cr, mut cg, mut cbl) = (0.0, 0.0, 0.0);
                 let (mut floor, mut fade) = (0.3, 1.0);
-                let (dmx, dmy) = (x + 0.5 - MOON[0], y - MOON[1]);
+                let (dmx, dmy) = (x + 0.5 - Self::L.moon[0], y - Self::L.moon[1]);
                 let dm = (dmx * dmx + dmy * dmy).sqrt();
 
                 if y < HORIZON && m == AIR {
@@ -293,7 +357,7 @@ impl Piece for NightCoast {
                     cbl = (0.28 - 0.12 * v) * swell;
                     // the moon's road: wider toward us, broken into glints
                     let road_w = 3.0 + (y - HORIZON) * 0.55;
-                    let road = (-((x + 0.5 - MOON[0]) / road_w).powi(2)).exp();
+                    let road = (-((x + 0.5 - Self::L.moon[0]) / road_w).powi(2)).exp();
                     let glint = smooth(0.5, 0.8, w) * road;
                     cr += 0.95 * glint + 0.07 * road;
                     cg += 0.95 * glint + 0.09 * road;
@@ -307,8 +371,8 @@ impl Piece for NightCoast {
                     cg += 0.72 * refl;
                     cbl += 0.32 * refl;
                     // surf where the headland meets the water
-                    if y < HORIZON + 8.0 && x < 90.0 {
-                        let edge = smooth(90.0, 74.0, x) * smooth(HORIZON + 8.0, HORIZON + 3.0, y);
+                    if y < HORIZON + 8.0 && x < Self::L.shore[0] {
+                        let edge = smooth(Self::L.shore[0], Self::L.shore[1], x) * smooth(HORIZON + 8.0, HORIZON + 3.0, y);
                         let foam =
                             smooth(0.5, 0.85, noise(x * 0.45 - t * 0.6, y * 0.8 + t * 0.4, 0.0))
                                 * edge;
@@ -333,7 +397,7 @@ impl Piece for NightCoast {
                 } else if m == ISLE {
                     (cr, cg, cbl) = (0.06, 0.08, 0.15);
                     floor = 0.1;
-                    if xi == 184 && r == 55 {
+                    if xi == Self::L.buoy && r == 55 {
                         // a buoy light out on the point, blinking
                         let on = (t * 2.2).sin() > 0.55;
                         (cr, cg, cbl) = if on {
@@ -369,7 +433,7 @@ impl Piece for NightCoast {
                 let (bx, by) = (x + 0.5 - LAMP_X, y - lamp_y);
                 if m != TOWER && m != CAP && m != LANTERN {
                     if bx * cb > 0.0 {
-                        let along = bx.abs() / (cb.abs() * 115.0 + 1.0);
+                        let along = bx.abs() / (cb.abs() * Self::L.reach + 1.0);
                         if along < 1.0 {
                             let spread = 1.4 + bx.abs() * 0.11;
                             let b = (1.0 - along).powf(1.8) * (-(by / spread).powi(2)).exp() * 0.85;

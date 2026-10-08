@@ -12,4 +12,4 @@ A wider camera on the same range, three more peaks at the flanks.
 
 Recomposed at 320x100 (3.2:1) to fill pine's glass uncropped; see [`-wide` variants](../ascii-rest.md#-wide-variants).
 
-Source: [`src/ascii_rest/alpine_dawn_wide.rs`](../../src/ascii_rest/alpine_dawn_wide.rs).
+Source: the `WIDE` layout in [`src/ascii_rest/alpine_dawn.rs`](../../src/ascii_rest/alpine_dawn.rs), the original's own module.

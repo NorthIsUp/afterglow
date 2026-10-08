@@ -6,19 +6,21 @@
 //! Everything along the curve is placed by distance along it, so buildings,
 //! lamps and cars shrink together toward the point. Upstream's
 //! `Float32Array`s stay `f32` here: their rounding is part of the picture.
+//!
+//! `marine-drive-wide` is the same night recomposed for a 3.2:1 panel. The bay
+//! is longer, so the necklace carries more lamps and blocks round to a point
+//! further east, a few more towers rise mid-curve, and the open sea past the
+//! point is wide enough for a liner and a fishing boat beyond the freighter.
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, js_round, mix, noise, smooth};
 use super::{Fit, Piece, hex};
 use crate::grid::Cell;
 
-const W: usize = 200;
 const H: usize = 100;
 /// The sea horizon.
 const HZ: f64 = 40.0;
 /// Nariman point, where the necklace ends.
-const TIP: f64 = 176.0;
-const MOON: [f64; 2] = [189.0, 13.0];
 const MOON_R: f64 = 4.5;
 /// Darker seas on the moon's face: [dx, dy, radius].
 const MARIA: [[f64; 3]; 3] = [[-1.4, -1.2, 1.6], [1.3, 0.8, 1.4], [-0.6, 2.0, 1.1]];
@@ -53,6 +55,45 @@ const SHIP_LIGHTS: [(usize, usize, f64, f64, f64); 9] = [
     (197, 36, 1.0, 1.0, 1.0), (196, 38, 1.0, 0.78, 0.45), (199, 38, 0.95, 0.22, 0.18),
 ];
 
+/// [`TOWERS`] round the longer bay.
+#[rustfmt::skip]
+const TOWERS_WIDE: [[f64; 4]; 15] = [
+    [24.0, 4.5, 21.0, 0.0],
+    [118.0, 3.0, 29.0, 1.0], [131.0, 2.0, 32.0, 0.0], [143.0, 2.5, 26.0, 0.0],
+    [161.0, 2.5, 27.0, 1.0], [171.0, 2.0, 22.0, 0.0], [182.0, 3.0, 30.0, 0.0], [190.0, 2.0, 25.0, 1.0],
+    [200.0, 3.0, 23.0, 0.0], [206.5, 2.0, 15.0, 1.0], [213.0, 3.5, 27.0, 0.0], [220.0, 2.5, 19.0, 0.0],
+    [226.0, 3.0, 12.0, 1.0], [232.5, 2.5, 21.0, 0.0], [237.0, 2.0, 28.0, 1.0],
+];
+
+/// [`SHIP_LIGHTS`] past the further point, and beyond them a liner lit end to
+/// end far out under the moon, and a fishing boat's lone lamp between.
+#[rustfmt::skip]
+const SHIP_LIGHTS_WIDE: [(usize, usize, f64, f64, f64); 24] = [
+    (248, 35, 1.0, 1.0, 1.0), (254, 34, 1.0, 1.0, 1.0), (249, 37, 1.0, 0.78, 0.45), (251, 37, 1.0, 0.8, 0.5),
+    (253, 36, 1.0, 0.82, 0.5), (255, 36, 1.0, 0.8, 0.5),
+    (261, 36, 1.0, 1.0, 1.0), (260, 38, 1.0, 0.78, 0.45), (263, 38, 0.95, 0.22, 0.18),
+    (276, 38, 1.0, 0.86, 0.6),
+    (296, 34, 1.0, 1.0, 1.0), (304, 34, 1.0, 1.0, 1.0),
+    (294, 37, 1.0, 0.84, 0.55), (296, 37, 1.0, 0.8, 0.5), (298, 37, 1.0, 0.86, 0.6), (300, 37, 1.0, 0.82, 0.5),
+    (302, 37, 1.0, 0.84, 0.55), (304, 37, 1.0, 0.8, 0.5), (306, 37, 1.0, 0.86, 0.6),
+    (297, 36, 1.0, 0.82, 0.55), (300, 36, 0.85, 0.9, 1.0), (303, 36, 1.0, 0.82, 0.55),
+    (292, 38, 0.2, 1.0, 0.35), (309, 38, 0.95, 0.22, 0.18),
+];
+
+/// The ships' dark hulls: [first row, last row, first column, last column].
+#[rustfmt::skip]
+const HULLS: [[usize; 4]; 6] = [
+    [38, 99, 182, 192], [37, 37, 183, 192], [35, 36, 189, 191], [35, 36, 184, 184],
+    [38, 99, 195, 199], [37, 37, 196, 197],
+];
+#[rustfmt::skip]
+const HULLS_WIDE: [[usize; 4]; 13] = [
+    [38, 99, 246, 256], [37, 37, 247, 256], [35, 36, 253, 255], [35, 36, 248, 248],
+    [38, 99, 259, 263], [37, 37, 260, 261], [38, 99, 275, 277], [38, 99, 291, 310],
+    [37, 37, 293, 307], [36, 36, 296, 304], [35, 35, 299, 301], [34, 99, 296, 296],
+    [34, 99, 304, 304],
+];
+
 /// One lamp near us is failing.
 const FLICK: usize = 6;
 /// Cloud field width: the clouds wrap at this many columns.
@@ -62,33 +103,8 @@ const U0: f64 = -6.0;
 const STEP: f64 = 0.25;
 
 // The shoreline: steep and near at the left, flat and far toward the point.
-fn shore(x: f64) -> f64 {
-    50.0 + 34.0 * (1.0 - x / TIP).max(0.0).powf(2.2)
-}
 // How large one unit of distance along the drive looks at column x.
-fn sc(x: f64) -> f64 {
-    0.5 + 1.9 * (1.0 - x / TIP).max(0.0).powf(1.5)
-}
-fn sea_top(x: f64) -> f64 {
-    if x <= TIP {
-        shore(x)
-    } else {
-        HZ.max(50.0 - (x - TIP) * 1.6)
-    }
-}
-fn wall_top(x: f64) -> f64 {
-    shore(x) - sc(x).max(1.0)
-}
-fn road_top(x: f64) -> f64 {
-    wall_top(x) - (1.5 * sc(x)).max(1.0)
-}
 // The city's sodium glow in the sky, weaker out over the open sea.
-fn glow(x: f64, y: f64) -> f64 {
-    let over = 0.5 + 0.5 * smooth(TIP + 24.0, TIP - 16.0, x);
-    let h = (HZ - y).max(0.0);
-    over * ((-h / 4.0).exp() * 0.5 + (-h / 12.0).exp() * 0.12)
-}
-
 /// Distance along the drive at column x, from the f32 table.
 fn u_of(utab: &[f32], x: f64) -> f64 {
     let f = 0.0f64.max((utab.len() as f64 - 1.001).min(x / STEP));
@@ -114,7 +130,58 @@ struct Room {
     ph: f64,
 }
 
-pub struct MarineDrive {
+/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+struct Layout {
+    name: &'static str,
+    w: usize,
+    /// The point, where the drive ends.
+    tip: f64,
+    moon: [f64; 2],
+    towers: &'static [[f64; 4]],
+    ship_lights: &'static [(usize, usize, f64, f64, f64)],
+    hulls: &'static [[usize; 4]],
+    /// The sky over the point: where it brightens [rise from, to, fall from, to],
+    point_glow: [f64; 4],
+    /// where the city's haze lifts behind its towers,
+    point_haze: [f64; 4],
+    /// and where low cloud is kept clear of them.
+    point_clear: [f64; 4],
+    /// Where the pale haze over the open sea rises in.
+    open_sea: [f64; 2],
+}
+
+const ORIGINAL: Layout = Layout {
+    name: "marine-drive",
+    w: 200,
+    tip: 176.0,
+    moon: [189.0, 13.0],
+    towers: &TOWERS,
+    ship_lights: &SHIP_LIGHTS,
+    hulls: &HULLS,
+    point_glow: [84.0, 98.0, 186.0, 174.0],
+    point_haze: [84.0, 104.0, 188.0, 172.0],
+    point_clear: [84.0, 96.0, 186.0, 176.0],
+    open_sea: [172.0, 186.0],
+};
+
+const WIDE: Layout = Layout {
+    name: "marine-drive-wide",
+    w: 320,
+    tip: 240.0,
+    moon: [287.0, 13.0],
+    towers: &TOWERS_WIDE,
+    ship_lights: &SHIP_LIGHTS_WIDE,
+    hulls: &HULLS_WIDE,
+    point_glow: [108.0, 128.0, 250.0, 238.0],
+    point_haze: [108.0, 134.0, 252.0, 236.0],
+    point_clear: [108.0, 120.0, 250.0, 240.0],
+    open_sea: [236.0, 250.0],
+};
+
+pub type MarineDrive = Scene<false>;
+pub type MarineDriveWide = Scene<true>;
+
+pub struct Scene<const IS_WIDE: bool> {
     dots: Dots,
     mat: Vec<u8>,
     sr: Vec<f32>,
@@ -147,9 +214,53 @@ pub struct MarineDrive {
     col_b: Vec<f32>,
 }
 
-impl Piece for MarineDrive {
-    const NAME: &'static str = "marine-drive";
-    const COLS: usize = W;
+impl<const IS_WIDE: bool> Scene<IS_WIDE> {
+    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
+    const W: usize = Self::L.w;
+
+    fn shore(x: f64) -> f64 {
+        50.0 + 34.0 * (1.0 - x / Self::L.tip).max(0.0).powf(2.2)
+    }
+
+    fn sc(x: f64) -> f64 {
+        0.5 + 1.9 * (1.0 - x / Self::L.tip).max(0.0).powf(1.5)
+    }
+
+    fn sea_top(x: f64) -> f64 {
+        if x <= Self::L.tip {
+            Self::shore(x)
+        } else {
+            HZ.max(50.0 - (x - Self::L.tip) * 1.6)
+        }
+    }
+
+    fn wall_top(x: f64) -> f64 {
+        Self::shore(x) - Self::sc(x).max(1.0)
+    }
+
+    fn road_top(x: f64) -> f64 {
+        Self::wall_top(x) - (1.5 * Self::sc(x)).max(1.0)
+    }
+
+    fn glow(x: f64, y: f64) -> f64 {
+        let over = 0.5 + 0.5 * smooth(Self::L.tip + 24.0, Self::L.tip - 16.0, x);
+        let h = (HZ - y).max(0.0);
+        over * ((-h / 4.0).exp() * 0.5 + (-h / 12.0).exp() * 0.12)
+    }
+
+    /// Redraw one cell over the frame, unfaded.
+    fn paint(dots: &mut Dots, out: &mut [Cell], k: usize, rgb: [f64; 3], floor: f64) {
+        let [cr, cg, cb] = rgb.map(|v| v.max(0.0));
+        let peak = cr.max(cg).max(cb).max(1e-4);
+        let level = clamp(floor + (1.0 - floor) * peak.powf(0.85) * 0.95);
+        let step = Dots::step(level, bayer(k / Self::W, k % Self::W));
+        out[k] = dots.ink(step, level, [cr, cg, cb], peak);
+    }
+}
+
+impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
+    const NAME: &'static str = Self::L.name;
+    const COLS: usize = Self::W;
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
@@ -168,20 +279,20 @@ impl Piece for MarineDrive {
     ];
 
     fn new() -> Self {
-        let n = W * H;
+        let n = Self::W * H;
         let hf = H as f64;
 
         // --- distance along the drive
-        let nu = ((TIP + 4.0) / STEP).ceil() as usize + 2;
+        let nu = ((Self::L.tip + 4.0) / STEP).ceil() as usize + 2;
         let mut utab = vec![0f32; nu];
         for i in 1..nu {
             let x = (i as f64 - 0.5) * STEP;
-            let sl = (shore(x + 0.05) - shore(x - 0.05)) / 0.1;
-            utab[i] = (f64::from(utab[i - 1]) + ((1.0 + sl * sl).sqrt() * STEP) / sc(x)) as f32;
+            let sl = (Self::shore(x + 0.05) - Self::shore(x - 0.05)) / 0.1;
+            utab[i] = (f64::from(utab[i - 1]) + ((1.0 + sl * sl).sqrt() * STEP) / Self::sc(x)) as f32;
         }
         let uof = |x: f64| u_of(&utab, x);
         let x_of_u = |u: f64| {
-            let (mut lo, mut hi) = (0.0, TIP);
+            let (mut lo, mut hi) = (0.0, Self::L.tip);
             for _ in 0..30 {
                 let m = (lo + hi) / 2.0;
                 if uof(m) < u {
@@ -192,15 +303,15 @@ impl Piece for MarineDrive {
             }
             (lo + hi) / 2.0
         };
-        let uend = uof(TIP);
+        let uend = uof(Self::L.tip);
 
         // --- the lamps
         let mut lamps: Vec<[f64; 3]> = Vec::new();
         let mut u = 0.6;
         while u < uend - 0.4 {
             let lx = x_of_u(u);
-            let s = sc(lx);
-            lamps.push([lx, wall_top(lx) - 2.4 * s, s]);
+            let s = Self::sc(lx);
+            lamps.push([lx, Self::wall_top(lx) - 2.4 * s, s]);
             u += 3.75;
         }
 
@@ -221,11 +332,11 @@ impl Piece for MarineDrive {
             });
             u += w + 0.4 + 1.8 * hash(i, 25.0);
         }
-        let mut col_u = vec![0f32; W];
-        let mut bld_at = vec![-1isize; W];
-        for x in 0..W {
+        let mut col_u = vec![0f32; Self::W];
+        let mut bld_at = vec![-1isize; Self::W];
+        for x in 0..Self::W {
             col_u[x] = uof(x as f64 + 0.5) as f32;
-            if x as f64 + 0.5 > TIP {
+            if x as f64 + 0.5 > Self::L.tip {
                 continue;
             }
             let cu = f64::from(col_u[x]);
@@ -248,11 +359,11 @@ impl Piece for MarineDrive {
         let mut beacons: Vec<(isize, f64)> = Vec::new();
 
         for r in 0..H {
-            for x in 0..W {
-                let k = r * W + x;
+            for x in 0..Self::W {
+                let k = r * Self::W + x;
                 let (xf, rf) = (x as f64, r as f64);
                 let (xc, y) = (xf + 0.5, rf + 0.5);
-                if y >= sea_top(xc) {
+                if y >= Self::sea_top(xc) {
                     mat[k] = WATER;
                     continue;
                 }
@@ -263,10 +374,10 @@ impl Piece for MarineDrive {
                     - 0.4
                     - (0.4 + 5.0 * hash(blk, 7.0).powi(3))
                         * (0.5 + 0.5 * fbm(xf * 0.05, 2.0, 2, 0.0));
-                if xc < TIP + 7.0 && y >= far_top {
+                if xc < Self::L.tip + 7.0 && y >= far_top {
                     // the far city: low blocks in the haze, pricked with tiny lights
                     m = FAR;
-                    let g = glow(xc, HZ - 2.0);
+                    let g = Self::glow(xc, HZ - 2.0);
                     cr = 0.03 + 0.05 * g;
                     cg = 0.04 + 0.03 * g;
                     cb = 0.08 + 0.02 * g;
@@ -281,7 +392,7 @@ impl Piece for MarineDrive {
                     fl = 0.08;
                 }
 
-                for (ti, &[tx, hw, top, warm]) in TOWERS.iter().enumerate() {
+                for (ti, &[tx, hw, top, warm]) in Self::L.towers.iter().enumerate() {
                     let dx = xc - tx;
                     if dx.abs() > hw || y < top {
                         continue;
@@ -295,7 +406,7 @@ impl Piece for MarineDrive {
                         cg += 0.055;
                         cb += 0.1;
                     }
-                    let g = glow(xc, y) * 0.2;
+                    let g = Self::glow(xc, y) * 0.2;
                     cr += g * 0.42;
                     cg += g * 0.21;
                     cb += g * 0.1;
@@ -317,13 +428,13 @@ impl Piece for MarineDrive {
                         }
                     }
                     if fr == 0.0 && dx.abs() < 0.6 && top < 20.0 {
-                        beacons.push((k as isize - W as isize, tf * 1.7));
+                        beacons.push((k as isize - Self::W as isize, tf * 1.7));
                     }
                     fl = 0.03;
                 }
 
-                if xc <= TIP {
-                    let (s, wt, rt) = (sc(xc), wall_top(xc), road_top(xc));
+                if xc <= Self::L.tip {
+                    let (s, wt, rt) = (Self::sc(xc), Self::wall_top(xc), Self::road_top(xc));
                     let bi = bld_at[x];
                     if bi >= 0 && y < rt {
                         let bu = bi as usize;
@@ -449,12 +560,13 @@ impl Piece for MarineDrive {
                     // navy overhead to a sodium haze on the horizon
                     let v = y / HZ;
                     // brighter over the point, so its towers stand dark against the haze
-                    let g = glow(xc, y)
-                        * (1.0 + 0.6 * smooth(84.0, 98.0, xc) * smooth(186.0, 174.0, xc))
+                    let (pg, ph) = (Self::L.point_glow, Self::L.point_haze);
+                    let g = Self::glow(xc, y)
+                        * (1.0 + 0.6 * smooth(pg[0], pg[1], xc) * smooth(pg[2], pg[3], xc))
                         + 0.2
                             * (-(HZ - y).max(0.0) / 14.0).exp()
-                            * smooth(84.0, 104.0, xc)
-                            * smooth(188.0, 172.0, xc);
+                            * smooth(ph[0], ph[1], xc)
+                            * smooth(ph[2], ph[3], xc);
                     let veil = 0.88 + 0.24 * fbm(xf * 0.05, rf * 0.08, 3, 0.0);
                     // the last of the blue hour, deepening overhead
                     let vv = v.powf(1.4);
@@ -462,12 +574,12 @@ impl Piece for MarineDrive {
                     cg = (0.05 + 0.12 * vv) * veil + g * 0.22;
                     cb = (0.15 + 0.24 * vv) * veil + g * 0.1;
                     // a pale sea haze on the open horizon, for the ships to sit against
-                    let hzn = (-(HZ - y).max(0.0) / 3.5).exp() * smooth(172.0, 186.0, xc) * 0.16;
+                    let hzn = (-(HZ - y).max(0.0) / 3.5).exp() * smooth(Self::L.open_sea[0], Self::L.open_sea[1], xc) * 0.16;
                     cr += hzn * 0.6;
                     cg += hzn * 0.7;
                     cb += hzn * 0.95;
                     // a hazy moon over the open sea
-                    let (dmx, dmy) = (xc - MOON[0], y - MOON[1]);
+                    let (dmx, dmy) = (xc - Self::L.moon[0], y - Self::L.moon[1]);
                     let dm = (dmx * dmx + dmy * dmy).sqrt();
                     let halo = (-dm / 22.0).exp() * 0.13 + (-dm / 6.0).exp() * 0.26;
                     cr += halo * 0.9;
@@ -502,25 +614,23 @@ impl Piece for MarineDrive {
         }
 
         let hull = |x: usize, r: usize| {
-            (r >= 38 && (182..=192).contains(&x))
-                || (r == 37 && (183..=192).contains(&x))
-                || ((35..=36).contains(&r) && (189..=191).contains(&x))
-                || ((35..=36).contains(&r) && x == 184)
-                || (r >= 38 && (195..=199).contains(&x))
-                || (r == 37 && (196..=197).contains(&x))
+            Self::L
+                .hulls
+                .iter()
+                .any(|&[r0, r1, x0, x1]| (r0..=r1).contains(&r) && (x0..=x1).contains(&x))
         };
         for r in 34..40 {
-            for x in 180..W {
+            for x in 0..Self::W {
                 if !hull(x, r) {
                     continue;
                 }
-                let k = r * W + x;
+                let k = r * Self::W + x;
                 mat[k] = SHIP;
                 (sr[k], sg[k], sb[k], flo[k]) = (0.002, 0.002, 0.004, 0.0);
             }
         }
-        for &(x, r, cr, cg, cb) in &SHIP_LIGHTS {
-            let k = r * W + x;
+        for &(x, r, cr, cg, cb) in Self::L.ship_lights {
+            let k = r * Self::W + x;
             mat[k] = SHIP;
             (sr[k], sg[k], sb[k], flo[k]) = (cr as f32, cg as f32, cb as f32, 0.1);
         }
@@ -544,8 +654,8 @@ impl Piece for MarineDrive {
             let mut r = (ly - rr).floor().max(0.0);
             while r < hf.min(ly + rr) {
                 let mut x = (lx - rr).floor().max(0.0);
-                while x < (W as f64).min(lx + rr) {
-                    let k = r as usize * W + x as usize;
+                while x < (Self::W as f64).min(lx + rr) {
+                    let k = r as usize * Self::W + x as usize;
                     if mat[k] != WATER {
                         let (dx, dy) = (x + 0.5 - lx, r + 0.5 - ly);
                         let d = (dx * dx + dy * dy).sqrt();
@@ -561,7 +671,7 @@ impl Piece for MarineDrive {
                 r += 1.0;
             }
             // its reflection: a long column broken by the swell, reaching toward us
-            let sy = shore(lx);
+            let sy = Self::shore(lx);
             let (wj, len) = (0.4 + 0.7 * s, 2.0 + 8.0 * s);
             let mut r = sy.floor();
             while r < hf {
@@ -572,8 +682,8 @@ impl Piece for MarineDrive {
                         break;
                     }
                     let mut x = (lx - 3.0 * wj - 1.0).floor().max(0.0);
-                    while x < (W as f64).min(lx + 3.0 * wj + 1.0) {
-                        let k = r as usize * W + x as usize;
+                    while x < (Self::W as f64).min(lx + 3.0 * wj + 1.0) {
+                        let k = r as usize * Self::W + x as usize;
                         if mat[k] == WATER {
                             let g = a * (-((x + 0.5 - lx) / wj).powi(2)).exp();
                             if j == FLICK {
@@ -603,15 +713,15 @@ impl Piece for MarineDrive {
 
         // the ships' lights stretch down the water too
         let hz = HZ as usize;
-        for &(x, _, cr, cg, cb) in &SHIP_LIGHTS {
+        for &(x, _, cr, cg, cb) in Self::L.ship_lights {
             for r in hz..hz + 14 {
                 let a = (-((r - hz) as f64) / 5.0).exp() * 0.35;
                 for dx in -1i64..=1 {
                     let xx = x as i64 + dx;
-                    if xx >= W as i64 {
+                    if xx >= Self::W as i64 {
                         continue;
                     }
-                    let k = r * W + xx as usize;
+                    let k = r * Self::W + xx as usize;
                     if mat[k] != WATER {
                         continue;
                     }
@@ -626,12 +736,12 @@ impl Piece for MarineDrive {
         // The mirror: each water cell sees the picture above the shore, flipped and
         // stretched toward us, dimmed.
         for r in 0..H {
-            for x in 0..W {
-                let k = r * W + x;
+            for x in 0..Self::W {
+                let k = r * Self::W + x;
                 if mat[k] != WATER {
                     continue;
                 }
-                let sy = sea_top(x as f64 + 0.5);
+                let sy = Self::sea_top(x as f64 + 0.5);
                 let d = r as f64 + 0.5 - sy;
                 let (mut ar, mut ag, mut ab, mut cnt) = (0.0, 0.0, 0.0, 0u32);
                 // only the lights carry across: the sky, the towers' lit floors, ships
@@ -640,7 +750,7 @@ impl Piece for MarineDrive {
                     if ym < 0.0 {
                         continue;
                     }
-                    let q = ym as usize * W + x;
+                    let q = ym as usize * Self::W + x;
                     if mat[q] == WATER {
                         continue;
                     }
@@ -664,9 +774,9 @@ impl Piece for MarineDrive {
                     add(&mut refl[2][k], (ab / nf) * a);
                 }
                 // and a soft warm sheen off the whole lit shore
-                if x as f64 + 0.5 <= TIP + 4.0 {
+                if x as f64 + 0.5 <= Self::L.tip + 4.0 {
                     let sh =
-                        0.025 * (-d / 5.0).exp() * smooth(TIP + 4.0, TIP - 6.0, x as f64 + 0.5);
+                        0.025 * (-d / 5.0).exp() * smooth(Self::L.tip + 4.0, Self::L.tip - 6.0, x as f64 + 0.5);
                     for (c, rf) in refl.iter_mut().enumerate() {
                         add(&mut rf[k], sh * SODIUM[c]);
                     }
@@ -699,11 +809,11 @@ impl Piece for MarineDrive {
         // dark glass reads against the city's haze
         let clear = (0..n)
             .map(|k| {
-                let x = (k % W) as f64 + 0.5;
-                let y = (k / W) as f64 + 0.5;
+                let x = (k % Self::W) as f64 + 0.5;
+                let y = (k / Self::W) as f64 + 0.5;
                 (1.0 - 0.9
-                    * smooth(84.0, 96.0, x)
-                    * smooth(186.0, 176.0, x)
+                    * smooth(Self::L.point_clear[0], Self::L.point_clear[1], x)
+                    * smooth(Self::L.point_clear[2], Self::L.point_clear[3], x)
                     * smooth(20.0, 28.0, y)) as f32
             })
             .collect();
@@ -720,9 +830,9 @@ impl Piece for MarineDrive {
                 ]
             })
             .collect();
-        let mut bin_lo = vec![0i32; W];
-        let mut bin_hi = vec![0i32; W];
-        for x in 0..W {
+        let mut bin_lo = vec![0i32; Self::W];
+        let mut bin_hi = vec![0i32; Self::W];
+        for x in 0..Self::W {
             let xf = x as f64;
             bin_lo[x] = 0.max(((uof(xf) - U0) / BIN).floor() as i32);
             bin_hi[x] = (nb - 1).min(bin_lo[x].max(((uof(xf + 1.0) - U0) / BIN).floor() as i32));
@@ -754,13 +864,13 @@ impl Piece for MarineDrive {
             cars,
             bin_lo,
             bin_hi,
-            col_a: vec![0f32; W],
-            col_b: vec![0f32; W],
+            col_a: vec![0f32; Self::W],
+            col_b: vec![0f32; Self::W],
         }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        let (wf, hf) = (W as f64, H as f64);
+        let (wf, hf) = (Self::W as f64, H as f64);
         let drift = t * 1.3;
         // cars: tail lights heading out to the point, headlights coming home
         self.lane_a.fill(0.0);
@@ -787,7 +897,7 @@ impl Piece for MarineDrive {
                 }
             }
         }
-        for x in 0..W {
+        for x in 0..Self::W {
             let (mut a, mut b) = (0f32, 0f32);
             for i in self.bin_lo[x]..=self.bin_hi[x] {
                 a = a.max(self.lane_a[i as usize]);
@@ -807,8 +917,8 @@ impl Piece for MarineDrive {
         for r in 0..H {
             let rf = r as f64;
             let y = rf + 0.5;
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let x = xi as f64;
                 let m = self.mat[k];
                 let (mut cr, mut cg, mut cb) = (
@@ -832,7 +942,7 @@ impl Piece for MarineDrive {
                         let l = l0 + (l1 - l0) * fx;
                         let g = f64::from(self.sky_glow[k]);
                         // grey-violet, warmed underneath by the city
-                        let (dmx, dmy) = (x + 0.5 - MOON[0], y - MOON[1]);
+                        let (dmx, dmy) = (x + 0.5 - Self::L.moon[0], y - Self::L.moon[1]);
                         let dm = (dmx * dmx + dmy * dmy).sqrt();
                         let near = (-dm / 16.0).exp();
                         let b = clamp(0.1 + l * (0.42 + 0.9 * g + 0.5 * near));
@@ -879,7 +989,7 @@ impl Piece for MarineDrive {
                     cb = (0.23 - 0.03 * v) * swell * open;
                     {
                         // the moon's road on the open water
-                        let road = (-((x + 0.5 - MOON[0]) / (0.8 + (y - HZ) * 0.12)).powi(2)).exp();
+                        let road = (-((x + 0.5 - Self::L.moon[0]) / (0.8 + (y - HZ) * 0.12)).powi(2)).exp();
                         let glint = smooth(
                             0.52,
                             0.8,
@@ -893,7 +1003,7 @@ impl Piece for MarineDrive {
                     let wob =
                         (noise(x * 0.05 + 7.0, y * 0.32 - t * 0.7, 0.0) - 0.5) * (1.4 + 4.5 * v);
                     let sx = (x + wob).max(0.0).min(wf - 1.001);
-                    let i0 = r * W + sx as usize;
+                    let i0 = r * Self::W + sx as usize;
                     let fx = sx - sx.trunc();
                     let dash = 0.45
                         + 0.9 * smooth(0.2, 0.55, noise(x * 0.16 + 3.0, y * 0.85 - t * 1.3, 0.0));
@@ -958,7 +1068,7 @@ impl Piece for MarineDrive {
             if room.tv {
                 // a television: cold light that jumps
                 let f = 0.5 + 0.5 * (t * 11.0 + room.ph).sin() * (t * 4.3 + room.ph * 2.0).sin();
-                paint(
+                Self::paint(
                     &mut self.dots,
                     out,
                     k,
@@ -976,7 +1086,7 @@ impl Piece for MarineDrive {
                 } else {
                     0.0
                 };
-                paint(
+                Self::paint(
                     &mut self.dots,
                     out,
                     k,
@@ -999,16 +1109,7 @@ impl Piece for MarineDrive {
             } else {
                 [0.3, 0.06, 0.05]
             };
-            paint(&mut self.dots, out, k as usize, rgb, 0.1);
+            Self::paint(&mut self.dots, out, k as usize, rgb, 0.1);
         }
     }
-}
-
-/// Redraw one cell over the frame, unfaded.
-fn paint(dots: &mut Dots, out: &mut [Cell], k: usize, rgb: [f64; 3], floor: f64) {
-    let [cr, cg, cb] = rgb.map(|v| v.max(0.0));
-    let peak = cr.max(cg).max(cb).max(1e-4);
-    let level = clamp(floor + (1.0 - floor) * peak.powf(0.85) * 0.95);
-    let step = Dots::step(level, bayer(k / W, k % W));
-    out[k] = dots.ink(step, level, [cr, cg, cb], peak);
 }

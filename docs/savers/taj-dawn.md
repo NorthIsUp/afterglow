@@ -12,4 +12,4 @@ The whole garden front, the jawab answering the mosque across the canal.
 
 Recomposed at 320x100 (3.2:1) to fill pine's glass uncropped; see [`-wide` variants](../ascii-rest.md#-wide-variants).
 
-Source: [`src/ascii_rest/taj_dawn_wide.rs`](../../src/ascii_rest/taj_dawn_wide.rs).
+Source: the `WIDE` layout in [`src/ascii_rest/taj_dawn.rs`](../../src/ascii_rest/taj_dawn.rs), the original's own module.

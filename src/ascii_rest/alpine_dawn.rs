@@ -10,6 +10,10 @@
 //!
 //! Upstream's `Float32Array`s stay `f32` here, as in `night_coast`. Its colour
 //! tail dims shadowed dots further than [`Dots::ink`] does, so that is inline.
+//!
+//! `alpine-dawn-wide` is the same dawn recomposed for a 3.2:1 panel. The
+//! camera's view widens around the same range, three more peaks rise at the
+//! flanks and the sun keeps its place east of centre.
 
 use std::f64::consts::PI;
 
@@ -18,14 +22,12 @@ use super::math::{clamp, fbm, hash, js_hypot, js_round, mix, noise, smooth};
 use super::{Fit, Piece, hex};
 use crate::grid::Cell;
 
-const W: usize = 200;
 const H: usize = 100;
 const K: f64 = 0.62; // tangent of half the field of view, across the width
 const HZ: f64 = 56.5; // eye level, in rows
 const CAM: f64 = 1.5; // camera height above the water
 const SHORE_Z: f64 = 46.0; // distance to the far shore
 const SHORE: usize = 62; // first row of open water
-const SUN: [f64; 2] = [151.0, 50.0];
 /// Rows above the open water.
 const SR: usize = SHORE;
 const LR: usize = H - SHORE;
@@ -36,28 +38,6 @@ const MR: usize = SHORE + 2 - M0;
 /// The high cloud: wraps every `CW` columns, the top `CR` rows.
 const CW: usize = 640;
 const CR: usize = 34;
-
-/// Peaks as pyramids, each turned a little, placed by where their summits
-/// should land on screen: [column, row, distance, spread, turn].
-const PEAK_SPECS: [[f64; 5]; 7] = [
-    [66.0, 11.0, 140.0, 0.95, 0.3],
-    [38.0, 26.0, 115.0, 1.1, -0.15],
-    [116.0, 22.0, 175.0, 0.9, 0.2],
-    [92.0, 33.0, 150.0, 1.0, 0.1],
-    [96.0, 25.0, 340.0, 1.1, 0.4],
-    [180.0, 38.0, 200.0, 1.5, -0.1],
-    [8.0, 30.0, 160.0, 1.2, 0.25],
-];
-
-/// The near pines: [column, tip row, size].
-const PINES: [[f64; 3]; 6] = [
-    [9.0, 5.0, 1.15],
-    [20.0, 38.0, 0.85],
-    [32.0, 66.0, 0.5],
-    [192.0, 10.0, 1.15],
-    [181.0, 40.0, 0.75],
-    [204.0, 26.0, 1.0],
-];
 
 /// Sharp crests where plain noise crosses its middle: rock ribs and couloirs.
 fn ridged(x: f64, y: f64, octaves: u32) -> f64 {
@@ -74,23 +54,27 @@ fn ridged(x: f64, y: f64, octaves: u32) -> f64 {
 
 struct Terrain {
     /// [x, z, height, spread, cos, sin] per peak.
-    peaks: [[f64; 6]; 7],
+    peaks: Vec<[f64; 6]>,
 }
 
 impl Terrain {
-    fn new() -> Self {
+    /// `specs` as [`Layout::peaks`], seen from a camera centred on column `cx`.
+    fn new(specs: &[[f64; 5]], cx: f64) -> Self {
         Self {
-            peaks: PEAK_SPECS.map(|[sx, row, z, f, a]| {
+            peaks: specs
+                .iter()
+                .map(|&[sx, row, z, f, a]| {
                 let h = CAM + ((HZ - row) / 100.0) * K * z - 1.5;
                 [
-                    ((sx - 100.0) / 100.0) * K * z,
+                    ((sx - cx) / 100.0) * K * z,
                     z,
                     h,
                     h * f,
                     a.cos(),
                     a.sin(),
                 ]
-            }),
+            })
+            .collect(),
         }
     }
 
@@ -143,7 +127,90 @@ impl Terrain {
     }
 }
 
-pub struct AlpineDawn {
+/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+struct Layout {
+    name: &'static str,
+    w: usize,
+    anchor: f64,
+    /// The camera's centre column.
+    cx: f64,
+    sun: [f64; 2],
+    /// Peaks as pyramids, each turned a little, placed by where their summits
+    /// should land on screen: [column, row, distance, spread, turn].
+    peaks: &'static [[f64; 5]],
+    /// The near pines: [column, tip row, size].
+    pines: [[f64; 3]; 6],
+    /// Where the sky has turned fully toward the eastern light.
+    east: f64,
+    /// The western sky, where stars linger and the cloud thins: between these.
+    west: [f64; 2],
+    /// Where the valley mist reaches full strength.
+    mist: f64,
+}
+
+const ORIGINAL: Layout = Layout {
+    name: "alpine-dawn",
+    w: 200,
+    anchor: 0.35,
+    cx: 100.0,
+    sun: [151.0, 50.0],
+    peaks: &[
+        [66.0, 11.0, 140.0, 0.95, 0.3],
+        [38.0, 26.0, 115.0, 1.1, -0.15],
+        [116.0, 22.0, 175.0, 0.9, 0.2],
+        [92.0, 33.0, 150.0, 1.0, 0.1],
+        [96.0, 25.0, 340.0, 1.1, 0.4],
+        [180.0, 38.0, 200.0, 1.5, -0.1],
+        [8.0, 30.0, 160.0, 1.2, 0.25],
+    ],
+    pines: [
+        [9.0, 5.0, 1.15],
+        [20.0, 38.0, 0.85],
+        [32.0, 66.0, 0.5],
+        [192.0, 10.0, 1.15],
+        [181.0, 40.0, 0.75],
+        [204.0, 26.0, 1.0],
+    ],
+    east: 190.0,
+    west: [40.0, 150.0],
+    mist: 170.0,
+};
+
+const WIDE: Layout = Layout {
+    name: "alpine-dawn-wide",
+    w: 320,
+    anchor: 0.5,
+    cx: 160.0,
+    sun: [211.0, 50.0],
+    peaks: &[
+        [126.0, 11.0, 140.0, 0.95, 0.3],
+        [98.0, 26.0, 115.0, 1.1, -0.15],
+        [176.0, 22.0, 175.0, 0.9, 0.2],
+        [152.0, 33.0, 150.0, 1.0, 0.1],
+        [156.0, 25.0, 340.0, 1.1, 0.4],
+        [240.0, 38.0, 200.0, 1.5, -0.1],
+        [68.0, 30.0, 160.0, 1.2, 0.25],
+        [26.0, 17.0, 135.0, 1.0, -0.2],
+        [282.0, 21.0, 165.0, 1.05, 0.15],
+        [306.0, 31.0, 240.0, 1.3, -0.3],
+    ],
+    pines: [
+        [9.0, 5.0, 1.15],
+        [20.0, 38.0, 0.85],
+        [32.0, 66.0, 0.5],
+        [312.0, 10.0, 1.15],
+        [301.0, 40.0, 0.75],
+        [324.0, 26.0, 1.0],
+    ],
+    east: 250.0,
+    west: [60.0, 210.0],
+    mist: 230.0,
+};
+
+pub type AlpineDawn = Scene<false>;
+pub type AlpineDawnWide = Scene<true>;
+
+pub struct Scene<const IS_WIDE: bool> {
     dots: Dots,
     depth: Vec<f32>,
     alt: Vec<f32>,
@@ -174,13 +241,20 @@ pub struct AlpineDawn {
     wisp: Vec<f32>,
 }
 
-impl Piece for AlpineDawn {
-    const NAME: &'static str = "alpine-dawn";
-    const COLS: usize = W;
+impl<const IS_WIDE: bool> Scene<IS_WIDE> {
+    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
+    const W: usize = Self::L.w;
+}
+
+impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
+    const NAME: &'static str = Self::L.name;
+    const COLS: usize = Self::W;
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
-    const FIT: Fit = Fit::Cover { anchor: 0.35 };
+    const FIT: Fit = Fit::Cover {
+        anchor: Self::L.anchor,
+    };
     const GROUND: u32 = hex("#090c18");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[
@@ -196,8 +270,8 @@ impl Piece for AlpineDawn {
     ];
 
     fn new() -> Self {
-        let n = W * H;
-        let terrain = Terrain::new();
+        let n = Self::W * H;
+        let terrain = Terrain::new(Self::L.peaks, Self::L.cx);
         let l = {
             let v = [0.9, 0.3, 0.14];
             let n = js_hypot(&v);
@@ -205,17 +279,17 @@ impl Piece for AlpineDawn {
         };
 
         // --- the range, raymarched once --------------------------------------
-        let mut depth = vec![0f32; SR * W];
-        let mut alt = vec![0f32; SR * W];
-        let mut sun = vec![0f32; SR * W];
-        let mut snow = vec![0f32; SR * W];
-        let mut up = vec![0f32; SR * W];
+        let mut depth = vec![0f32; SR * Self::W];
+        let mut alt = vec![0f32; SR * Self::W];
+        let mut sun = vec![0f32; SR * Self::W];
+        let mut snow = vec![0f32; SR * Self::W];
+        let mut up = vec![0f32; SR * Self::W];
         for r in 0..SR {
             let v = ((HZ - (r as f64 + 0.5)) / 100.0) * K;
-            for x in 0..W {
-                let u = ((x as f64 + 0.5 - 100.0) / 100.0) * K;
+            for x in 0..Self::W {
+                let u = ((x as f64 + 0.5 - Self::L.cx) / 100.0) * K;
                 let z = terrain.march(u, v, CAM);
-                let k = r * W + x;
+                let k = r * Self::W + x;
                 if z == 0.0 {
                     continue;
                 }
@@ -255,22 +329,22 @@ impl Piece for AlpineDawn {
         }
 
         // sunlit terrain with open sky directly above: the crest line
-        let mut rim = vec![0u8; SR * W];
-        for k in W..SR * W {
-            rim[k] = u8::from(depth[k] != 0.0 && depth[k - W] == 0.0 && sun[k] > 0.0);
+        let mut rim = vec![0u8; SR * Self::W];
+        for k in Self::W..SR * Self::W {
+            rim[k] = u8::from(depth[k] != 0.0 && depth[k - Self::W] == 0.0 && sun[k] > 0.0);
         }
 
         // --- the far shore's treeline ----------------------------------------
         let shore = SHORE as f64;
-        let mut tree_top: Vec<f32> = (0..W)
+        let mut tree_top: Vec<f32> = (0..Self::W)
             .map(|x| (shore - 0.6 - 1.2 * fbm(x as f64 * 0.06, 2.3, 2, 0.0)) as f32)
             .collect();
         let mut tx = -2.0;
-        while tx < W as f64 + 2.0 {
+        while tx < Self::W as f64 + 2.0 {
             let tip = shore - 2.6 - hash(tx * 3.0, 8.0) * 4.0 - 1.5 * smooth(60.0, 0.0, tx);
             let slope = 1.1 + hash(tx * 5.0, 9.0) * 0.5;
             let mut x = (tx - 6.0).floor().max(0.0) as usize;
-            while (x as f64) < (W as f64).min(tx + 6.0) {
+            while (x as f64) < (Self::W as f64).min(tx + 6.0) {
                 let v = tip + (x as f64 + 0.5 - tx).abs() * slope;
                 tree_top[x] = f64::from(tree_top[x]).min(v) as f32;
                 x += 1;
@@ -279,11 +353,11 @@ impl Piece for AlpineDawn {
         }
 
         // --- the lake: where each cell's reflected ray lands in the picture above
-        let mut src = vec![0f32; LR * W];
+        let mut src = vec![0f32; LR * Self::W];
         for r in SHORE..H {
             let v = ((HZ - (r as f64 + 0.5)) / 100.0) * K;
-            for x in 0..W {
-                let u = ((x as f64 + 0.5 - 100.0) / 100.0) * K;
+            for x in 0..Self::W {
+                let u = ((x as f64 + 0.5 - Self::L.cx) / 100.0) * K;
                 let z = terrain.march(u, -v, -CAM);
                 let vs = -v - if z != 0.0 { (2.0 * CAM) / z } else { 0.0 };
                 let mut row = HZ - (vs * 100.0) / K - 0.5;
@@ -291,7 +365,7 @@ impl Piece for AlpineDawn {
                 if mirror >= f64::from(tree_top[x]) {
                     row = mirror;
                 }
-                src[(r - SHORE) * W + x] = row as f32;
+                src[(r - SHORE) * Self::W + x] = row as f32;
             }
         }
 
@@ -300,19 +374,19 @@ impl Piece for AlpineDawn {
         let mut fg_shade = vec![0f32; n];
         let mut fg_rim = vec![0f32; n];
         for r in 0..H {
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let (x, rf) = (xi as f64, r as f64);
                 let y = rf + 0.5;
                 let bank_l = 88.0 + 14.0 * smooth(0.0, 52.0, x) + 2.0 * fbm(x * 0.2, 1.0, 2, 0.0);
                 let bank_r = 90.0
-                    + 12.0 * smooth(W as f64, W as f64 - 40.0, x)
+                    + 12.0 * smooth(Self::W as f64, Self::W as f64 - 40.0, x)
                     + 2.0 * fbm(x * 0.2, 4.0, 2, 0.0);
                 if y > bank_l || y > bank_r {
                     fg[k] = 1;
                     fg_shade[k] = (0.15 * hash(x, rf)) as f32;
                 }
-                for &[px, tip, s] in &PINES {
+                for &[px, tip, s] in &Self::L.pines {
                     let d = y - tip;
                     if d < 0.0 {
                         continue;
@@ -329,7 +403,7 @@ impl Piece for AlpineDawn {
                         // facing the sun, a dim cool one on the other, the inside
                         // stays black
                         let edge = hw - dx.abs() < 1.0;
-                        let sunward = if px < SUN[0] { dx > 0.0 } else { dx < 0.0 };
+                        let sunward = if px < Self::L.sun[0] { dx > 0.0 } else { dx < 0.0 };
                         fg_shade[k] = if edge {
                             if sunward {
                                 1.0
@@ -378,22 +452,22 @@ impl Piece for AlpineDawn {
         // a faint large-scale unevenness, so the open sky and the deep water
         // are never one flat halftone screen
         let hz: Vec<f32> = (0..n)
-            .map(|k| fbm((k % W) as f64 * 0.03, (k / W) as f64 * 0.06, 3, 0.0) as f32)
+            .map(|k| fbm((k % Self::W) as f64 * 0.03, (k / Self::W) as f64 * 0.06, 3, 0.0) as f32)
             .collect();
 
         // the sky's colour at a point, for the sky itself and as haze on the peaks
-        let mut sky_r = vec![0f32; SR * W];
-        let mut sky_g = vec![0f32; SR * W];
-        let mut sky_b = vec![0f32; SR * W];
-        let mut glow_a = vec![0f32; SR * W];
+        let mut sky_r = vec![0f32; SR * Self::W];
+        let mut sky_g = vec![0f32; SR * Self::W];
+        let mut sky_b = vec![0f32; SR * Self::W];
+        let mut glow_a = vec![0f32; SR * Self::W];
         for r in 0..SR {
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let x = xi as f64;
                 let y = r as f64 + 0.5;
                 let v = clamp(y / 52.0);
-                let east = smooth(20.0, 190.0, x);
-                let (dx, dy) = (x + 0.5 - SUN[0], (y - SUN[1]) * 2.2);
+                let east = smooth(20.0, Self::L.east, x);
+                let (dx, dy) = (x + 0.5 - Self::L.sun[0], (y - Self::L.sun[1]) * 2.2);
                 let ds = (dx * dx + dy * dy).sqrt();
                 let low = v.powf(1.9);
                 // indigo overhead, a soft unevenness in it, then a pale lilac
@@ -430,15 +504,15 @@ impl Piece for AlpineDawn {
             sky_g,
             sky_b,
             glow_a,
-            ar: vec![0.0; SR * W],
-            ag: vec![0.0; SR * W],
-            ab: vec![0.0; SR * W],
+            ar: vec![0.0; SR * Self::W],
+            ag: vec![0.0; SR * Self::W],
+            ab: vec![0.0; SR * Self::W],
             fr: vec![0.0; n],
             fgr: vec![0.0; n],
             fb: vec![0.0; n],
             floor: vec![0.0; n],
             fade: vec![1.0; n],
-            wisp: vec![0.0; W],
+            wisp: vec![0.0; Self::W],
         }
     }
 
@@ -459,8 +533,8 @@ impl Piece for AlpineDawn {
         for r in 0..SR {
             let rf = r as f64;
             let y = rf + 0.5;
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let x = xi as f64;
                 let gl = f64::from(self.glow_a[k]) * pulse;
                 let gg = 0.62 + 0.28 * smooth(0.15, 0.7, gl); // gold at the core, rose further out
@@ -521,7 +595,7 @@ impl Piece for AlpineDawn {
                     if y < 34.0 && hash(x, rf * 3.0 + 11.0) > 0.985 {
                         let tw =
                             0.6 + 0.4 * (t * (1.5 + hash(x, rf) * 3.0) + hash(rf, x) * 6.28).sin();
-                        let s = tw * smooth(150.0, 40.0, x) * smooth(34.0, 6.0, y) * 0.75;
+                        let s = tw * smooth(Self::L.west[1], Self::L.west[0], x) * smooth(34.0, 6.0, y) * 0.75;
                         cr = cr.max(s * 0.9);
                         cg = cg.max(s * 0.92);
                         cb = cb.max(s);
@@ -534,10 +608,10 @@ impl Piece for AlpineDawn {
                         let ix = ix as usize;
                         let c0 = f64::from(self.cloud[r * CW + ix % CW]);
                         let c1 = f64::from(self.cloud[r * CW + (ix + 1) % CW]);
-                        let c = (c0 + (c1 - c0) * fx) * (0.35 + 0.65 * smooth(40.0, 150.0, x));
+                        let c = (c0 + (c1 - c0) * fx) * (0.35 + 0.65 * smooth(Self::L.west[0], Self::L.west[1], x));
                         if c > 0.01 {
                             let g =
-                                (-js_hypot(&[x + 0.5 - SUN[0], (y - SUN[1]) * 1.6]) / 55.0).exp();
+                                (-js_hypot(&[x + 0.5 - Self::L.sun[0], (y - Self::L.sun[1]) * 1.6]) / 55.0).exp();
                             let b = clamp(0.25 + 0.9 * g);
                             let (kr, kg, kb) = (
                                 mix(0.32, 1.0, b),
@@ -550,7 +624,7 @@ impl Piece for AlpineDawn {
                         }
                     }
                     // the sun, just clearing the ridge
-                    let (dx, dy) = (x + 0.5 - SUN[0], y - SUN[1]);
+                    let (dx, dy) = (x + 0.5 - Self::L.sun[0], y - Self::L.sun[1]);
                     let ds = (dx * dx + dy * dy).sqrt();
                     if ds < 4.5 {
                         let a = smooth(4.5, 3.3, ds);
@@ -560,8 +634,8 @@ impl Piece for AlpineDawn {
                     }
                 }
                 // mist pooled in the valley behind the shore, lit rose toward the sun
-                let e = smooth(20.0, 170.0, x) * (0.6 + 0.4 * warm);
-                let near = (-(x + 0.5 - SUN[0]).abs() / 22.0).exp() * 0.3;
+                let e = smooth(20.0, Self::L.mist, x) * (0.6 + 0.4 * warm);
+                let near = (-(x + 0.5 - Self::L.sun[0]).abs() / 22.0).exp() * 0.3;
                 let (mr, mg, mb) = (
                     mix(0.48, 0.9, e) + near,
                     mix(0.46, 0.7, e) + near * 0.75,
@@ -606,16 +680,16 @@ impl Piece for AlpineDawn {
         for r in SHORE..H {
             let y = r as f64 + 0.5;
             let d = (y - shore) / LR as f64;
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 let x = xi as f64;
                 let w1 = noise(x * 0.045 + t * 0.06, y * 0.5 - t * 0.35, 0.0);
                 let w2 = noise(x * 0.12 - t * 0.1, y * 1.1 - t * 0.7, 0.0);
                 let sway = (w1 - 0.5) * (0.4 + 1.4 * d) + (w2 - 0.5) * 0.5;
-                let sx = js_round(x + sway).clamp(0.0, (W - 1) as f64) as usize;
-                let sr = js_round(f64::from(self.src[(r - SHORE) * W + xi]) + (w2 - 0.5) * 0.6 * d)
+                let sx = js_round(x + sway).clamp(0.0, (Self::W - 1) as f64) as usize;
+                let sr = js_round(f64::from(self.src[(r - SHORE) * Self::W + xi]) + (w2 - 0.5) * 0.6 * d)
                     .clamp(0.0, (SR - 1) as f64) as usize;
-                let sk = sr * W + sx;
+                let sk = sr * Self::W + sx;
                 let refl = 0.68 - 0.32 * d;
                 let w3 = noise(x * 0.03 + t * 0.04, y * 1.9 - t * 0.45, 0.0);
                 let lift = 1.0 + (w3 - 0.5) * (0.4 + 0.5 * d); // long, faint ripple lines
@@ -632,7 +706,7 @@ impl Piece for AlpineDawn {
                 let mut cb = 0.07 + deep * 1.6 + mix(grey, ab, 0.75) * refl * lift;
                 // the sun's road
                 let road_w = 1.5 + (y - shore) * 0.45;
-                let road = (-((x + 0.5 - SUN[0]) / road_w).powi(2)).exp();
+                let road = (-((x + 0.5 - Self::L.sun[0]) / road_w).powi(2)).exp();
                 let glint = smooth(0.55, 0.85, w2) * road * (0.5 + 0.5 * warm);
                 cr += glint;
                 cg += glint * 0.8;
@@ -649,7 +723,7 @@ impl Piece for AlpineDawn {
         }
 
         // the near pines and the bank, black against it all, rimmed on the sun side
-        for k in 0..W * H {
+        for k in 0..Self::W * H {
             if self.fg[k] == 0 {
                 continue;
             }
@@ -681,8 +755,8 @@ impl Piece for AlpineDawn {
         }
 
         for r in 0..H {
-            for x in 0..W {
-                let k = r * W + x;
+            for x in 0..Self::W {
+                let k = r * Self::W + x;
                 let (cr, cg, cb) = (
                     f64::from(self.fr[k]),
                     f64::from(self.fgr[k]),

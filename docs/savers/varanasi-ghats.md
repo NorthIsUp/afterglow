@@ -12,4 +12,4 @@ Longer ghats with more spires and priests, and a broad reach past the glow.
 
 Recomposed at 320x100 (3.2:1) to fill pine's glass uncropped; see [`-wide` variants](../ascii-rest.md#-wide-variants).
 
-Source: [`src/ascii_rest/varanasi_ghats_wide.rs`](../../src/ascii_rest/varanasi_ghats_wide.rs).
+Source: the `WIDE` layout in [`src/ascii_rest/varanasi_ghats.rs`](../../src/ascii_rest/varanasi_ghats.rs), the original's own module.

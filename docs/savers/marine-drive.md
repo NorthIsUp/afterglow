@@ -12,4 +12,4 @@ A longer necklace and skyline, a liner and a fishing boat past the point.
 
 Recomposed at 320x100 (3.2:1) to fill pine's glass uncropped; see [`-wide` variants](../ascii-rest.md#-wide-variants).
 
-Source: [`src/ascii_rest/marine_drive_wide.rs`](../../src/ascii_rest/marine_drive_wide.rs).
+Source: the `WIDE` layout in [`src/ascii_rest/marine_drive.rs`](../../src/ascii_rest/marine_drive.rs), the original's own module.
