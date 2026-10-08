@@ -63,7 +63,7 @@ macro_rules! each_piece {
             earthrise::{Earthrise, #[no_upstream] EarthriseWide},
             fractal_tree::{FractalTree},
             kyoto_dusk::{KyotoDusk, #[no_upstream] KyotoDuskWide},
-            lighthouse::{Lighthouse},
+            lighthouse::{Lighthouse, #[fill] LighthouseWide},
             marine_drive::{MarineDrive, #[no_upstream] MarineDriveWide},
             misty_forest::{MistyForest, #[no_upstream] MistyForestWide},
             night_coast::{NightCoast, #[no_upstream] NightCoastWide},
