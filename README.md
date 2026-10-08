@@ -71,7 +71,8 @@ Pick one with `SAVER` (older spelling: `FIRE_STYLE`). Anything unrecognised
 falls back to `ascii` — a headless pod must never crash-loop on a typo.
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
-`SAVER_ROTATE_SECS` (0..86400, default 0 = off), `SAVER_PIXEL_ASPECT` (25..400,
+`SAVER_ROTATE_SECS` (0..86400, default 0 = off), `SAVER_ROTATE_EXCLUDE`
+(comma-separated savers rotation skips, default none), `SAVER_PIXEL_ASPECT` (25..400,
 default 100 = off — see [`SAVER_PIXEL_ASPECT`](docs/pixel-aspect.md)), `DRM_DEVICE` (default `/dev/dri/card0`),
 `RETRY_SECONDS`.
 

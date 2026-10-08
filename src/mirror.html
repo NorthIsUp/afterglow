@@ -85,6 +85,7 @@
   #list h2 {
     position: sticky;
     top: 0;
+    z-index: 1;
     margin: 0;
     padding: 0.45rem 0.6rem 0.25rem;
     font: inherit;
@@ -94,21 +95,41 @@
     opacity: 0.6;
     background: #000;
   }
+  #list .row {
+    display: flex;
+    align-items: center;
+  }
+  #list .row:hover,
+  #list .row:has(> .cursor) {
+    background: #071207;
+  }
+  #list .rot {
+    margin: 0 0 0 0.6rem;
+  }
+  #list h2 .rot {
+    margin: 0 0.3rem 0 0;
+    vertical-align: -2px;
+  }
   #list button {
     display: block;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     text-align: left;
     border: 0;
-    border-left: 2px solid transparent;
-    padding: 0.22rem 0.6rem 0.22rem 0.9rem;
+    padding: 0.22rem 0.6rem 0.22rem 0.5rem;
   }
   #list button:hover,
   #list button.cursor {
     background: #071207;
   }
+  #list .row {
+    border-left: 2px solid transparent;
+  }
+  #list .row:has(> button[aria-current="true"]) {
+    border-left-color: var(--edge);
+  }
   #list button[aria-current="true"] {
     color: var(--hot);
-    border-left-color: var(--edge);
   }
   #side .none {
     padding: 0.6rem;
@@ -203,8 +224,12 @@
   #rotmins {
     width: 4rem;
   }
-  #pool label {
-    margin-right: 0.4rem;
+  #rotnote {
+    opacity: 0.7;
+  }
+  #rotnote.warn {
+    color: var(--bad);
+    opacity: 1;
   }
   #status {
     font-size: 10px;
@@ -301,7 +326,7 @@
     <h3>rotate</h3>
     <label><input id="roton" type="checkbox" /> auto-rotate</label>
     <label>every <input id="rotmins" type="number" min="1" max="1440" step="1" /> min</label>
-    <span id="pool"></span>
+    <span id="rotnote"></span>
   </section>
   <section>
     <h3>view</h3>
@@ -382,24 +407,51 @@
 
   // The tailnet is the auth boundary (the ts-auth sidecar 403s anything without
   // an identity header), so there is nothing to send but the name.
+  //
+  // One round trip: the server answers once the panel is drawing the new
+  // saver, with its /meta, and the stream reopens on that epoch directly. The
+  // row and the name change on the click, and the canvas keeps the last frame
+  // until the new keyframe paints over it. A second click aborts the first's
+  // request, so rapid clicking ends on the last one.
+  let pending = null;
+
   async function select(name) {
-    const res = await fetch("/select?saver=" + encodeURIComponent(name), {
-      method: "POST",
-      cache: "no-store",
-    });
+    pending?.abort();
+    const mine = (pending = new AbortController());
+    showPicked(name);
+    closeStream();
+    let res;
+    try {
+      res = await fetch("/select?saver=" + encodeURIComponent(name), {
+        method: "POST",
+        cache: "no-store",
+        signal: mine.signal,
+      });
+    } catch {
+      // Superseded by a later click (abort), or the pod went away: either way
+      // the reconnect below finds out what the panel is drawing.
+      if (pending === mine) session(null);
+      return;
+    }
+    if (pending !== mine) return;
+    pending = null;
     // A rejected name leaves the panel alone; say so rather than lying about it.
     if (!res.ok) {
       status.textContent = "cannot draw " + name;
+      session(null);
       return;
     }
-    // The switch bumps the mirror's epoch, so the server is about to close the
-    // stream. Abort it ourselves instead of waiting to be dropped: a chunked
-    // response closed mid-read REJECTS reader.read() (Safari: "Load failed")
-    // rather than resolving done, so letting the server do it turned every
-    // successful switch into a two-second error banner.
-    status.textContent = "switching to " + name + "…";
-    switching = true;
-    abort();
+    const body = await res.json().catch(() => ({}));
+    // Only the name when the render loop did not get to it in time (no
+    // monitor, or wedged): fall back to reading /meta.
+    session(body.epoch ? body : null);
+  }
+
+  // The click's effect, before the server has said anything.
+  function showPicked(name) {
+    markCurrent(name);
+    document.getElementById("cfgname").textContent = label(shown(name));
+    status.textContent = "switching to " + label(shown(name)) + "\u2026";
   }
 
   // ── SAVER LIST ───────────────────────────────────────────────────────
@@ -410,27 +462,36 @@
   // listed once; `expanded` in the bar picks which of the two draws.
   const list = document.getElementById("list");
   const filter = document.getElementById("filter");
-  let items = []; // [{name, button}] in list order
+  let items = []; // [{name, row, button, rot, group}] in list order
   let cursor = -1; // index into the VISIBLE items, for the arrow keys
   let base = {}; // "night-coast-wide" -> "night-coast"
 
   const shown = (n) => base[n] || n;
   const label = (n) => n.replace(/-/g, " ");
 
+  // Each row: a toggle for whether rotation may pick it, then the name, which
+  // selects it. A scene's toggle covers its -wide twin too — the server keeps
+  // the pair together — so rotation may show either.
   function buildList(m) {
     base = Object.fromEntries(Object.entries(m.wide).map(([b, w]) => [w, b]));
     items = [];
     list.replaceChildren(
       ...m.groups.flatMap((g) => {
         if (!g.savers.length) return [];
-        const buttons = g.savers.map((name) => {
-          const b = el("button", { textContent: label(name), role: "option" });
-          b.dataset.name = name;
-          b.onclick = () => pick(name);
-          items.push({ name, button: b, group: g.name });
-          return b;
+        const rows = g.savers.map((name) => {
+          const button = el("button", { textContent: label(name), role: "option" });
+          button.dataset.name = name;
+          button.onclick = () => pick(name);
+          const rot = el("input", { type: "checkbox", className: "rot", title: "in rotation" });
+          rot.onchange = () => setRotation("saver=" + encodeURIComponent(name), rot.checked);
+          const row = el("div", { className: "row" }, rot, button);
+          items.push({ name, row, button, rot, group: g.name });
+          return row;
         });
-        return [el("h2", { textContent: g.name }), ...buttons];
+        const all = el("input", { type: "checkbox", className: "rot", title: "all of " + g.name + " in rotation" });
+        all.dataset.group = g.name;
+        all.onchange = () => setRotation("group=" + encodeURIComponent(g.name), all.checked);
+        return [el("h2", {}, all, " " + g.name), ...rows];
       }),
     );
     applyFilter();
@@ -445,17 +506,17 @@
   }
 
   function visible() {
-    return items.filter((it) => !it.button.hidden);
+    return items.filter((it) => !it.row.hidden);
   }
 
   function applyFilter() {
     const q = filter.value.trim().toLowerCase();
     for (const it of items)
-      it.button.hidden = !!q && !(label(it.name) + " " + it.group).includes(q);
+      it.row.hidden = !!q && !(label(it.name) + " " + it.group).includes(q);
     for (const h of list.querySelectorAll("h2")) {
       let n = h.nextElementSibling,
         any = false;
-      for (; n && n.tagName === "BUTTON"; n = n.nextElementSibling)
+      for (; n && n.classList.contains("row"); n = n.nextElementSibling)
         any ||= !n.hidden;
       h.hidden = !any;
     }
@@ -497,13 +558,13 @@
   filter.onkeydown = onListKey;
   list.onkeydown = onListKey;
 
-  function markCurrent() {
+  function markCurrent(name = meta.saver) {
     for (const it of items) {
-      const on = it.name === shown(meta.saver);
+      const on = it.name === shown(name);
       it.button.setAttribute("aria-current", String(on));
-      if (on) it.button.scrollIntoView({ block: "nearest" });
+      if (on) it.row.scrollIntoView({ block: "nearest" });
     }
-    document.getElementById("drawername").textContent = label(shown(meta.saver));
+    document.getElementById("drawername").textContent = label(shown(name));
   }
 
   const drawer = document.getElementById("drawer");
@@ -616,11 +677,9 @@
     // The new list now, before the rebuild's reconnect re-fetches it: a knob
     // that shows or hides others (the tour's switch) should look instant.
     if (name === meta.saver) showKnobs(name, body.knobs);
-    // A rebuild ends the stream; drop it ourselves, as `select` does.
-    if (body.rebuilt) {
-      switching = true;
-      abort();
-    }
+    // A rebuild is a switch to the same saver: the answer carries its /meta,
+    // once it is on the panel, and the stream reopens on that.
+    if (body.rebuilt) session(body.meta);
     return {};
   }
 
@@ -638,6 +697,7 @@
 
   function showRotate(secs) {
     roton.checked = secs > 0;
+    rotnote.hidden = !roton.checked;
     if (secs > 0) rotlast = Math.max(1, Math.round(secs / 60));
     rotmins.value = rotlast;
     rotmins.disabled = !roton.checked;
@@ -653,6 +713,7 @@
       return;
     }
     showRotate((await res.json()).rotate_secs);
+    showRotation(meta.excluded);
   }
 
   roton.onchange = () => setRotate(roton.checked ? rotlast : 0);
@@ -661,37 +722,41 @@
     setRotate(roton.checked ? rotlast : 0);
   };
 
-  // The sections rotation may pick from. At least one stays ticked: an empty
-  // pool is refused by the server, and unticking the last box says so here.
-  const pool = document.getElementById("pool");
-  function showPool(m) {
-    if (!pool.childElementCount)
-      pool.replaceChildren(
-        "from ",
-        ...m.groups.map((g) => {
-          const box = el("input", { type: "checkbox" });
-          box.dataset.group = g.name;
-          box.onchange = setPool;
-          return el("label", {}, box, " " + g.name);
-        }),
-      );
-    for (const box of pool.querySelectorAll("input"))
-      box.checked = m.pool.includes(box.dataset.group);
+  // Who rotation may pick, from /meta's `excluded`, onto the list's toggles.
+  // A group's box is ticked when all of it is in and half-ticked when some
+  // is. Everything out with the timer on is a pause, and says so.
+  const rotnote = document.getElementById("rotnote");
+  function showRotation(excluded) {
+    meta.excluded = excluded;
+    const out = new Set(excluded);
+    for (const it of items) it.rot.checked = !out.has(it.name);
+    for (const all of list.querySelectorAll("h2 .rot")) {
+      const g = items.filter((it) => it.group === all.dataset.group);
+      const n = g.filter((it) => it.rot.checked).length;
+      all.checked = n === g.length;
+      all.indeterminate = n > 0 && n < g.length;
+    }
+    const n = items.filter((it) => it.rot.checked).length;
+    rotnote.textContent =
+      n === 0
+        ? "paused — nothing is in rotation; tick savers in the list"
+        : n === items.length
+          ? "through every saver"
+          : `through ${n} of ${items.length}`;
+    rotnote.classList.toggle("warn", n === 0 && roton.checked);
   }
 
-  async function setPool() {
-    const on = [...pool.querySelectorAll("input:checked")].map((b) => b.dataset.group);
-    const res = await fetch("/pool?groups=" + encodeURIComponent(on.join(",")), {
+  async function setRotation(which, on) {
+    const res = await fetch("/rotation?" + which + "&on=" + (on ? 1 : 0), {
       method: "POST",
       cache: "no-store",
     });
     if (!res.ok) {
-      status.textContent = "rotation needs at least one group";
-      showPool(meta);
+      status.textContent = "cannot change rotation";
+      showRotation(meta.excluded);
       return;
     }
-    meta.pool = (await res.json()).pool;
-    showPool(meta);
+    showRotation((await res.json()).excluded);
   }
 
   // ACTUAL SIZE
@@ -916,20 +981,25 @@
     if (first) buildList(m);
     markCurrent();
     showRotate(m.rotate_secs);
-    showPool(m);
+    showRotation(m.excluded);
     loadConfig(false);
     // The PANEL, not the cell grid — see Grid::new on why they differ.
     //
     // No fallback for a /meta missing these: this page is include_str!'d into
     // the binary that serves /meta, so a page holding this code is always
     // talking to a pod that sends them.
-    canvas.width = m.panel_w;
-    canvas.height = m.panel_h;
+    //
+    // Resizing a canvas clears it, so only when the panel really changed: the
+    // last frame stays up until the new stream's keyframe, which repaints the
+    // ground first (see `unpainted`) rather than flashing it now.
+    if (canvas.width !== m.panel_w || canvas.height !== m.panel_h) {
+      canvas.width = m.panel_w;
+      canvas.height = m.panel_h;
+    }
     ctx.imageSmoothingEnabled = false;
     padTo = String(m.cols * m.rows).length;
     applyActualSize();
-    ctx.fillStyle = hex(m.ground);
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    unpainted = true;
     buildAtlases(m);
   }
 
@@ -962,35 +1032,77 @@
     return n;
   }
 
-  // Set while a switch we initiated is tearing the stream down, so the loop can
-  // tell "the user pressed a button" apart from "the pod went away".
-  let switching = false;
+  // ── CONNECTION ───────────────────────────────────────────────────────
+  //
+  // One session at a time: a /meta (or one handed over by /select) and the
+  // /stream for its epoch. Starting a session, or a click, ends the one before
+  // it — its controller is aborted and its number is stale, so whatever it
+  // throws on the way out is ignored rather than reported.
+  //
+  // A stream ending is routine: a click, a rotation, a settings rebuild, a
+  // tab culled in the background. WebKit reports a body cut mid-read as
+  // "Load failed" and Chrome as a network error; none of that is a fault, so
+  // the page reconnects at once and says nothing. Only a run of sessions
+  // that never drew a frame, over a few seconds, puts up a banner.
+  let sid = 0;
   let ctl = new AbortController();
-  const abort = () => ctl.abort();
+  // The ground repaints with the first record of a new epoch, not when its
+  // /meta arrives, so a switch shows the old frame until the new one is
+  // ready instead of a blank.
+  let unpainted = false;
+  // Consecutive sessions that ended before drawing anything, and since when.
+  let fails = 0,
+    failSince = 0;
 
-  async function run() {
-    ctl = new AbortController();
-    const res = await fetch("/meta", { cache: "no-store", signal: ctl.signal });
-    if (!res.ok) throw new Error("no display yet (" + res.status + ")");
-    const m = await res.json();
-    applyMeta(m);
+  function closeStream() {
+    sid++;
+    ctl.abort();
+  }
 
-    // Hand back the epoch /meta was built for. /select can land between these
-    // two fetches, and then the cells belong to a saver whose geometry, palette
-    // and glyph table are not the ones just applied — which drew the other
-    // saver's frames as grey blocks against the old grid, with nothing to
-    // recover it. The server refuses the mismatch instead.
-    const stream = await fetch("/stream?epoch=" + m.epoch, {
-      cache: "no-store",
-      signal: ctl.signal,
-    });
-    // 409 is that refusal. Re-read /meta at once rather than after the 2s
-    // reconnect backoff, which would black the panel out on every switch.
-    if (stream.status === 409) {
-      switching = true;
-      throw new Error("scene changed");
+  async function session(m) {
+    closeStream();
+    const mine = sid;
+    const c = (ctl = new AbortController());
+    const st = { drew: false };
+    try {
+      if (!m) {
+        const res = await fetch("/meta", { cache: "no-store", signal: c.signal });
+        if (!res.ok) throw new Error(res.status === 503 ? "no display yet" : "/meta " + res.status);
+        m = await res.json();
+      }
+      if (mine !== sid) return;
+      applyMeta(m);
+      // Hand back the epoch /meta was built for, so a stream for a saver
+      // that has since been replaced is refused (409) rather than drawn
+      // against the wrong geometry, palette and glyph table.
+      const stream = await fetch("/stream?epoch=" + m.epoch, {
+        cache: "no-store",
+        signal: c.signal,
+      });
+      if (stream.status === 409) {
+        st.drew = true; // a race lost, not a fault: straight back round
+        return;
+      }
+      if (!stream.ok) throw new Error("/stream " + stream.status);
+      await read(stream, mine, st);
+    } catch (e) {
+      if (mine !== sid) return;
+      if (!st.drew && !fails++) failSince = performance.now();
+      // A run of empty sessions over a few seconds is the pod gone, or a
+      // proxy in the way; one or two is a switch landing mid-request.
+      if (fails >= 3 && performance.now() - failSince > 3000)
+        status.textContent = `${e.message || e.name} — retrying`;
+    } finally {
+      if (mine === sid) {
+        if (st.drew) fails = 0;
+        // Straight back for a routine end; backing off only once failing.
+        setTimeout(() => mine === sid && session(null), fails ? Math.min(2000, 250 * fails) : 0);
+      }
     }
-    if (!stream.ok) throw new Error("stream " + stream.status);
+  }
+
+  // Draw the stream until it ends, noting in `st` once it drew a record.
+  async function read(stream, mine, st) {
     const reader = stream.body.getReader();
     // Records straddle chunk boundaries, so hold a buffer and consume only
     // whole ones. Grow-only, with a read offset: the obvious
@@ -1005,15 +1117,8 @@
       off = 0; // bytes already drawn
     for (;;) {
       const { value, done } = await reader.read();
-      // The server ends the stream when the epoch moves, which SAVER_ROTATE_SECS
-      // now makes a routine event rather than only a click. Treat it as a
-      // switch: reconnect at once and say nothing. Waiting out the 2s backoff
-      // would put an error banner on the page every rotation. A pod that really
-      // went away fails on the next /meta and gets the banner there.
-      if (done) {
-        switching = true;
-        throw new Error("stream ended");
-      }
+      // The server ends the stream when the epoch moves; `session` reconnects.
+      if (done || mine !== sid) return;
       if (len + value.length > buf.length) {
         // Drop what has been drawn, and only then consider growing. A full
         // keyframe on `blocks` is ~1 MB, so the buffer does settle larger than
@@ -1037,8 +1142,14 @@
         if (len - off < 4) break;
         const need = 4 + view.getUint32(off, true) * 8;
         if (len - off < need) break;
+        if (unpainted) {
+          unpainted = false;
+          ctx.fillStyle = hex(meta.ground);
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
         n = draw(view, off);
         off += need;
+        st.drew = true;
       }
       // Once per chunk, not once per record: this is a layout-invalidating
       // innerHTML write, and at 30fps the inner loop runs it for every frame
@@ -1057,23 +1168,5 @@
     }
   }
 
-  // The stream ends on modeset (a new palette and geometry), on a pod restart,
-  // and when the tab was backgrounded long enough to be culled. Reconnecting is
-  // the whole recovery story — /meta is re-read, so a changed saver just works.
-  (async function loop() {
-    for (;;) {
-      try {
-        await run();
-      } catch (e) {
-        // A switch we asked for is not a failure: reconnect at once and say
-        // nothing. Only a real drop gets the banner and the backoff.
-        if (switching) {
-          switching = false;
-          continue;
-        }
-        status.textContent = e.message + " — retrying";
-      }
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-  })();
+  session(null);
 </script>

@@ -53,6 +53,9 @@
 //!   one is picked at random, 0..=86400. **0, the default, is off.** Never the
 //!   saver already showing, and a `/select` gives the saver it picked a full
 //!   interval before rotation moves on again.
+//! * `SAVER_ROTATE_EXCLUDE` — comma-separated savers rotation never picks
+//!   (default none; a scene takes its `-wide` twin with it). The startup set
+//!   only: the mirror page's toggles move it live. A click still shows them.
 //! * `SAVER_FPS`      — target frames/sec, 1..=120 (default 30)
 //! * `SAVER_PANEL_MM`   — the panel's visible width in mm, 0 (default) = unknown.
 //!   Not discoverable (this monitor's EDID is 0 bytes); someone measures it. Only
@@ -220,6 +223,7 @@ pub struct Config {
     fps: u32,
     saver: String,
     rotate_secs: u64,
+    rotate_exclude: String,
     retry: Duration,
     host: Host,
     http: String,
@@ -259,6 +263,7 @@ impl Config {
             // meaning changes is "matrix", which used to mean ascii.
             saver: env_str(&["SAVER", "FIRE_STYLE"], "ascii"),
             rotate_secs: env_num(&["SAVER_ROTATE_SECS"], 0, 0, 86_400) as u64,
+            rotate_exclude: env_str(&["SAVER_ROTATE_EXCLUDE"], ""),
             retry: Duration::from_secs(env_num(&["RETRY_SECONDS"], 30, 1, 3600) as u64),
             host: Host::from_env()?,
             // Loopback by default: the only thing that should reach the mirror
@@ -300,6 +305,9 @@ fn main() {
     // owns it after that, so the render loop has one place to read it from
     // rather than an env lookup and a live value that can disagree.
     mirror.set_rotate_secs(cfg.rotate_secs);
+    for name in mirror.exclude(&cfg.rotate_exclude) {
+        eprintln!("[screensaver] SAVER_ROTATE_EXCLUDE: {name} is not a saver");
+    }
     if cfg.http != "off" {
         let (m, addr) = (Arc::clone(&mirror), cfg.http.clone());
         std::thread::spawn(move || mirror::serve(&m, &addr));

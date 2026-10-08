@@ -50,7 +50,7 @@
 use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -85,9 +85,10 @@ pub fn sel_index(word: u64) -> usize {
     (word & u64::from(u32::MAX)) as usize
 }
 
-/// Every group in the rotation pool: the default, and what a deployment that
-/// never touches the pool gets.
-const ALL_GROUPS: u32 = u32::MAX;
+/// Longest `/select` waits for the render loop to build what it asked for.
+/// Past it the pod has no render loop running (no monitor) or is wedged, and
+/// the page falls back to reconnecting.
+const APPLY_WAIT: Duration = Duration::from_secs(2);
 
 /// Seconds out of a rotation control word. The packing is this module's, so the
 /// render loop asks rather than masking a layout it would have to be kept in
@@ -132,9 +133,14 @@ pub struct Mirror {
     /// in the high 32. One word rather than two so the render loop spots a
     /// change with a single relaxed load — see `set_rotate_secs`.
     rotate: AtomicU64,
-    /// Bit per `saver::GROUPS` entry: the sections rotation may pick from.
-    /// Read only when a turn is up, never per frame.
-    pool: AtomicU32,
+    /// Bit per `saver::SAVERS` row, set when rotation may pick it. Read only
+    /// when a turn is up, never per frame.
+    rotation: [AtomicU64; saver::POOL_WORDS],
+    /// The selection word the render loop last built and announced, so a
+    /// `/select` can answer with the saver it asked for rather than the one
+    /// it replaced.
+    applied: Mutex<u64>,
+    built: Condvar,
     frame: Mutex<Frame>,
     ready: Condvar,
     /// `/meta` JSON, rebuilt on modeset, MINUS its closing brace: the rotation
@@ -152,7 +158,9 @@ impl Mirror {
             fps,
             selected: AtomicU64::new(0),
             rotate: AtomicU64::new(0),
-            pool: AtomicU32::new(ALL_GROUPS),
+            rotation: std::array::from_fn(|_| AtomicU64::new(u64::MAX)),
+            applied: Mutex::new(0),
+            built: Condvar::new(),
             frame: Mutex::new(Frame::default()),
             ready: Condvar::new(),
             meta: Mutex::new(String::new()),
@@ -215,15 +223,56 @@ impl Mirror {
             .is_ok()
     }
 
-    /// Is `saver::GROUPS[g]` in the rotation pool.
-    pub fn pooled(&self, g: usize) -> bool {
-        self.pool.load(Ordering::Relaxed) & (1 << g) != 0
+    /// May rotation pick row `i`.
+    pub fn in_rotation(&self, i: usize) -> bool {
+        self.rotation[i / 64].load(Ordering::Relaxed) & (1 << (i % 64)) != 0
     }
 
-    /// The rotation pool, a bit per `saver::GROUPS` entry. Validated by the
-    /// route, like `set_rotate_secs`.
-    pub fn set_pool(&self, mask: u32) {
-        self.pool.store(mask, Ordering::Relaxed);
+    /// Put `name` in or out of rotation, and its `-wide` twin with it: the
+    /// page shows the pair as one row. False for a name that is not a saver.
+    pub fn set_in_rotation(&self, name: &str, on: bool) -> bool {
+        let Some(i) = saver::index_of(name) else {
+            return false;
+        };
+        for i in std::iter::once(i).chain(saver::twin_of(name).and_then(saver::index_of)) {
+            let bit = 1 << (i % 64);
+            if on {
+                self.rotation[i / 64].fetch_or(bit, Ordering::Relaxed);
+            } else {
+                self.rotation[i / 64].fetch_and(!bit, Ordering::Relaxed);
+            }
+        }
+        true
+    }
+
+    /// `SAVER_ROTATE_EXCLUDE`: comma-separated names taken out of rotation at
+    /// start. Returns the ones that are not savers, for the log.
+    pub fn exclude(&self, list: &str) -> Vec<String> {
+        list.split(',')
+            .map(str::trim)
+            .filter(|n| !n.is_empty() && !self.set_in_rotation(n, false))
+            .map(String::from)
+            .collect()
+    }
+
+    /// The render loop built and announced the saver for selection `word`.
+    pub fn applied(&self, word: u64) {
+        *self.applied.lock().unwrap() = word;
+        self.built.notify_all();
+    }
+
+    /// Wait until the render loop has built selection `word`, or a later
+    /// one, for at most `limit`. Later counts: a second click supersedes the
+    /// first, and the first's answer is then the second's saver.
+    fn wait_applied(&self, word: u64, limit: Duration) -> bool {
+        let count = |w: u64| (w >> 32) as u32;
+        let reached = |a: u64| count(a).wrapping_sub(count(word)).cast_signed() >= 0;
+        let g = self.applied.lock().unwrap();
+        let (g, _) = self
+            .built
+            .wait_timeout_while(g, limit, |a| !reached(*a))
+            .unwrap();
+        reached(*g)
     }
 
     /// The rotation control word, for the render loop: one relaxed load, same
@@ -369,7 +418,7 @@ pub fn serve(mirror: &Arc<Mirror>, addr: &str) {
 /// Routes that change what the panel does. POST only — a GET must not be able
 /// to, and everything else on any other path is a 405 so `POST /stream` cannot
 /// take a viewer slot and hold a thread.
-const WRITES: &[&str] = &["/select", "/rotate", "/pool"];
+const WRITES: &[&str] = &["/select", "/rotate", "/rotation"];
 
 fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
     s.set_read_timeout(Some(Duration::from_secs(10)))?;
@@ -403,13 +452,15 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
             b"method not allowed",
         ),
         // A GET must not be able to change the saver.
+        // Answers once the render loop has built the saver, with its `/meta`,
+        // so the page opens `/stream` on the new epoch in one round trip —
+        // no reconnect after a dropped stream, no 409 for racing the switch.
         ("POST", "/select") => match param(&query, "saver") {
-            Some(name) if mirror.select(&name) => send(
-                &mut s,
-                "200 OK",
-                "application/json",
-                selected_json(mirror).as_bytes(),
-            ),
+            Some(name) if mirror.select(&name) => {
+                let body = applied_meta(mirror, mirror.selection())
+                    .unwrap_or_else(|| selected_json(mirror));
+                send(&mut s, "200 OK", "application/json", body.as_bytes())
+            }
             // Unknown name: say so and change nothing. The render loop only
             // ever sees an index that is a saver.
             other => {
@@ -451,51 +502,56 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
                 )
             }
         }
-        // Group names, comma-separated; at least one, every one real. Anything
-        // else changes nothing, as for `/rotate`.
-        ("POST", "/pool") => match param(&query, "groups").and_then(|v| pool_mask(&v)) {
-            Some(mask) => {
-                mirror.set_pool(mask);
-                send(
+        // In or out of rotation, by saver (its twin follows) or by group.
+        ("POST", "/rotation") => {
+            let on = match param(&query, "on").as_deref() {
+                Some("1") => Some(true),
+                Some("0") => Some(false),
+                _ => None,
+            };
+            let names: Option<Vec<&str>> = match (param(&query, "saver"), param(&query, "group")) {
+                (Some(n), None) => saver::index_of(&n).map(|i| vec![saver::name_at(i)]),
+                (None, Some(g)) => saver::GROUPS.iter().position(|x| *x == g).map(|g| {
+                    saver::names()
+                        .enumerate()
+                        .filter(|&(i, _)| saver::group_at(i) == g)
+                        .map(|(_, n)| n)
+                        .collect()
+                }),
+                _ => None,
+            };
+            match (on, names) {
+                (Some(on), Some(names)) => {
+                    for n in names {
+                        mirror.set_in_rotation(n, on);
+                    }
+                    send(
+                        &mut s,
+                        "200 OK",
+                        "application/json",
+                        format!("{{\"excluded\":{}}}", excluded_json(mirror)).as_bytes(),
+                    )
+                }
+                _ => send(
                     &mut s,
-                    "200 OK",
+                    "400 Bad Request",
                     "application/json",
-                    format!("{{\"pool\":{}}}", pool_json(mirror)).as_bytes(),
-                )
+                    br#"{"error":"rotation takes saver=<name> or group=<name>, and on=0|1"}"#,
+                ),
             }
-            None => send(
-                &mut s,
-                "400 Bad Request",
-                "application/json",
-                br#"{"error":"pool must name one or more groups"}"#,
-            ),
-        },
+        }
         (_, "/") => send(
             &mut s,
             "200 OK",
             "text/html; charset=utf-8",
             PAGE.as_bytes(),
         ),
-        (_, "/meta") => {
-            let mut meta = mirror.meta.lock().unwrap().clone();
-            if meta.is_empty() {
-                // No modeset yet: the pod is up but idling on a node with no
-                // monitor. A 503 is the honest answer and the page retries.
-                send(&mut s, "503 Service Unavailable", "application/json", b"{}")
-            } else {
-                // Closes the object. The interval is read HERE rather than
-                // cached with the rest, because `/rotate` moves it between
-                // modesets and a stale one is a page showing a number that is
-                // not what the panel is doing.
-                let _ = write!(
-                    meta,
-                    ",\"rotate_secs\":{},\"pool\":{}}}",
-                    mirror.rotate_secs(),
-                    pool_json(mirror)
-                );
-                send(&mut s, "200 OK", "application/json", meta.as_bytes())
-            }
-        }
+        (_, "/meta") => match meta_json(mirror) {
+            Some(meta) => send(&mut s, "200 OK", "application/json", meta.as_bytes()),
+            // No modeset yet: the pod is up but idling on a node with no
+            // monitor. A 503 is the honest answer and the page retries.
+            None => send(&mut s, "503 Service Unavailable", "application/json", b"{}"),
+        },
         // Live counters, deliberately NOT folded into /meta: that is a String
         // cached at modeset time, so a counter baked into it would report its
         // value as of the last modeset forever.
@@ -624,25 +680,41 @@ fn wide_json() -> String {
     format!("{{{}}}", pairs.join(","))
 }
 
-fn pool_json(mirror: &Mirror) -> String {
-    let names: Vec<String> = saver::GROUPS
-        .iter()
+/// Rows out of rotation. The short list, since everything starts in.
+fn excluded_json(mirror: &Mirror) -> String {
+    let names: Vec<String> = saver::names()
         .enumerate()
-        .filter(|&(g, _)| mirror.pooled(g))
+        .filter(|&(i, _)| !mirror.in_rotation(i))
         .map(|(_, n)| json_str(n))
         .collect();
     format!("[{}]", names.join(","))
 }
 
-/// `scenes,classics` -> their bits. None for an empty list or a name that is
-/// not a group.
-fn pool_mask(v: &str) -> Option<u32> {
-    v.split(',')
-        .try_fold(0u32, |mask, name| {
-            let g = saver::GROUPS.iter().position(|n| *n == name)?;
-            Some(mask | 1 << g)
-        })
-        .filter(|m| *m != 0)
+/// `/meta`: the JSON cached at modeset, closed with the live values — the
+/// interval and the rotation set move between modesets, and a stale one is
+/// a page showing what the panel is not doing. None before the first
+/// modeset.
+fn meta_json(mirror: &Mirror) -> Option<String> {
+    let mut meta = mirror.meta.lock().unwrap().clone();
+    if meta.is_empty() {
+        return None;
+    }
+    let _ = write!(
+        meta,
+        ",\"rotate_secs\":{},\"excluded\":{}}}",
+        mirror.rotate_secs(),
+        excluded_json(mirror)
+    );
+    Some(meta)
+}
+
+/// `/meta` once the render loop has built selection `word`, or None if it
+/// has not within `APPLY_WAIT`.
+fn applied_meta(mirror: &Mirror, word: u64) -> Option<String> {
+    mirror
+        .wait_applied(word, APPLY_WAIT)
+        .then(|| meta_json(mirror))
+        .flatten()
 }
 
 /// The knobs `name`'s constructor reads, found by building it here with the
@@ -721,14 +793,21 @@ fn config_route(mirror: &Mirror, method: &str, query: &str) -> (&'static str, St
     }
     let cur = mirror.selected();
     let rebuilt = knobs_of(cur, mirror.fps).iter().any(|k| k.key == key) && mirror.reselect(cur);
+    // As `/select`: the rebuilt saver's `/meta`, once it is on the panel.
+    let meta = if rebuilt {
+        applied_meta(mirror, mirror.selection())
+    } else {
+        None
+    };
     // Re-read: a switch like ASCII_REST_TOUR decides which other knobs exist.
     // `rebuilt` so the page can drop its stream itself, as it does for a
     // `/select`, rather than be cut off mid-chunk.
     (
         "200 OK",
         format!(
-            "{{\"rebuilt\":{rebuilt},\"knobs\":{}}}",
-            config_json(&knobs_of(i, mirror.fps))
+            "{{\"rebuilt\":{rebuilt},\"knobs\":{},\"meta\":{}}}",
+            config_json(&knobs_of(i, mirror.fps)),
+            meta.as_deref().unwrap_or("null")
         ),
     )
 }
@@ -1526,7 +1605,7 @@ mod tests {
     }
 
     #[test]
-    fn meta_lists_groups_twins_and_the_pool() {
+    fn meta_lists_groups_twins_and_the_rotation() {
         let m = Mirror::new(15);
         scene(&m, "matrix", 2, 2, 8, 16);
         let addr = serve_test(&m);
@@ -1548,34 +1627,88 @@ mod tests {
             head.contains(r#"{"name":"classics","savers":["ascii","blocks","matrix""#),
             "{head}"
         );
-        let tail = body.rsplit_once("]],").unwrap().1;
-        assert!(
-            tail.contains(r#""pool":["scenes","ascii.rest","classics","flights","generative"]"#),
-            "{tail}"
-        );
+        let tail = |b: &str| b.rsplit_once("]],").unwrap().1.to_string();
+        assert!(tail(&body).contains(r#""excluded":[]"#), "{}", tail(&body));
 
-        let body = req(addr, "POST /pool?groups=scenes,flights");
+        // A scene takes its twin with it; a group takes every member.
+        let body = req(addr, "POST /rotation?saver=night-coast&on=0");
         assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
-        assert!(body.ends_with(r#"{"pool":["scenes","flights"]}"#), "{body}");
-        assert!(m.pooled(0) && !m.pooled(1) && m.pooled(3));
+        assert!(
+            body.ends_with(r#"{"excluded":["night-coast","night-coast-wide"]}"#),
+            "{body}"
+        );
+        let body = req(addr, "POST /rotation?group=flights&on=0");
+        assert!(body.contains(r#""warp","hypercube","pov""#), "{body}");
+        let body = req(addr, "POST /rotation?group=flights&on=1");
+        assert!(
+            body.ends_with(r#"{"excluded":["night-coast","night-coast-wide"]}"#),
+            "{body}"
+        );
+        assert!(tail(&req(addr, "GET /meta"))
+            .contains(r#""excluded":["night-coast","night-coast-wide"]"#));
         for bad in [
-            "POST /pool?groups=",
-            "POST /pool?groups=scenes,nope",
-            "POST /pool",
+            "POST /rotation?saver=nope&on=0",
+            "POST /rotation?saver=dvd&on=2",
+            "POST /rotation?saver=dvd",
+            "POST /rotation?group=nope&on=0",
+            "POST /rotation?saver=dvd&group=flights&on=0",
+            "POST /rotation",
         ] {
             let body = req(addr, bad);
             assert!(body.starts_with("HTTP/1.1 400 "), "{bad}: {body}");
         }
-        let body = req(addr, "GET /pool?groups=scenes");
+        let body = req(addr, "GET /rotation?saver=dvd&on=0");
         assert!(body.starts_with("HTTP/1.1 405 "), "{body}");
-        let tail = req(addr, "GET /meta");
-        assert!(
-            tail.rsplit_once("]],")
-                .unwrap()
-                .1
-                .contains(r#""pool":["scenes","flights"]"#),
-            "{tail}"
-        );
+        req(addr, "POST /rotation?saver=night-coast-wide&on=1");
+        assert!(tail(&req(addr, "GET /meta")).contains(r#""excluded":[]"#));
+
+        assert_eq!(m.exclude("dvd, nope,,matrix"), ["nope"]);
+        assert!(!m.in_rotation(saver::index_of("dvd").unwrap()));
+        assert!(!m.in_rotation(saver::index_of("matrix").unwrap()));
+    }
+
+    /// `/select` answers once the render loop has built the saver, with its
+    /// `/meta` — one round trip, and the epoch in it is the one `/stream`
+    /// will accept. Here a thread stands in for the render loop.
+    #[test]
+    fn select_answers_with_the_new_savers_meta() {
+        let m = Mirror::new(15);
+        scene(&m, "matrix", 2, 2, 8, 16);
+        let addr = serve_test(&m);
+        {
+            let m = Arc::clone(&m);
+            std::thread::spawn(move || {
+                let mut seen = m.selection();
+                loop {
+                    let want = m.selection();
+                    if want != seen {
+                        seen = want;
+                        std::thread::sleep(Duration::from_millis(30));
+                        scene(&m, saver::name_at(sel_index(want)), 3, 3, 8, 16);
+                        m.applied(want);
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            });
+        }
+        let body = req(addr, "POST /select?saver=dvd");
+        assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+        assert!(body.contains(r#"{"saver":"dvd","#), "{}", &body[..300]);
+        assert!(body.contains(r#""epoch":2,"#), "{}", &body[..300]);
+        assert!(body.contains(r#""rotate_secs":0,"excluded":[]}"#));
+    }
+
+    /// No render loop (a node with no monitor): `/select` still answers, after
+    /// the bounded wait, with only the name.
+    #[test]
+    fn select_without_a_render_loop_answers_after_the_wait() {
+        let m = Mirror::new(15);
+        scene(&m, "matrix", 2, 2, 8, 16);
+        let addr = serve_test(&m);
+        let t0 = std::time::Instant::now();
+        let body = req(addr, "POST /select?saver=dvd");
+        assert!(body.ends_with(r#"{"saver":"dvd"}"#), "{body}");
+        assert!(t0.elapsed() >= APPLY_WAIT && t0.elapsed() < APPLY_WAIT * 2);
     }
 
     #[test]
