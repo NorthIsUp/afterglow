@@ -13,6 +13,7 @@
     background: #000;
   }
   body {
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -26,11 +27,11 @@
     color: #4b8b4b;
   }
   canvas {
-    max-width: min(100vw, calc((100vh - 3rem) * var(--ar, 1.777)));
-    max-height: calc(100vh - 3rem);
-    width: auto;
-    height: auto;
-    /* Set from JS per layout — see fitScaling(). `pixelated` is right when the
+    /* Width and height are set from JS in both modes — see applyActualSize().
+       CSS max-width/max-height on auto sizes keep the canvas's INTRINSIC 16:9,
+       so the panel's 3.2:1 never reached the page and `ratio` just blew the
+       framebuffer up to fill the window.
+       image-rendering is set per layout — see fitScaling(). `pixelated` is right when the
        canvas is shown at or above its own size, and WRONG below it: nearest
        neighbour at a fractional downscale drops whole rows and columns of
        pixels, which is the line striping the mirror was showing. */
@@ -81,7 +82,23 @@
     align-items: center;
     gap: 0.5rem;
   }
-  #life p {
+  /* Pinned: the live preview resizes the canvas above it on every input
+     event, and in the flow that moved the slider out from under the pointer
+     mid-drag. Its height is reserved as body padding while open. */
+  #cal:not([hidden]) {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
+    background: #000;
+    border-top: 1px solid #132;
+  }
+  #cal p {
     max-width: 34rem;
     margin: 0;
     text-align: center;
@@ -315,21 +332,32 @@
     }
   }
 
+  // The view state lives here, not in storage: a saver switch or a rotation
+  // re-reads /meta, and that must not hand the viewer back a different size.
+  // Storage only seeds it, and a private window that cannot store still keeps
+  // its calibration for as long as the tab is open.
+  let pxmm = calibrated();
+  // The slider's value while calibrate is open, 0 otherwise — the size being
+  // previewed, which survives a switch just as the committed one does.
+  let preview = 0;
+
   function pxPerMm() {
-    return calibrated() || NOMINAL_PX_MM;
+    return preview || pxmm || NOMINAL_PX_MM;
   }
 
   function setPxPerMm(v) {
+    pxmm = v;
     try {
-      localStorage.setItem(PXMM, String(v));
+      if (v) localStorage.setItem(PXMM, String(v));
+      // Removing the key rather than storing the nominal value, so a later
+      // browser with a better answer is not permanently overridden by today's
+      // guess.
+      else localStorage.removeItem(PXMM);
     } catch {
       /* calibration just does not persist; the session still works */
     }
   }
 
-  // The panel is `panel_mm` wide and `panel_mm / ar` tall, `ar` already being
-  // the shape the glass shows rather than the framebuffer's. Sized in CSS px
-  // off the viewer's own measurement.
   // Two ways to be faithful to the panel, and they are not the same thing:
   //
   //   ratio — the panel's SHAPE, scaled to fit the window. Always exactly
@@ -342,14 +370,11 @@
   // every time.
   const MODEKEY = "mirror.mode";
   let mode = "size";
-
-  function loadMode() {
-    try {
-      const m = localStorage.getItem(MODEKEY);
-      if (m === "ratio" || m === "size") mode = m;
-    } catch {
-      /* keep the default */
-    }
+  try {
+    const m = localStorage.getItem(MODEKEY);
+    if (m === "ratio" || m === "size") mode = m;
+  } catch {
+    /* keep the default */
   }
 
   function setMode(m) {
@@ -359,119 +384,120 @@
     } catch {
       /* the choice just does not persist */
     }
-    paintModes();
     applyActualSize();
   }
 
+  const modes = document.getElementById("modes");
+  const mratio = document.getElementById("mratio");
+  const msize = document.getElementById("msize");
+  const cal = document.getElementById("cal");
+  const slider = document.getElementById("slider");
+  const card = document.getElementById("card");
+  const calnow = document.getElementById("calnow");
+
+  // Without a measured panel `size` cannot be honest about millimetres, so it
+  // is not offered — but `mode` is left alone, so the viewer's choice is still
+  // there if a later /meta does carry one.
+  const sized = () => mode === "size" && meta && meta.panel_mm > 0;
+
+  // The PANEL's shape, not the framebuffer's. With SAVER_PIXEL_ASPECT set the
+  // renderer draws everything `aspect` per-cent too tall on purpose, because
+  // the monitor squashes it back; the page has no monitor, so it squashes
+  // here. Displayed shape only — the pixels are the framebuffer's.
+  const aspect = () =>
+    (meta.panel_w * meta.pixel_aspect) / (meta.panel_h * 100);
+
+  // The box `ratio` fits into: the window, less everything else on the page
+  // and the pinned calibrate panel's reserved strip.
+  function room() {
+    const st = getComputedStyle(document.body);
+    let h = innerHeight - parseFloat(st.paddingBottom);
+    for (const el of document.body.children) {
+      if (el === canvas || !el.offsetHeight) continue;
+      h -= el.offsetHeight + parseFloat(st.rowGap);
+    }
+    // 2 for the canvas border, 8 so the page does not sit flush to an edge.
+    return [innerWidth - 10, h - 10];
+  }
+
   function paintModes() {
-    const r = document.getElementById("mratio");
-    const z = document.getElementById("msize");
-    if (!r) return;
-    r.setAttribute("aria-pressed", String(mode === "ratio"));
-    z.setAttribute("aria-pressed", String(mode === "size"));
+    mratio.setAttribute("aria-pressed", String(!sized()));
+    msize.setAttribute("aria-pressed", String(sized()));
     // Say WHICH number `size` is using: uncalibrated it is the browser's
     // nominal inch, a guess, and a viewer holding the page against the real
     // panel deserves to know that before concluding the maths is wrong.
-    z.textContent = calibrated() ? "size ✓" : "size";
-    z.title = calibrated()
+    msize.textContent = pxmm ? "size ✓" : "size";
+    msize.title = pxmm
       ? "matched to your screen"
       : "using the browser's nominal 96dpi — calibrate to make it exact";
   }
 
   function applyActualSize() {
-    applyActualSizeWith(pxPerMm());
-  }
-
-  function applyActualSizeWith(k) {
-    const mm = meta && meta.panel_mm;
-    // `ratio` is the CSS default path: clearing the inline sizes hands the
-    // canvas back to the max-width rule, which is driven by --ar and is
-    // therefore already the panel's shape.
-    if (mode !== "size" || !mm || !k) {
-      canvas.style.width = "";
-      canvas.style.height = "";
-      canvas.style.maxWidth = "";
-      canvas.style.maxHeight = "";
-      fitScaling();
-      return;
+    if (!meta) return;
+    modes.hidden = !meta.panel_mm;
+    paintModes();
+    const ar = aspect();
+    let w, h;
+    if (sized()) {
+      // A fixed physical size: an oversized panel must overflow and say so
+      // rather than be shrunk.
+      w = meta.panel_mm * pxPerMm();
+      h = w / ar;
+      if (w > innerWidth || h > innerHeight - 48) {
+        msize.textContent = "size — too big for this window";
+      }
+    } else {
+      const [rw, rh] = room();
+      w = Math.max(16, Math.min(rw, rh * ar));
+      h = w / ar;
     }
-    const ar = (canvas.width * meta.pixel_aspect) / (canvas.height * 100);
-    const w = mm * k;
-    const h = w / ar;
-    // Deliberately overriding the max-width/height that normally fit the canvas
-    // to the window: at actual size the whole point is a fixed physical size,
-    // so an oversized panel must overflow and say so rather than be shrunk.
-    canvas.style.maxWidth = "none";
-    canvas.style.maxHeight = "none";
     canvas.style.width = w + "px";
     canvas.style.height = h + "px";
     fitScaling();
-    const z = document.getElementById("msize");
-    if (w > innerWidth || h > innerHeight - 48) {
-      z.textContent = "size — too big for this window";
-    }
   }
 
-  function initActualSize(m) {
-    const box = document.getElementById("modes");
-    const c = document.getElementById("calopen");
-    const r = document.getElementById("mratio");
-    // Without a measured panel, `size` and `calibrate` cannot be honest about
-    // millimetres — but `ratio` needs nothing the browser does not already
-    // have, so it is always correct and the CSS default anyway. Hide the whole
-    // group rather than offer two buttons where one of them lies.
-    box.hidden = !m.panel_mm;
-    if (!m.panel_mm) {
-      mode = "ratio";
-      return;
-    }
-    loadMode();
-    paintModes();
-    const cal = document.getElementById("cal");
-    const slider = document.getElementById("slider");
-    const card = document.getElementById("card");
-    const now = document.getElementById("calnow");
-    const draw = () => {
-      card.style.width = CARD_MM * slider.value + "px";
-      const k = parseFloat(slider.value);
-      now.textContent = `${(k * 25.4).toFixed(0)} dpi · panel ${(meta.panel_mm * k) | 0}px wide`;
-    };
-
-    r.onclick = () => setMode("ratio");
-    document.getElementById("msize").onclick = () => setMode("size");
-    c.onclick = () => {
-      cal.hidden = !cal.hidden;
-      slider.value = pxPerMm();
-      draw();
-    };
-    slider.oninput = draw;
-    document.getElementById("calreset").onclick = () => {
-      // Back to the browser's nominal inch. Removing the key rather than
-      // storing the nominal value, so a later browser with a better answer is
-      // not permanently overridden by today's guess.
-      try {
-        localStorage.removeItem(PXMM);
-      } catch {
-        /* nothing stored, nothing to remove */
-      }
-      slider.value = NOMINAL_PX_MM;
-      draw();
-      paintModes();
-      applyActualSize();
-    };
-    document.getElementById("caldone").onclick = () => {
-      setPxPerMm(parseFloat(slider.value));
-      cal.hidden = true;
-      // Calibrating is only meaningful for `size`, so finishing implies it.
-      setMode("size");
-    };
-    // A live preview while dragging: the canvas resizes under the slider, so
-    // the viewer sees the panel grow toward its real size rather than having to
-    // commit and then judge.
-    slider.addEventListener("input", () => {
-      if (mode === "size") applyActualSizeWith(parseFloat(slider.value));
-    });
+  function drawCard() {
+    const k = parseFloat(slider.value);
+    card.style.width = CARD_MM * k + "px";
+    calnow.textContent = `${(k * 25.4).toFixed(0)} dpi · panel ${(meta.panel_mm * k) | 0}px wide`;
   }
+
+  // Open or close calibrate. The panel is pinned to the bottom of the window,
+  // so the body reserves its height once here — never while dragging, which
+  // is what kept moving the slider.
+  function showCal(open) {
+    cal.hidden = !open;
+    document.body.style.paddingBottom = open ? cal.offsetHeight + "px" : "";
+    preview = open ? parseFloat(slider.value) : 0;
+    applyActualSize();
+  }
+
+  mratio.onclick = () => setMode("ratio");
+  msize.onclick = () => setMode("size");
+  document.getElementById("calopen").onclick = () => {
+    slider.value = pxPerMm();
+    drawCard();
+    showCal(cal.hidden);
+  };
+  // A live preview while dragging: the canvas resizes above the slider, so
+  // the viewer sees the panel grow toward its real size rather than having to
+  // commit and then judge.
+  slider.oninput = () => {
+    preview = parseFloat(slider.value);
+    drawCard();
+    applyActualSize();
+  };
+  document.getElementById("calreset").onclick = () => {
+    setPxPerMm(0);
+    slider.value = NOMINAL_PX_MM;
+    slider.oninput();
+  };
+  document.getElementById("caldone").onclick = () => {
+    setPxPerMm(parseFloat(slider.value));
+    showCal(false);
+    // Calibrating is only meaningful for `size`, so finishing implies it.
+    setMode("size");
+  };
 
   // Width of the largest cell count this scene can report, so both counters
   // below are padded to the same fixed width.
@@ -488,10 +514,7 @@
     const crisp = ratio >= 1 || Number.isInteger(1 / ratio);
     canvas.style.imageRendering = crisp ? "pixelated" : "auto";
   }
-  addEventListener("resize", () => {
-    applyActualSize();
-    fitScaling();
-  });
+  addEventListener("resize", applyActualSize);
 
   function applyMeta(m) {
     meta = m;
@@ -504,19 +527,9 @@
     // talking to a pod that sends them.
     canvas.width = m.panel_w;
     canvas.height = m.panel_h;
-    // The PANEL's shape, not the framebuffer's. With SAVER_PIXEL_ASPECT set the
-    // renderer draws everything `aspect` per-cent too tall on purpose, because
-    // the monitor squashes it back; the page has no monitor, so it squashes
-    // here. Displayed shape only — the pixels are the framebuffer's.
-    canvas.style.setProperty(
-      "--ar",
-      (canvas.width * m.pixel_aspect) / (canvas.height * 100),
-    );
     ctx.imageSmoothingEnabled = false;
     padTo = String(m.cols * m.rows).length;
-    initActualSize(m);
     applyActualSize();
-    fitScaling();
     ctx.fillStyle = hex(m.ground);
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     buildAtlases(m);
