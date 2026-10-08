@@ -1,5 +1,7 @@
 # `marble`
 
+![`marble`](../media/marble.webp)
+
 Marble Madness — an isometric course floating in black space, a chrome marble rolling down it on autopilot, and hazards trying to stop it. Ramps, narrow catwalks over nothing, acid pools, a hammer and a leashed black hunter marble. Falling off costs a respawn at the last checkpoint; reaching the goal generates a new course.
 
 `src/marble.rs` is Atari's Marble Madness, not a marble run: an isometric

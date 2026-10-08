@@ -44,3 +44,13 @@ run         = "cargo fmt --all -- --check"
 [tasks.font]
 description = "Regenerate src/font.rs from the vendored Unifont subset"
 run         = "python3 tools/genfont.py tools/unifont-subset.hex -o src/font.rs && cargo fmt"
+
+[tasks.media]
+description = "Regenerate docs/media/: a WebP per saver plus the tour (all savers by default)"
+depends     = ["build"]
+tools       = { uv = "latest", "conda:libwebp" = "1.6.0", "cargo:gifski" = "1" }
+usage       = '''
+arg "[savers]..." help="Savers to render; none renders every saver and the tour"
+flag "--compare" help="Also encode the tour and two clips as WebP, GIF, APNG and AVIF in docs/media/formats/"
+'''
+run         = "uv run tools/media.py"

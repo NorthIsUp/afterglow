@@ -4,6 +4,8 @@ One flock, three brushes. `toasters` is the line-art original; `toasters2` and `
 
 ## `toasters`
 
+![`toasters`](../media/toasters.webp)
+
 Flying toasters, after After Dark's. Four distinct models.
 
 The art in `src/toasters.rs` is this repo's own ASCII, drawn from a
@@ -56,6 +58,8 @@ Source: [`src/toasters.rs`](../../src/toasters.rs).
 - `TOASTER_CELL_W` / `TOASTER_CELL_H`
 
 ## `toasters2`
+
+![`toasters2`](../media/toasters2.webp)
 
 The same flock in BLOCK ELEMENTS at 8x16 cells, so the olive chassis is a solid fill rather than edge strokes.
 
@@ -118,6 +122,8 @@ Source: [`src/toasters2.rs`](../../src/toasters2.rs).
 - `TOASTER2_CELL_W` / `TOASTER2_CELL_H`
 
 ## `toasters3`
+
+![`toasters3`](../media/toasters3.webp)
 
 The same flock drawn with a BRAILLE-style 2x4 dot matrix per cell, so one 16x6-cell toaster is a 32x24 bitmap — real slot openings, a dial, a lever, barbed wings. One model, not four.
 

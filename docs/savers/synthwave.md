@@ -1,5 +1,7 @@
 # `synthwave`
 
+![`synthwave`](../media/synthwave.webp)
+
 The eighties horizon. A grid floor rolls toward the viewer under a setting sun cut by thinning stripes, behind a ridge of mountains.
 
 One of ascii.rest's character pieces, drawn in one ink. No knobs; see [the ascii.rest ports](../ascii-rest.md#character-pieces).
@@ -7,6 +9,8 @@ One of ascii.rest's character pieces, drawn in one ink. No knobs; see [the ascii
 Source: [`src/ascii_rest/synthwave.rs`](../../src/ascii_rest/synthwave.rs).
 
 ## `synthwave-wide`
+
+![`synthwave-wide`](../media/synthwave-wide.webp)
 
 The horizon at the panel's size. The sun, the ridge and the floor's depth scale with the height, and the ridge runs edge to edge, staying low under the sun. The perspective is worked out again for the panel: the cross lines are spaced for its floor, and as many rails fan out from the vanishing point as it takes to reach both sides.
 

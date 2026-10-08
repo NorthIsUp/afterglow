@@ -1,5 +1,7 @@
 # `matrix`
 
+![`matrix`](../media/matrix.webp)
+
 Digital rain.
 
 It copies the _Reloaded/Revolutions_ look, not the literal 1999 one: the first

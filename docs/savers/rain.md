@@ -1,5 +1,7 @@
 # `rain`
 
+![`rain`](../media/rain.webp)
+
 Falling streaks over black, in three depth tiers, with wind and a splash on the
 ground row. The tiers differ in speed, length and brightness together, so a far
 streak reads as distance rather than as a dim near one.

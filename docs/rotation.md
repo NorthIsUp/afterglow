@@ -27,9 +27,10 @@ env lookup, no clock read: see [CLAUDE.md](../CLAUDE.md) on the frame loop.
 `SAVER` still picks the STARTING saver — rotation moves on from there. The order
 is a **shuffled bag**: every saver, in random order, none of them again until all
 of them have been shown, then reshuffled. That is what "rotate through all the
-savers" has to mean — rolling an independent choice each time takes about 95
-turns to show you all 25 (coupon collector), eight hours at a five-minute
-interval, where the bag takes exactly 25 and two hours.
+savers" has to mean — rolling an independent choice each time takes about 230
+turns to show you all 51 turns' worth (72 savers, a pair being one turn; coupon
+collector), nineteen hours at a five-minute interval, where the bag takes
+exactly 51 and four and a quarter.
 
 A bag is not a walk down the table: a walk is predictable in the wrong way (the
 same saver always follows the same saver, and the three toaster variants are

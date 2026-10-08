@@ -1,5 +1,7 @@
 # `lissajous`
 
+![`lissajous`](../media/lissajous.webp)
+
 A point tracing `x = sin(a·t + d)`, `y = sin(b·t)`, leaving a trail that fades
 behind it, with `b` and `d` drifting so the figure morphs through its family
 instead of settling on one shape. Up to three pens draw at once, each in its own

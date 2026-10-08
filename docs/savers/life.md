@@ -1,5 +1,7 @@
 # `life`
 
+![`life`](../media/life.webp)
+
 Conway's Game of Life on a toroidal board, cells coloured by age — white-hot at birth, cooling to blue — with a fading ash trail. A churn-triggered "meteor" of fresh soup keeps it from settling into still lifes.
 
 Conway's Life is a bad screensaver by default: B3/S23 on a random soup burns

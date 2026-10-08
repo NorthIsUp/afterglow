@@ -1,5 +1,7 @@
 # `moire`
 
+![`moire`](../media/moire.webp)
+
 Moire interference from overlapping line families. Two gratings — straight,
 concentric or radial — drift and rotate against each other, and what you are
 meant to see is the beat: fringes that sweep across the panel as the gratings

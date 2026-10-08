@@ -1,5 +1,7 @@
 # `sakura`
 
+![`sakura`](../media/sakura.webp)
+
 A cherry tree at night, shedding blossom on a slow wind. The tree is grown from
 a seed that changes every time the pod starts, and it stands in one of three
 places: beside a pond, on a mountain spur, or in a rock garden. One start in

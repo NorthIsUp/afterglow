@@ -1,5 +1,7 @@
 # `fractal`
 
+![`fractal`](../media/fractal.webp)
+
 Escape-time fractals: nineteen families in rotation, each zooming continuously
 into a point known to sit on its boundary. Each cell is one sample drawn solid,
 so the fractal reads as chunky pixel art. Between families the image dips

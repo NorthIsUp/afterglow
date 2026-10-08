@@ -1,5 +1,12 @@
 # afterglow — HDMI screensavers on whichever Pi5 holds the monitor
 
+![Two seconds of every saver, with a channel change between each](docs/media/tour.webp)
+
+Every saver has a clip on its page, rendered as pine's 3.2:1 glass shows it.
+`mise run media` regenerates them all and the tour from a release build
+([`tools/media.py`](tools/media.py)); [docs/formats.md](docs/formats.md)
+compares WebP, GIF, APNG and AVIF on the same clips.
+
 A deliberately thin workload that paints an animation onto the HDMI display of
 the Talos Pi5 carrying the `hardware.homelab/display: "true"` label. Renderer:
 a static musl Rust binary on a `FROM scratch` image, ~230 KB, which writes
@@ -57,10 +64,11 @@ a monitor cannot help with and a laptop can.
 count they imply — the headless read on whether a saver is quietly flushing the
 whole panel.
 
-The dump also drives the **web mirror**, so http://127.0.0.1:8080 shows the same
-saver in a browser with no card at all — the one way the mirror is testable off
-the hardware. Pass a large `SAVER_DUMP_FRAMES` and it runs at `SAVER_FPS`
-indefinitely.
+The dump also drives the **web mirror** on `SAVER_HTTP` (default
+`127.0.0.1:8080`), so the same saver shows in a browser with no card at all —
+the local preview, and the one way the mirror is testable off the hardware.
+Pass a large `SAVER_DUMP_FRAMES` and it runs at `SAVER_FPS` indefinitely.
+`SAVER_HTTP=off` binds nothing and dumps as fast as it can render.
 
 View with `magick frame-00000.ppm out.png`, or
 `ffmpeg -i 'frame-%05d.ppm' out.gif`.
@@ -126,7 +134,7 @@ them live — see [Live settings](docs/mirror.md#live-settings-config).
 
 ### ascii.rest halftone scenes
 
-Ports of [ascii.rest](https://ascii.rest)'s scenes; the camera slowly tours each one. Every scene also has a `-wide` variant recomposed at 3.2:1. The shared engine, the tour and its knobs: [the ascii.rest ports](docs/ascii-rest.md).
+Ports of [ascii.rest](https://ascii.rest)'s scenes, held on a cover view; `ASCII_REST_TOUR=1` adds a slow camera tour. Every scene also has a `-wide` variant recomposed at 3.2:1, and the pair opens on it: the mirror page and rotation show the `-wide` until someone unticks `expanded`. The shared engine, the tour and its knobs: [the ascii.rest ports](docs/ascii-rest.md).
 
 | `SAVER`                                           | `-wide`                                                                    | What                                                                                                     |
 | ------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -146,7 +154,7 @@ Ports of [ascii.rest](https://ascii.rest)'s scenes; the camera slowly tours each
 
 ### ascii.rest character pieces
 
-One ink each. Every piece also has a `-wide` twin in colour, drawn at the panel's own size, any shape, with no bars. The shared engine: [the ascii.rest ports](docs/ascii-rest.md#character-pieces).
+One ink each. Every piece also has a `-wide` twin in colour, drawn at the panel's own size, any shape, with no bars, and the pair opens on the twin as the scenes do. The shared engine: [the ascii.rest ports](docs/ascii-rest.md#character-pieces).
 
 | `SAVER`                                                   | `-wide`                                                                                | What                                                                            |
 | --------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
