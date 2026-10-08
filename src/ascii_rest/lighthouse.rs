@@ -5,10 +5,10 @@
 //! `lighthouse-wide` is the same night at the panel's size: the tower, its
 //! rocks and the swell scaled to the panel's height, the sea and the sky run
 //! to both edges, and the beam reaches far enough to sweep the whole width.
-//! Its beam turns all the way round: in front of the tower on the half that
-//! faces us, flaring over the lantern when square to us, behind it on the
-//! other (`LIGHTHOUSE_BEAM_FRONT`, on by default here; upstream's original
-//! only ever passes behind).
+//! The beam, in both, turns all the way round: in front of the tower on the
+//! half that faces us, flaring over the lantern when square to us, behind it
+//! on the other (`LIGHTHOUSE_BEAM_FRONT`, on by default; upstream only ever
+//! passes behind).
 
 use std::f64::consts::PI;
 use std::ops::Range;
@@ -652,9 +652,11 @@ impl Piece for Lighthouse {
     const CELL: usize = 2;
     const PALETTE: &'static [u32] = &[hex("#ffd27a")];
     const GROUND: u32 = 0;
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("LIGHTHOUSE_BEAM_FRONT", "0")];
 
     fn new() -> Self {
-        let round = crate::env_num(&["LIGHTHOUSE_BEAM_FRONT"], 0, 0, 1) == 1;
+        let round = crate::env_num(&["LIGHTHOUSE_BEAM_FRONT"], 1, 0, 1) == 1;
         Self(Scene::new(Layout { round, ..ORIGINAL }))
     }
 
