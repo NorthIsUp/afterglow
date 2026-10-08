@@ -5,6 +5,10 @@
 //! `lighthouse-wide` is the same night at the panel's size: the tower, its
 //! rocks and the swell scaled to the panel's height, the sea and the sky run
 //! to both edges, and the beam reaches far enough to sweep the whole width.
+//! Its beam turns all the way round: in front of the tower on the half that
+//! faces us, flaring over the lantern when square to us, behind it on the
+//! other (`LIGHTHOUSE_BEAM_FRONT`, on by default here; upstream's original
+//! only ever passes behind).
 
 use std::f64::consts::PI;
 
@@ -69,7 +73,9 @@ fn moon(u: f64, v: f64, nz: f64) -> f64 {
 
 /// The beam in the haze through a cell: a cone seen side on, so the more it
 /// turns toward or away from us the shorter, wider and brighter it looks.
-fn beam_at(dx: f64, dy: f64, c: f64, s: f64, reach: f64) -> f64 {
+/// `round` gives the two halves of the turn their own depth: brighter
+/// swinging toward us, narrower and dimmer going away behind.
+fn beam_at(dx: f64, dy: f64, c: f64, s: f64, reach: f64, round: bool) -> f64 {
     let fore = c.abs().max(0.1);
     let ax = sign_or_one(c);
     let ay = (0.02 / fore).min(0.35);
@@ -79,11 +85,17 @@ fn beam_at(dx: f64, dy: f64, c: f64, s: f64, reach: f64) -> f64 {
         return 0.0;
     }
     let across = (dx * ay - dy * ax).abs() / m;
-    let half = 0.5 + a * (0.11 / fore);
+    let (wide, gain) = match (round, s < 0.0) {
+        (false, true) => (1.0, 0.75),
+        (false, false) => (1.0, 1.0),
+        (true, true) => (1.0 + 0.4 * s, 0.55 + 0.45 * c.abs()),
+        (true, false) => (1.0, 1.0 + 0.25 * s),
+    };
+    let half = 0.5 + a * (0.11 / fore) * wide;
     (-(across / half).powf(4.0)).exp()
         * (-a / (reach * fore)).exp()
         * (1.0 / fore.powf(0.3)).min(1.6)
-        * if s < 0.0 { 0.75 } else { 1.0 }
+        * gain
 }
 
 /// Where the picture sits: upstream's, or the same scaled to a grid.
@@ -98,6 +110,10 @@ struct Layout {
     stars: i64,
     /// Colour by part (`WIDE_PALETTE`) rather than upstream's one ink.
     colour: bool,
+    /// The beam crosses in front of the tower on the half of its turn that
+    /// faces us, and flares over the lantern when square to us. Upstream's
+    /// beam always passes behind.
+    round: bool,
 }
 
 const ORIGINAL: Layout = Layout {
@@ -108,6 +124,7 @@ const ORIGINAL: Layout = Layout {
     reach: REACH,
     stars: 24,
     colour: false,
+    round: false,
 };
 
 impl Layout {
@@ -124,6 +141,7 @@ impl Layout {
             reach: REACH * (half / (COLS / 4) as f64).max(1.0),
             stars: (24 * cols / COLS) as i64,
             colour: true,
+            round: true,
         }
     }
 
@@ -179,6 +197,8 @@ struct Scene {
     /// Where each breaker strikes: x, y, side, phase.
     surf: [[f64; 4]; 6],
     out: Vec<u8>,
+    /// The beam where it crosses in front of the tower this frame, 0 elsewhere.
+    front: Vec<f32>,
     light: Vec<f32>,
     cells: [Cell; 128],
     /// The rows upstream's lantern rows land on, and the lamp's.
@@ -317,6 +337,7 @@ impl Scene {
             stars,
             surf,
             out: vec![b' '; n],
+            front: vec![0.0; n],
             tone: vec![0; n],
             still_tone,
             light: vec![0.0; cols],
@@ -335,8 +356,20 @@ impl Scene {
         let face = s.max(0.0).powf(10.0); // the lens turned square to us
         let (out, still, rock_at) = (&mut self.out, &self.still, &self.rock_at);
         let tone = &mut self.tone;
+        let round = self.lay.round;
+        let ahead = round && s > 0.0;
+        // Square to us, the cone is seen end on: a round bloom on the lamp
+        // rather than a shaft to one side.
+        let (bloom, end_on) = if round {
+            (1.2 + 5.2 * face, 1.0 - 0.7 * face)
+        } else {
+            (1.2 + 2.2 * face, 1.0)
+        };
         out.fill(b' ');
         tone.fill(0);
+        if round {
+            self.front.fill(0.0);
+        }
         self.light.fill(0.0);
         let mut hz = rows;
         for r in 0..rows {
@@ -348,14 +381,16 @@ impl Scene {
                 let k = r * cols + cc;
                 let dx = (cc as f64 - tc as f64) / 2.0 / sc;
                 let dy = (r as f64 + 0.5) / sc - (LAMP as f64 + 0.5);
-                let glare =
-                    (-(dx.hypot(dy) / (1.2 + 2.2 * face)).powf(2.0)).exp() * (0.5 + 1.2 * face);
+                let glare = (-(dx.hypot(dy) / bloom).powf(2.0)).exp() * (0.5 + 1.2 * face);
                 if ro < HORIZON {
-                    let b = beam_at(dx, dy, c, s, self.lay.reach) + glare;
+                    let b = beam_at(dx, dy, c, s, self.lay.reach, round) * end_on + glare;
                     if r == self.lamp {
                         self.light[cc] = b as f32;
                     }
                     if still[k] >= 0.0 {
+                        if ahead {
+                            self.front[k] = b as f32;
+                        }
                         continue;
                     }
                     let i = (b * 6.0 + 0.35 * hash2(cc as i64, r as i64))
@@ -441,6 +476,18 @@ impl Scene {
                 tone[k] = if edge || bar { IRON } else { LIGHT };
             }
         }
+        // Swinging toward us, the beam crosses the lantern and the tower top.
+        if ahead {
+            for (k, &b) in self.front.iter().enumerate() {
+                let i = (f64::from(b) * 6.0 + 0.35 * hash2((k % cols) as i64, (k / cols) as i64))
+                    .floor()
+                    .min(7.0);
+                if i >= 3.0 {
+                    out[k] = BEAM[i as usize];
+                    tone[k] = if i >= 6.0 { LIGHT } else { BEAM_INK };
+                }
+            }
+        }
         // The lamp, and the rays when it faces us.
         let l = self.lamp * cols + tc;
         out[l] = if face > 0.3 {
@@ -458,6 +505,31 @@ impl Scene {
             out[l + 1] = b'=';
             for k in [l - cols, l + cols, l - 1, l + 1] {
                 tone[k] = LIGHT;
+            }
+            // Square to us, the lens flares: a star of rays over all of it.
+            if round {
+                let len = (face * 5.0 * sc).round() as i64;
+                let (lr, lc) = (self.lamp as i64, tc as i64);
+                for (dr, dc, ch) in [
+                    (-1, 0, b'|'),
+                    (1, 0, b'|'),
+                    (0, -2, b'='),
+                    (0, 2, b'='),
+                    (-1, -2, b'\\'),
+                    (1, 2, b'\\'),
+                    (-1, 2, b'/'),
+                    (1, -2, b'/'),
+                ] {
+                    for j in 1..=len {
+                        let (rr, cc) = (lr + dr * j, lc + dc * j);
+                        if rr < 0 || rr >= rows as i64 || cc < 0 || cc >= cols as i64 {
+                            break;
+                        }
+                        let k = rr as usize * cols + cc as usize;
+                        out[k] = if j * 3 > len * 2 && ch != b'=' { b'.' } else { ch };
+                        tone[k] = LIGHT;
+                    }
+                }
             }
         }
         // Surf: a breaker bursts on a boulder, its spray thrown up in a fan
@@ -563,7 +635,8 @@ impl Piece for Lighthouse {
     const GROUND: u32 = 0;
 
     fn new() -> Self {
-        Self(Scene::new(ORIGINAL))
+        let round = crate::env_num(&["LIGHTHOUSE_BEAM_FRONT"], 0, 0, 1) == 1;
+        Self(Scene::new(Layout { round, ..ORIGINAL }))
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
@@ -581,7 +654,11 @@ impl Canvas for LighthouseWide {
     const GROUND: u32 = hex("#050b1a");
 
     fn new(cols: usize, rows: usize) -> Self {
-        Self(Scene::new(Layout::fit(cols, rows)))
+        let round = crate::env_num(&["LIGHTHOUSE_BEAM_FRONT"], 1, 0, 1) == 1;
+        Self(Scene::new(Layout {
+            round,
+            ..Layout::fit(cols, rows)
+        }))
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
