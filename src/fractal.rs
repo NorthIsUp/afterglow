@@ -177,7 +177,7 @@ enum Kind {
     Heart,
     /// Julia, with a c that walks the main cardioid. See `julia_view`.
     Julia,
-    /// z^2 + c + p*z_prev — the second-order term drags a curl behind every
+    /// `z^2 + c + p*z_prev` — the second-order term drags a curl behind every
     /// filament, which no first-order family does.
     Phoenix,
     /// Rational maps with a convergent attractor as well as an escape, so the
@@ -454,6 +454,7 @@ fn capped_zoom(zoom_sec: f64, cycle: f64) -> f64 {
 /// straight-line code with the leading multiply by 1 folded away: z^8 costs
 /// three squarings, not seven multiplies. That difference is the whole reason
 /// the high-order families are affordable in this loop.
+#[allow(clippy::inline_always)]
 #[inline(always)]
 fn cpow<const P: u32>(zx: f64, zy: f64) -> (f64, f64) {
     let (mut rx, mut ry) = (1.0f64, 0.0f64);
@@ -998,7 +999,7 @@ impl Fractal {
             Kind::Heart => scan(shade, cols, rows, view, |x, y| heart(x, y, iter)),
             Kind::Julia => {
                 let (jx, jy) = self.jc;
-                scan(shade, cols, rows, view, |x, y| julia(x, y, jx, jy, iter))
+                scan(shade, cols, rows, view, |x, y| julia(x, y, jx, jy, iter));
             }
             Kind::Phoenix => scan(shade, cols, rows, view, |x, y| phoenix(x, y, iter)),
             Kind::Magnet1 => scan(shade, cols, rows, view, |x, y| magnet1(x, y, mag)),
@@ -1411,7 +1412,7 @@ mod descent {
     /// drawn. A BEAM rather than a greedy walk — greedy walks into a cul-de-sac
     /// on families whose good region is not the showiest one early on.
     #[test]
-    #[ignore]
+    #[ignore = "a search tool: run by hand when adding a family"]
     fn find_boundary_targets() {
         // The SHIPPED geometry. At a coarser grid a smooth wash looks like
         // structure, and the descent hands back a diagonal gradient.
@@ -1460,7 +1461,7 @@ mod descent {
     /// iteration schedule `advance` would have given it, and reports the last
     /// octave whose frame is still coherent.
     #[test]
-    #[ignore]
+    #[ignore = "a measurement: run by hand when tuning zoom depth"]
     fn safe_octaves_per_family() {
         let p = Panel::new(1920, 1080, 1920);
         for (fi, fam) in FAMILIES.iter().enumerate() {
@@ -1516,7 +1517,7 @@ mod bench {
     /// and cover a WHOLE rotation, because the per-frame cost swings 5x between
     /// the start and the end of one zoom.
     #[test]
-    #[ignore]
+    #[ignore = "a benchmark: run by hand"]
     fn interleaved_against_matrix() {
         let p = Panel::new(1920, 1080, 1920);
         let mut buf = vec![0u32; p.buf_len()];
@@ -1534,8 +1535,8 @@ mod bench {
         }
         let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
         let (fm, mm) = (mean(&fs), mean(&ms));
-        let lo = fs.iter().cloned().fold(f64::MAX, f64::min);
-        let hi = fs.iter().cloned().fold(0.0, f64::max);
+        let lo = fs.iter().copied().fold(f64::MAX, f64::min);
+        let hi = fs.iter().copied().fold(0.0, f64::max);
         println!(
             "ROTATION families={} frames={}",
             FAMILIES.len(),
@@ -1550,7 +1551,7 @@ mod bench {
     /// Per family, one whole cycle each, interleaved against matrix so the
     /// numbers are comparable to each other and to the rotation mean.
     #[test]
-    #[ignore]
+    #[ignore = "a benchmark: run by hand"]
     fn per_family_cost() {
         let p = Panel::new(1920, 1080, 1920);
         let mut buf = vec![0u32; p.buf_len()];

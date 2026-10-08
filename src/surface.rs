@@ -59,7 +59,7 @@ impl Panel {
 }
 
 /// Rectangles a frame touched, half-open in BOTH axes. Fixed capacity: each run
-/// becomes one ClipRect and simpledrm copies each independently, so an unbounded
+/// becomes one `ClipRect` and simpledrm copies each independently, so an unbounded
 /// list trades shadow copy for ioctl payload.
 pub const MAX_RUNS: usize = 16;
 
@@ -82,14 +82,14 @@ impl Run {
     /// Test-only: what the panel does with a rect is copy it, not query it.
     #[cfg(test)]
     #[inline]
-    pub fn covers(&self, x: u16, y: u16) -> bool {
+    pub fn covers(self, x: u16, y: u16) -> bool {
         x >= self.x0 && x < self.x1 && y >= self.y0 && y < self.y1
     }
 
     /// Overlapping or merely touching, in both axes — half-open, so `0..16` and
     /// `16..32` touch and must collapse rather than open a second rect.
     #[inline]
-    fn touches(&self, o: &Run) -> bool {
+    fn touches(self, o: Run) -> bool {
         o.x0 <= self.x1 && o.x1 >= self.x0 && o.y0 <= self.y1 && o.y1 >= self.y0
     }
 
@@ -102,7 +102,7 @@ impl Run {
     }
 
     #[inline]
-    fn area(&self) -> u32 {
+    fn area(self) -> u32 {
         u32::from(self.x1 - self.x0) * u32::from(self.y1 - self.y0)
     }
 
@@ -110,9 +110,9 @@ impl Run {
     /// because overlapping runs make the union smaller than the parts, and a
     /// pair that overlaps is the pair you most want merged.
     #[inline]
-    fn union_cost(mut self, o: &Run) -> u32 {
+    fn union_cost(mut self, o: Run) -> u32 {
         let (a, b) = (self.area(), o.area());
-        self.absorb(*o);
+        self.absorb(o);
         self.area().saturating_sub(a + b)
     }
 }
@@ -182,8 +182,8 @@ impl Damage {
             // is worth all sixteen compares: a band that absorbs the mark is a
             // `spill` not paid, and on a dense frame nearly every mark lands in
             // one. See `spill` for what it would otherwise cost.
-            for band in self.runs[..self.n].iter_mut() {
-                if band.touches(&r) {
+            for band in &mut self.runs[..self.n] {
+                if band.touches(r) {
                     band.absorb(r);
                     return;
                 }
@@ -191,7 +191,7 @@ impl Damage {
         }
         if self.n > 0 {
             let last = &mut self.runs[self.n - 1];
-            if last.touches(&r) {
+            if last.touches(r) {
                 last.absorb(r);
                 return;
             }
@@ -218,7 +218,7 @@ impl Damage {
         let (mut bi, mut bj, mut best) = (0, 1, u32::MAX);
         for i in 0..self.n - 1 {
             for j in i + 1..self.n {
-                let cost = self.runs[i].union_cost(&self.runs[j]);
+                let cost = self.runs[i].union_cost(self.runs[j]);
                 if cost < best {
                     (best, bi, bj) = (cost, i, j);
                 }
@@ -261,7 +261,7 @@ impl Damage {
     }
 
     /// Fills `out`, returns the count. Caller-owned array: the frame loop never
-    /// allocates. ClipRect is (x1, y1, x2, y2) — width before height.
+    /// allocates. `ClipRect` is (x1, y1, x2, y2) — width before height.
     pub fn rects(&self, out: &mut [ClipRect; MAX_RUNS]) -> usize {
         for (rect, r) in out.iter_mut().zip(self.runs[..self.n].iter()) {
             *rect = ClipRect::new(r.x0, r.y0, r.x1, r.y1);
@@ -273,7 +273,7 @@ impl Damage {
     /// predicate. Test-only: `dump::row_reported` is the same question asked
     /// per scanline, which is the shape every caller outside a unit test wants.
     #[cfg(test)]
-    pub fn covers(&self, x: usize, y: usize) -> bool {
+    pub fn covers(self, x: usize, y: usize) -> bool {
         let (x, y) = (x as u16, y as u16);
         self.runs[..self.n].iter().any(|r| r.covers(x, y))
     }
@@ -434,9 +434,9 @@ mod tests {
 
     #[test]
     fn empty_marks_are_ignored() {
-        assert!(marked(&[band(16, 16), band(32, 8)]).is_empty());
+        assert_eq!(marked(&[band(16, 16), band(32, 8)]), [] as [Run; 0]);
         // And in the other axis, which a zero-width clamp produces.
-        assert!(marked(&[(8, 0, 8, 16), (8, 0, 4, 16)]).is_empty());
+        assert_eq!(marked(&[(8, 0, 8, 16), (8, 0, 4, 16)]), [] as [Run; 0]);
     }
 
     /// The finding this type exists for: a narrow object must not report a
@@ -453,7 +453,7 @@ mod tests {
     fn a_horizontal_gap_opens_a_second_rect() {
         let runs = marked(&[(0, 0, 64, 32), (1600, 0, 1664, 32)]);
         assert_eq!(runs, [Run::new(0, 0, 64, 32), Run::new(1600, 0, 1664, 32)]);
-        assert_eq!(runs.iter().map(Run::area).sum::<u32>(), 2 * 64 * 32);
+        assert_eq!(runs.iter().map(|r| r.area()).sum::<u32>(), 2 * 64 * 32);
     }
 
     #[test]

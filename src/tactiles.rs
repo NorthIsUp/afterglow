@@ -219,7 +219,7 @@ impl Tactiles {
         // A restart must not always open on the same frame of the same pattern.
         let mut rng = crate::saver_seed(&["TACTILES_SEED"], 0x7AC7_11E5);
         let mut phase = [0.0f32; 3];
-        for p in phase.iter_mut() {
+        for p in &mut phase {
             *p = (next_rand(&mut rng) % 6283) as f32 / 1000.0;
         }
 
@@ -451,7 +451,7 @@ mod tests {
         let mut seen = [false; PAL_N];
         for _ in 0..2000 {
             c.advance();
-            for &t in c.state.iter() {
+            for &t in &c.state {
                 assert!((t & 0xFF) < PAL_N as u16, "colour {} off the end", t & 0xFF);
                 assert!(((t >> 8) as usize) < VARIANTS, "variant off the end");
                 seen[(t & 0xFF) as usize] = true;
@@ -566,8 +566,7 @@ mod tests {
         // table" is a claim about sixteen lookups and not about one.
         assert!(
             variants.iter().filter(|&&n| n > 0).count() > VARIANTS / 2,
-            "only {:?} variants on screen",
-            variants
+            "only {variants:?} variants on screen"
         );
     }
 

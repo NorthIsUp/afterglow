@@ -224,7 +224,7 @@ impl Lissajous {
     }
 
     fn step(&mut self) {
-        for h in self.heat.iter_mut() {
+        for h in &mut self.heat {
             *h = h.saturating_sub(self.decay);
         }
 
@@ -255,7 +255,7 @@ impl Lissajous {
         // exponent grows, and this runs for months.
         self.morph %= std::f32::consts::TAU;
         let spun = self.d_offset * self.samples as f32;
-        for p in self.pens.iter_mut() {
+        for p in &mut self.pens {
             p.px %= std::f32::consts::TAU;
             p.py %= std::f32::consts::TAU;
             p.offset = (p.offset + spun) % std::f32::consts::TAU;
@@ -405,9 +405,7 @@ mod tests {
         let mut c = Lissajous::new(&p, FPS);
         // Every cell at full: the pen re-lights a few hundred a frame, so the
         // MINIMUM is a cell it has not touched since, decaying untouched.
-        for h in c.heat.iter_mut() {
-            *h = HEAT_MAX;
-        }
+        c.heat.fill(HEAT_MAX);
         let mut frames = 0usize;
         while c.heat.iter().copied().min().unwrap() > 0 {
             c.step();

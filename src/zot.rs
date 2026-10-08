@@ -643,14 +643,14 @@ mod tests {
     /// satisfies the rows assertion on its own, so count lit pixels too.
     #[test]
     fn frame_zero_paints_the_whole_panel() {
-        for &wh in PANELS.iter() {
+        for &wh in &PANELS {
             let p = panel(wh);
             let mut z = seeded(&p, 15, 0xB0_17_00_01);
             let mut buf = vec![0u32; p.buf_len()];
             let d = saver::frame(&mut z, &mut buf, &p);
-            assert_eq!(d.rows(), p.h, "{:?}: frame 0 must paint all of it", wh);
+            assert_eq!(d.rows(), p.h, "{wh:?}: frame 0 must paint all of it");
             let lit = buf.iter().filter(|&&px| px != 0).count();
-            assert!(lit > 10_000, "{:?}: frame 0 painted nothing ({lit})", wh);
+            assert!(lit > 10_000, "{wh:?}: frame 0 painted nothing ({lit})");
         }
     }
 
@@ -659,7 +659,7 @@ mod tests {
     /// cover several whole bolts and the gaps between them.
     #[test]
     fn damage_covers_every_changed_scanline() {
-        for &wh in PANELS.iter() {
+        for &wh in &PANELS {
             let p = panel(wh);
             let mut z = seeded(&p, 30, 0xB0_17_00_02);
             let mut buf = vec![0u32; p.buf_len()];
@@ -783,14 +783,14 @@ mod tests {
     /// edge length and a 1280x400 strip gets bolts that cover a third of it.
     #[test]
     fn a_bolt_crosses_the_panel_at_either_aspect() {
-        for &wh in PANELS.iter() {
+        for &wh in &PANELS {
             let p = panel(wh);
             let mut z = seeded(&p, 30, 0xB0_17_00_04);
             let (mut spans, mut strikes) = (0usize, 0usize);
             for _ in 0..200 {
                 z.strike();
                 let (n, w, h) = extent(&z);
-                assert!(n > 20, "{:?}: a bolt lit {n} cells", wh);
+                assert!(n > 20, "{wh:?}: a bolt lit {n} cells");
                 // Reaching over half of the longer axis is "crossed it": an
                 // air-terminated bolt stops around halfway by construction.
                 if w * 2 > z.cols || h * 2 > z.rows {
@@ -800,8 +800,7 @@ mod tests {
             }
             assert!(
                 spans * 10 >= strikes * 9,
-                "{:?}: only {spans}/{strikes} bolts crossed the panel",
-                wh
+                "{wh:?}: only {spans}/{strikes} bolts crossed the panel"
             );
         }
     }
@@ -1119,7 +1118,7 @@ mod tests {
     /// index panic inside `Grid::blit`, on the panel, weeks in.
     #[test]
     fn every_reachable_colour_index_is_in_the_palette() {
-        for &(_, base, levels) in RAMPS.iter() {
+        for &(_, base, levels) in &RAMPS {
             assert_eq!(level(255, levels), levels);
             assert_eq!(level(0, levels), 0);
             assert!(base + levels <= PAL_LEN);

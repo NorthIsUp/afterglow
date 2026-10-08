@@ -308,7 +308,7 @@ impl Moire {
                 for k in 0..ns {
                     p[k] = p[k].wrapping_add((j as u32).wrapping_mul(sy[k]));
                 }
-                for v in acc[j * dw..j * dw + dw].iter_mut() {
+                for v in &mut acc[j * dw..j * dw + dw] {
                     let mut c = 0u8;
                     for k in 0..ns {
                         c += u8::from(p[k] < duty_u32);
@@ -331,7 +331,7 @@ impl Moire {
                     let dy = (j as f32 + 0.5) * sh - cy;
                     let dy2 = dy * dy;
                     let mut dx = 0.5 * sw - cx;
-                    for v in acc[j * dw..j * dw + dw].iter_mut() {
+                    for v in &mut acc[j * dw..j * dw + dw] {
                         let p = (dx * dx + dy2).sqrt() * f.inv_d + off;
                         *v += u8::from(p - p.floor() < duty);
                         dx += sw;
@@ -342,7 +342,7 @@ impl Moire {
                 for j in 0..dh {
                     let dy = (j as f32 + 0.5) * sh - cy;
                     let mut dx = 0.5 * sw - cx;
-                    for v in acc[j * dw..j * dw + dw].iter_mut() {
+                    for v in &mut acc[j * dw..j * dw + dw] {
                         let p = dy.atan2(dx) * k + off;
                         *v += u8::from(p - p.floor() < duty);
                         dx += sw;
@@ -526,7 +526,7 @@ mod tests {
     }
 
     fn spread(b: &[f32]) -> f32 {
-        b.iter().cloned().fold(0.0f32, f32::max) - b.iter().cloned().fold(f32::MAX, f32::min)
+        b.iter().copied().fold(0.0f32, f32::max) - b.iter().copied().fold(f32::MAX, f32::min)
     }
 
     /// T4. The thing this saver IS: gratings that BEAT. Interference means
@@ -560,7 +560,7 @@ mod tests {
             flat.families[0].off0,
             flat.families[0].off_inc,
         );
-        for f in flat.families.iter_mut() {
+        for f in &mut flat.families {
             (f.kind, f.inv_d, f.ang0, f.spin_inc, f.off0, f.off_inc) = g;
         }
         for _ in 0..30 {

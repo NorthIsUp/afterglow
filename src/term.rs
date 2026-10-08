@@ -249,14 +249,14 @@ static STDERR: AtomicI32 = AtomicI32::new(-1);
 fn enter() -> bool {
     let keys = unsafe {
         let mut t: libc::termios = std::mem::zeroed();
-        libc::tcgetattr(libc::STDIN_FILENO, &mut t) == 0 && {
+        libc::tcgetattr(libc::STDIN_FILENO, &raw mut t) == 0 && {
             let _ = TERMIOS.set(t);
             // ISIG stays on: Ctrl-C is still SIGINT, which main already turns
             // into a clean stop.
             t.c_lflag &= !(libc::ECHO | libc::ICANON);
             t.c_cc[libc::VMIN] = 0;
             t.c_cc[libc::VTIME] = 0;
-            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &t) == 0
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw const t) == 0
         }
     };
     // Anything written to stderr while the alternate screen is up lands on top
@@ -335,7 +335,7 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
     let keys = enter();
     let _restore = Restore;
 
-    while !SIGNALLED.load(Ordering::Relaxed) && !(keys && quit_key()) {
+    while !(SIGNALLED.load(Ordering::Relaxed) || (keys && quit_key())) {
         let t0 = Instant::now();
         // Polled rather than SIGWINCH: one ioctl a frame, and no second signal
         // handler racing the first.
@@ -454,7 +454,7 @@ mod tests {
         let first = s.emit().len();
         assert!(first > 0);
         s.compose_cells(&cells, 3, 2, true, 0, &PAL);
-        assert!(s.emit().is_empty());
+        assert_eq!(s.emit(), []);
 
         let mut moved = cells;
         moved[4] = Cell::new(ascii(b'B'), 1);

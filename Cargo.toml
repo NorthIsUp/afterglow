@@ -30,3 +30,33 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Pedantic on, minus the lints this codebase breaks on purpose. CI, hk and
+# `mise run clippy` all read this table, so they cannot disagree.
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Pixel and sample arithmetic: every cast is into a range the code already
+# clamped, and `T::from` in dense maths reads worse than `as` without being safer.
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_lossless = "allow"
+# x, y, z, r, g, b, dx, dy: the names the maths uses.
+many_single_char_names = "allow"
+similar_names = "allow"
+# A saver's constructor reads every one of its knobs; splitting it scatters them.
+too_many_lines = "allow"
+# The ascii.rest ports reproduce JavaScript's arithmetic for golden-exact output;
+# `midpoint` rounds signed integers differently and exact float compares are the
+# point of the goldens.
+manual_midpoint = "allow"
+float_cmp = "allow"
+# A const declared beside the one loop that uses it is the point of declaring it.
+items_after_statements = "allow"
+# 0xRRGGBB colours: `_` grouping would split a channel.
+unreadable_literal = "allow"
+# `if p > 0.7 { 0 } else { 1 }` reads as a palette table and `x & 7 == 0` as a
+# one-in-eight roll; `u16::from(cond)` and `trailing_zeros() >= 3` hide both.
+bool_to_int_with_if = "allow"
+verbose_bit_mask = "allow"

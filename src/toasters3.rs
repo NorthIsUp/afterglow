@@ -38,7 +38,8 @@
 //!
 //! The SHADOW-TO-HARDWARE copy is not sparse, and the taller sprite is the part
 //! that costs: damage is whole scanlines, and a 6-cell object spans 192 px
-//! against the classic's 128. Measured medians are in the README table.
+//! against the classic's 128. Measured medians are in the
+//! `docs/savers/toasters.md` table.
 
 use crate::font;
 use crate::grid::{Cell, Grid};

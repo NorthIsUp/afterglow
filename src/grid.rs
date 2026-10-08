@@ -121,7 +121,7 @@ pub struct Grid {
     /// 1080p — with two array reads.
     rowmap: Vec<u8>,
     mask: Vec<u8>,
-    /// The buffer arrives zeroed and set_crtc has already scanned that black
+    /// The buffer arrives zeroed and `set_crtc` has already scanned that black
     /// frame out, so frame 0 must paint every cell. An explicit flag rather
     /// than a sentinel in `prev`, so a saver may use any glyph or colour index.
     first: bool,

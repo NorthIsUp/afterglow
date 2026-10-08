@@ -87,7 +87,7 @@
 //! # Per-frame cost
 //!
 //! A full repaint every frame, so this is in `moire`'s class rather than
-//! `rain`'s — see the README for the measured ratio. The Pi budget is 500m and
+//! `rain`'s — see `docs/savers/hardrain.md` for the measured ratio. The Pi budget is 500m and
 //! a storm is allowed to cost more than a drizzle.
 
 use crate::font;

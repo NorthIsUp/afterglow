@@ -696,7 +696,7 @@ impl Marble {
         // C — spread, in tiles and in height. A course that neither travels nor
         // descends is one screen that never scrolls.
         let (mut x0, mut y0, mut x1, mut y1) = (TX, TY, 0usize, 0usize);
-        for &(x, y) in self.route.iter() {
+        for &(x, y) in &self.route {
             x0 = x0.min(x as usize);
             y0 = y0.min(y as usize);
             x1 = x1.max(x as usize);
@@ -896,7 +896,7 @@ impl Marble {
         self.grace = GRACE;
         // The hunter goes back to its post: respawning the marble under a
         // hunter that stayed put is the same death on a loop.
-        for h in self.hz.iter_mut() {
+        for h in &mut self.hz {
             if h.kind == H_HUNTER {
                 h.x = h.tx as f32 + 0.5;
                 h.y = h.ty as f32 + 0.5;
@@ -990,16 +990,15 @@ impl Marble {
             } else {
                 b.y = ny;
             }
-            match self.height(b.x, b.y) {
-                Some(h) => b.z = h,
-                None => {
-                    // Off the edge. Keep whatever velocity carried it there —
-                    // the arc away from the deck is most of the joke.
-                    b.falling = 1;
-                    b.vz = 0.0;
-                    event = EV_FELL_OFF;
-                    break;
-                }
+            if let Some(h) = self.height(b.x, b.y) {
+                b.z = h;
+            } else {
+                // Off the edge. Keep whatever velocity carried it there —
+                // the arc away from the deck is most of the joke.
+                b.falling = 1;
+                b.vz = 0.0;
+                event = EV_FELL_OFF;
+                break;
             }
         }
         self.ball = b;
@@ -1064,7 +1063,7 @@ impl Marble {
 
     fn step_hazards(&mut self) {
         let (bx, by) = (self.ball.x, self.ball.y);
-        for h in self.hz.iter_mut() {
+        for h in &mut self.hz {
             match h.kind {
                 H_HAMMER => h.phase += h.rate,
                 H_HUNTER => {
@@ -1092,7 +1091,7 @@ impl Marble {
     fn hazard_hit(&mut self, bx: f32, by: f32, _bz: f32) -> bool {
         let mut shove = (0.0f32, 0.0f32);
         let mut dead = false;
-        for h in self.hz.iter() {
+        for h in &self.hz {
             match h.kind {
                 H_HAMMER => {
                     // Down for the bottom third of its cycle. A marble under it

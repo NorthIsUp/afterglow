@@ -725,8 +725,8 @@ mod tests {
                 }
                 // Cyclic ordering: consecutive pairs are all EDGES. Sorted the
                 // wrong way round a pentagon these come out as two lengths.
-                let lo = side.iter().cloned().fold(f32::MAX, f32::min);
-                let hi = side.iter().cloned().fold(0.0f32, f32::max);
+                let lo = side.iter().copied().fold(f32::MAX, f32::min);
+                let hi = side.iter().copied().fold(0.0f32, f32::max);
                 assert!(
                     hi - lo < 1e-3,
                     "solid {which}: face {face:?} sides {lo}..{hi}: not a cycle"
@@ -817,8 +817,8 @@ mod tests {
                 pts.iter().map(|p| norm(*p)).sum::<f32>() / pts.len() as f32
             })
             .collect();
-        let lo = r.iter().cloned().fold(f32::MAX, f32::min);
-        let hi = r.iter().cloned().fold(0.0f32, f32::max);
+        let lo = r.iter().copied().fold(f32::MAX, f32::min);
+        let hi = r.iter().copied().fold(0.0f32, f32::max);
         assert!(
             hi < lo * 1.16,
             "apparent sizes span {lo}..{hi}: the cycle will read as the figure \

@@ -41,7 +41,7 @@ const EC: [f64; 2] = [201.0, 32.0];
 const ER: f64 = 22.0;
 /// Which face of the globe is turned to us at the start.
 const LON0: f64 = 3.5;
-/// It climbs RISE rows and settles back over RISE_T seconds.
+/// It climbs RISE rows and settles back over `RISE_T` seconds.
 const RISE: f64 = 5.0;
 const RISE_T: f64 = 150.0;
 /// The bright stars, which twinkle: [col, row, brightness, period in seconds].

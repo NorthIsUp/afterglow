@@ -11,6 +11,17 @@ local linters = new Mapping<String, Step> {
         glob  = "*.rs"
         check = "cargo clippy --release --locked --all-targets -- -D warnings"
     }
+    ["prettier"] {
+        glob  = "*.md"
+        check = "prettier --check {{files}}"
+        fix   = "prettier --write {{files}}"
+    }
+    // Relative links and #anchors only (--offline): the docs are split across
+    // README.md and docs/, and a moved heading breaks a link silently.
+    ["lychee"] {
+        glob  = "*.md"
+        check = "lychee --offline --include-fragments --no-progress {{files}}"
+    }
     ["pkl"] {
         glob  = "*.pkl"
         check = "pkl eval {{files}} >/dev/null"

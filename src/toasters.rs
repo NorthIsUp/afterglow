@@ -42,7 +42,7 @@
 //!
 //! The SHADOW-TO-HARDWARE copy is not sparse, and saying otherwise would be a
 //! lie a future reader acts on: damage is whole scanlines merged into at most
-//! MAX_RUNS runs, so a dozen sprites at a dozen different heights smear across
+//! `MAX_RUNS` runs, so a dozen sprites at a dozen different heights smear across
 //! ~60% of the panel per frame — median 640 of 1056 scanlines, measured over 12
 //! seeds x 600 frames, because a single seed measures one flock and not the
 //! renderer (the one-model flock this replaced measures 608 the same way). That

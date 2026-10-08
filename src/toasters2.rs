@@ -48,7 +48,7 @@
 //!
 //! The SHADOW-TO-HARDWARE copy is not sparse, and saying otherwise would be a
 //! lie a future reader acts on: damage is whole scanlines merged into at most
-//! MAX_RUNS runs, so a dozen sprites at a dozen heights smear across a good
+//! `MAX_RUNS` runs, so a dozen sprites at a dozen heights smear across a good
 //! part of the panel per frame. Still far under `ascii` and `matrix`, which
 //! repaint 100% of it every frame.
 
