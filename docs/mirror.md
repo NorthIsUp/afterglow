@@ -7,7 +7,7 @@ by the `tailscale-auth` sidecar — there is no login and there must never be on
 ## The page
 
 The saver list is on the left, the panel in the middle, and a bar along the
-bottom with the shown saver's settings, rotation (on/off, interval, pool) and the
+bottom with the shown saver's settings, rotation (on/off, interval) and the
 view controls (`actual ratio / size / calibrate`, below). The list is grouped —
 `scenes`, `ascii.rest`, `classics`, `flights`, `generative` — and the groups come
 from `/meta`, built from one table in `saver.rs`, so the page knows no saver by
@@ -17,6 +17,23 @@ view, including after a rotation. A scene and its full-width `-wide` twin are
 one row, with an `expanded` toggle in the bar that switches between them; picking
 another scene keeps it as it was. Under 720 px wide the list becomes a drawer
 behind the button above the canvas.
+
+Each row has a tick box for whether rotation may pick it, and each group heading
+one for the whole group (half-ticked when some are in). A scene's box covers its
+`-wide` twin as well, so rotation may show either; `expanded` only picks which
+one a click shows. Everything out with the timer on is a pause, and the bar says
+so in red. A saver out of rotation still shows when clicked.
+
+A click is one round trip. The row and the name change at once, the canvas
+keeps the last frame, and `POST /select` answers when the render loop has built
+the new saver — with its `/meta`, so the page opens `/stream` on that epoch
+directly. On a local binary that is 60-120 ms from click to the new saver's
+first frame, sakura and city included, in Chromium and WebKit. A second click
+aborts the first's request, so rapid clicking lands on the last one. A stream
+ending is routine — a click, a rotation, a settings rebuild — and so is the way
+browsers report a body cut mid-read (WebKit's "Load failed", Chrome's network
+error): the page reconnects at once and says nothing, and puts up a banner only
+after three sessions in a row, over more than three seconds, drew nothing.
 
 The list, the bar and the canvas each keep to their own box: the list and the bar
 scroll inside themselves and the page never does, so the canvas sits still while
@@ -57,10 +74,14 @@ survive nginx re-chunking them on the way through the gate. `GET /meta` is the
 geometry, palette and glyph table; `GET /` is the page. `SAVER_HTTP=off`
 removes all of it.
 
-`POST /rotate?mins=N` sets the rotation interval and `POST /pool?groups=a,b`
-the groups it picks from — see [Rotating on a timer](rotation.md). `/meta`
+`POST /select?saver=<name>` answers with the new saver's `/meta` once the render
+loop has built it, or after two seconds with only `{"saver":…}` (no monitor, so
+no render loop). `POST /rotate?mins=N` sets the rotation interval and
+`POST /rotation?saver=<name>&on=0|1` (or `group=<name>`) who it may pick — see
+[Rotating on a timer](rotation.md). `/meta`
 carries the list's `groups` (`[{"name","savers"}]`, a `-wide` twin left out),
-`wide` (scene → twin), and the live `rotate_secs` and `pool`. `GET /stat` is the live counters — `{"overruns":N,"viewers":N,"fps":N}`.
+`wide` (scene → twin), and the live `rotate_secs` and `excluded` (savers out of
+rotation). `GET /stat` is the live counters — `{"overruns":N,"viewers":N,"fps":N}`.
 `overruns` is frames that ran past the frame budget, which is what a raised
 `SAVER_FPS` against the pod's 500m CFS quota shows up as: the render loop is
 stopped mid-period and runs a burst, and the burst is visible stutter on the
@@ -88,7 +109,8 @@ the monitor, not the saver, and are never listed.
   what the saver would get if built now, a bad environment value already
   replaced by its default; `label` is the key without the saver's own prefix.
 - `POST /config?saver=<name>&key=K&value=V` — store an override and answer
-  `{"rebuilt":bool,"knobs":[…]}`. A value out of range, not a whole number, a
+  `{"rebuilt":bool,"knobs":[…],"meta":…}`, `meta` being the rebuilt saver's
+  `/meta` as `/select` gives it, or `null`. A value out of range, not a whole number, a
   string over 64 characters, or a key that saver does not read is a 400 that
   changes nothing.
 - `DELETE /config?saver=<name>&key=K`, or `POST` with an empty `value` — drop

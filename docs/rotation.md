@@ -43,15 +43,22 @@ allocates. Every saver gets the
 same length turn; there is no per-saver table of seconds, because the expensive
 ones hold the target fps on this panel and so there is nothing to compensate for.
 
-**The pool** narrows it to some of the mirror list's groups — `scenes`,
-`ascii.rest`, `classics`, `flights`, `generative` — ticked under `rotate` on the
-page or set with `POST /pool?groups=scenes,flights`. At least one group, every
-name real, or a 400 that changes nothing; `/meta` reports it live as `pool`. A
-row outside the pool is skipped when it comes out of the bag rather than taken
-out of it, so a pool change applies from the next turn and the bag still covers
-every pooled saver once per cycle. The pool is read only when a turn is up,
-never per frame. Like the interval it is in memory: a restart rotates through
-everything again.
+**Who is in rotation** is a tick box per saver in the mirror page's list (and
+per group, on its heading), or `POST /rotation?saver=<name>&on=0|1` /
+`POST /rotation?group=<name>&on=0|1` by hand; `/meta` reports the savers out as
+`excluded`. A scene goes in or out with its `-wide` twin, because the page shows
+the pair as one row. `SAVER_ROTATE_EXCLUDE` (comma-separated names, default none)
+is the startup set, so a deployment can pin it; like the interval, the page moves
+it live and a restart goes back to the env value. An unknown name there is
+logged and ignored.
+
+A saver out of rotation is skipped when it comes out of the bag rather than taken
+out of it, so a change applies from the next turn, the bag still covers every
+saver that is in once per cycle, and the refill stays the same allocation-free
+shuffle. Taking out the saver on screen does not switch away; it is just not
+picked again. Taking out every saver pauses rotation — the turn comes up and
+nothing moves, and the page says so — and a click still shows any saver. The set
+is a bit per saver, read only when a turn is up, never per frame.
 
 Clicking a saver on the mirror page **restarts the interval**, so a manual pick
 always gets a whole turn rather than the two seconds that happened to be left.

@@ -125,8 +125,8 @@ macro_rules! savers {
 }
 crate::ascii_rest::each_piece!(savers);
 
-/// The mirror page's list sections, in the order it shows them; also the
-/// units the rotation pool is chosen in. A saver's section is `group_at`.
+/// The mirror page's list sections, in the order it shows them. A saver's
+/// section is `group_at`.
 pub const GROUPS: &[&str] = &["scenes", "ascii.rest", "classics", "flights", "generative"];
 const SCENES: usize = 0;
 const ASCII_REST: usize = 1;
@@ -199,10 +199,19 @@ pub fn wide_of(name: &str) -> Option<&'static str> {
     index_of(&wide).map(name_at)
 }
 
+/// The other half of a scene's pair, either way round, for the rotation
+/// toggle: the page lists the pair as one row, so one toggle covers both.
+pub fn twin_of(name: &str) -> Option<&'static str> {
+    wide_of(name).or_else(|| name.strip_suffix("-wide").and_then(index_of).map(name_at))
+}
+
 /// How many savers there are, for `Rotate`'s bag. A const because the bag is a
 /// fixed-size array: adding a row to the table above resizes it, and no refill
 /// ever allocates.
-const NSAVERS: usize = SAVERS.len();
+pub const NSAVERS: usize = SAVERS.len();
+
+/// Words in the mirror's in-rotation bitset, a bit per row.
+pub const POOL_WORDS: usize = NSAVERS.div_ceil(64);
 
 /// The name at an index the render loop is holding. Panics on an index no
 /// `index_of` produced, which is unreachable: the only writer is `select`.
@@ -409,6 +418,7 @@ impl Driver {
         // Geometry, palette and glyph table are fixed until the saver changes,
         // so the mirror is told once and every frame after it is only cells.
         announce(mirror, d.saver.as_mut(), &d.panel);
+        mirror.applied(d.selected);
         d
     }
 
@@ -426,6 +436,9 @@ impl Driver {
         // The new grid geometry and palette differ, so this bumps the mirror's
         // epoch and every viewer reconnects onto the new /meta.
         announce(mirror, self.saver.as_mut(), &self.panel);
+        // After the announce, so a `/select` waiting on this finds the new
+        // saver's `/meta` already in place.
+        mirror.applied(self.selected);
     }
 
     /// Swap the saver if the mirror's selection moved, building it once
@@ -445,12 +458,13 @@ impl Driver {
         place: impl Fn(&str) -> (Panel, Box<dyn Saver>),
     ) -> bool {
         // Two relaxed loads per frame now — the rotation word and the
-        // selection — off the same cache line, for the reason below. The pool
-        // is read only when a turn is up.
+        // selection — off the same cache line, for the reason below. Who is
+        // in the rotation is read only when a turn is up.
         let cur = mirror::sel_index(self.selected);
-        if let Some(i) = self.rot.due(now, cur, mirror.rotate_ctl(), |i| {
-            mirror.pooled(group_at(i))
-        }) {
+        if let Some(i) = self
+            .rot
+            .due(now, cur, mirror.rotate_ctl(), |i| mirror.in_rotation(i))
+        {
             mirror.select_at(i);
         }
         // One relaxed load per frame, same as the mirror's viewer count, and
@@ -883,5 +897,68 @@ mod tests {
         assert!(!mirror.reselect(dvd), "re-selected over a click");
         assert!(d.switch(t0, &mirror, place));
         assert_eq!(d.saver().name(), "matrix");
+    }
+
+    /// Through the Driver, as the panel runs it: rotation picks only savers
+    /// still in rotation, never switches away from one just taken out, and
+    /// with every saver out it stays put rather than spinning.
+    #[test]
+    fn the_driver_rotates_only_through_savers_in_rotation() {
+        let mirror = Mirror::new(15);
+        let t0 = Instant::now();
+        mirror.set_rotate_secs(1);
+        assert!(mirror.select("dvd"));
+        let (mut d, panel) = driver(&mirror, t0, 5);
+        let place = |n: &str| (panel, make(n, &panel, 30));
+        for n in names().filter(|n| !["matrix", "toasters", "dvd"].contains(n)) {
+            mirror.set_in_rotation(n, false);
+        }
+        // Showing dvd and taking it out does not switch away by itself.
+        mirror.set_in_rotation("dvd", false);
+        assert!(!d.switch(t0, &mirror, place));
+        assert_eq!(d.saver().name(), "dvd");
+        let mut seen = Vec::new();
+        for s in 1..=20 {
+            assert!(d.switch(t0 + Duration::from_secs(s), &mirror, place));
+            seen.push(d.saver().name());
+        }
+        assert!(
+            seen.iter().all(|n| ["matrix", "toasters"].contains(n)),
+            "{seen:?}"
+        );
+
+        // Nothing left: a turn comes up and nothing happens, every time.
+        mirror.set_in_rotation("matrix", false);
+        mirror.set_in_rotation("toasters", false);
+        let now = d.saver().name();
+        for s in 21..=30 {
+            assert!(!d.switch(t0 + Duration::from_secs(s), &mirror, place));
+        }
+        assert_eq!(d.saver().name(), now);
+        // A click still reaches a saver out of rotation.
+        assert!(mirror.select("dvd"));
+        assert!(d.switch(t0 + Duration::from_secs(31), &mirror, place));
+        assert_eq!(d.saver().name(), "dvd");
+    }
+
+    /// Picking from a narrowed rotation allocates nothing: the bag is still
+    /// the fixed array, refilled in place.
+    #[test]
+    fn a_narrow_rotation_never_allocates() {
+        let t0 = Instant::now();
+        let c = ctl(1);
+        let mut r = Rotate::seeded(t0, 3);
+        let few = |i: usize| i.is_multiple_of(7);
+        assert_eq!(r.due(t0, 0, c, few), None);
+        let mut cur = 0;
+        let n = crate::testalloc::allocs_during(|| {
+            for t in 1..=500u64 {
+                if let Some(i) = r.due(t0 + Duration::from_secs(t), cur, c, few) {
+                    cur = i;
+                }
+            }
+        });
+        assert_eq!(n, 0);
+        assert!(few(cur));
     }
 }
