@@ -2,24 +2,25 @@
 
 Twenty-one pieces from [ascii.rest](https://ascii.rest) ([source](https://github.com/bas3line/ascii),
 MIT, by @bas3line), ported line for line to `src/ascii_rest/`. Upstream a piece
-is `frame(t) -> string` over a fixed grid; here it writes cells, and one generic
-saver, `Play<P: Piece>`, does the rest — the clock, upstream's own frame rate (a
-15 fps scene shades 15 times a second at `SAVER_FPS=30`), centring, the ground
-colour and the flush. A port is only its drawing code.
+is `frame(t) -> string` over a fixed grid; here it writes cells, and a generic
+saver does the rest — the clock, upstream's own frame rate (a 15 fps scene
+shades 15 times a second at `SAVER_FPS=30`), placement, the ground colour and
+the flush: `Play<P: Piece>` for a scene's fixed picture, `Fill<P: Canvas>` for
+a character piece drawn at the panel's size. A port is only its drawing code.
 
 - **Scenes** (`cell: 1`, a palette) share `halftone::Dots`: the 4x4 ordered
   dither, the " ·•●" dot glyphs (drawn round on a square-glass cell, sized to
   upstream's coverage) and the cached nearest-palette lookup.
-- **Text pieces** (`cell: 2`) have no palette upstream, so each gets one ink
-  picked to suit it. Their box-drawing and block characters are in the glyph
-  table as `font::TEXT`.
+- **Character pieces** (`cell: 2`) have one ink upstream; here each has a
+  palette of its own as well. Their box-drawing and block characters are in the
+  glyph table as `font::TEXT`.
 
 Pictures are drawn 1:1, one piece cell per grid cell, never resampled: that
 would smear the dither. Scenes fill the panel and crop the overflow, keeping a
 band of rows chosen per scene (`Fit::Cover { anchor }`) so the horizon, the moon
 or the Taj's dome stays in frame; on pine's 3.2:1 glass that is about 60% of
-each scene's height. Text pieces keep `Fit::Contain` and sit whole over their
-ground, since a cropped one loses words.
+each scene's height. Character pieces are not fitted at all: they are composed
+for the panel's own grid (below).
 
 Every port is checked cell for cell against upstream's own output — glyph and
 palette index, four frames each, stateful pieces stepped through every tick
@@ -107,13 +108,30 @@ is no upstream output to compare against.
 
 ## Character pieces
 
-ascii.rest's character pieces, one ink each. Knobs: `ASCII_REST_TITLE`. A piece may add colour of its own behind a knob that defaults on (`TV_STATIC_COLOR`); its `Piece::UPSTREAM` lists the values that switch it off, and the golden test builds it with those.
+ascii.rest's eight character pieces. Each is one saver, a `Canvas`: it is given
+the grid's own `cols x rows` and draws every cell, so it fills the panel at any
+size or shape, with no bars, and `Fill` is its saver. The grid's cells stay
+glyph-shaped, twice as tall as wide. A piece is composed for the shape rather
+than stretched: vinyl shows one deck on a squarish panel and two with a mixer
+on a wide one, the lighthouse keeps its tower centred and runs the sea and sky
+to the edges. What each does is on its page.
 
-## Full-screen twins
+Each is in colour: its own palette, one entry per part, each cell's index set
+as it is drawn, so colour costs nothing per cell beyond a write. Its colour
+knob (`LIGHTHOUSE_COLOR`, `TV_STATIC_COLOR`, …, default on) switches back to
+upstream's one ink on black. Its `Canvas::UPSTREAM` lists the knob values that
+draw upstream's picture, and built with those at upstream's grid it must match
+upstream cell for cell: the golden test runs against the same code the panel
+does. `#[fill]` in `each_piece!` gives a piece that golden test, a check that
+the `UPSTREAM` knobs really change the picture, and an exercise test on every
+panel shape from pine's 3.2:1 through 16:9, 4:3, square and portrait down to
+128px: it moves, reaches both sides on a landscape panel, and never allocates.
 
-Each character piece has a `-wide` twin that fills the whole panel at any size or shape, with no bars. A twin is not a fixed picture fitted to the panel, the way a scene's `-wide` variant is. It is a `Canvas`: it is given the grid's own `cols x rows` and draws every cell, and `Fill` is its saver, as `Play` is a piece's. The grid's cells stay glyph-shaped, twice as tall as wide. Each twin keeps its original's motion and frame rate but is in colour: its own palette, one entry per part, each cell's index set as it is drawn, so colour costs nothing per cell beyond a write. It shares its original's module and drawing code, parameterised by size. The original stays golden-exact. The twin is marked `#[fill]` in `each_piece!`, which gives it its own exercise test (every panel shape down to 128px, both sides reached, no allocation) and no golden test. The mirror page pairs each piece with its twin behind the same `expanded` toggle the scenes use.
+Each piece had a `-wide` twin before it drew at any size; `<name>-wide` is
+still accepted wherever a saver is named (`SAVER`, `/select`,
+`SAVER_ROTATE_EXCLUDE`, `/config?saver=`) and means the piece.
 
-What full screen means for each is on its page. Knobs:
+Knobs shared by all eight:
 
 - `ASCII_REST_TEXT_CELL_W` / `ASCII_REST_TEXT_CELL_H` (glass px, 4..64 / 8..128, default 12 / 24): 160x25 cells on pine, 160x45 at 1080p
 - `ASCII_REST_TITLE` (0..1, default 0)

@@ -5,16 +5,18 @@
 //! The limb ends stay `f32` as upstream's `Float32Array`s: a child grows from
 //! its parent's rounded end, so an f64 copy drifts down the tree.
 //!
-//! `fractal-tree-wide` grows a grove across the panel: upstream's tree, scaled
-//! to the panel's height, in the middle, smaller trees of other seeds either
-//! side out past both edges, all on one ground line that runs edge to edge.
-//! The wind reaches each tree a moment after the one to its left, so a gust
-//! crosses the grove.
+//! Drawn at the panel's size: upstream's tree, scaled to fit the height or
+//! the width, whichever is shorter, stands in the middle. A panel with room
+//! for more grows a grove: smaller trees of other seeds either side out past
+//! both edges, all on one ground line that runs edge to edge, the wind
+//! reaching each a moment after the one to its left so a gust crosses it.
+//! `FRACTAL_TREE_COLOR` (on) paints wood, leaves and blossom their own
+//! colours; off, at upstream's 60x24, it is upstream's picture cell for cell.
 
 use std::f64::consts::PI;
 
 use super::math::{hash2, js_round, sign_or_one, Mulberry32};
-use super::{hex, text, Canvas, Piece};
+use super::{hex, text, Canvas};
 use crate::grid::Cell;
 
 const DEPTH: u8 = 7;
@@ -35,7 +37,6 @@ const ROWS: usize = 24;
 const GROUND: usize = 23;
 /// The row the trunk first forks at.
 const FORK: usize = 15;
-const X0: f64 = 60.0 / 2.0 - 0.5;
 /// The trunk's first limbs, in columns.
 const LEN: f64 = 6.0;
 
@@ -102,7 +103,7 @@ struct Tree {
     s: f64,
     /// Seconds the wind reaches it late.
     lag: f64,
-    /// The share of its brightest leaves in blossom, in the twin.
+    /// The share of its brightest leaves in blossom, in colour.
     blossom: f64,
     limbs: Vec<Limb>,
     lobes: Vec<Lobe>,
@@ -367,7 +368,7 @@ struct Ground {
     dots: usize,
 }
 
-/// The twin's colours: a brown trunk darkening into the branches, olive
+/// The colours: a brown trunk darkening into the branches, olive
 /// twigs, leaves in four greens by their light, blossom, and earth.
 const TRUNK: u8 = 0;
 const BARK: u8 = 1;
@@ -375,7 +376,7 @@ const TWIG: u8 = 2;
 const LEAVES: u8 = 3;
 const BLOSSOM: u8 = 7;
 const EARTH: u8 = 8;
-const WIDE_PALETTE: &[u32] = &[
+const PALETTE: &[u32] = &[
     hex("#9a6236"),
     hex("#7a5a30"),
     hex("#7a8a3a"),
@@ -387,7 +388,7 @@ const WIDE_PALETTE: &[u32] = &[
     hex("#7a5a3a"),
 ];
 
-/// A cell's colour in the twin, from its glyph and how deep its limb is:
+/// A cell's colour, from its glyph and how deep its limb is:
 /// `LEAF`'s glyphs are leaves, by light, now and then in blossom at
 /// `blossom` (a share of the brightest leaves); the rest are wood.
 fn tone_of(ink: u8, depth: u8, blossom: f64, c: usize, r: usize) -> u8 {
@@ -407,7 +408,7 @@ struct Scene {
     canopy: Canopy,
     ink: Vec<u8>,
     cells: [Cell; 128],
-    /// Each cell's `tone_of` this frame, for the twin; empty upstream.
+    /// Each cell's `tone_of` this frame; empty in upstream's one ink.
     tone: Vec<u8>,
 }
 
@@ -480,78 +481,84 @@ impl Scene {
 
 pub struct FractalTree(Scene);
 
-impl Piece for FractalTree {
+/// Upstream's one ink.
+const INK: u32 = hex("#9be36b");
+
+impl Canvas for FractalTree {
     const NAME: &'static str = "fractal-tree";
+    #[cfg(test)]
     const COLS: usize = COLS;
+    #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = 15;
-    const CELL: usize = 2;
-    const PALETTE: &'static [u32] = &[hex("#9be36b")];
-    const GROUND: u32 = 0;
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("FRACTAL_TREE_COLOR", "0")];
 
-    fn new() -> Self {
-        let tree = Tree::new(X0, FORK, 1.0, 0.0, SEED, 0.0);
-        let ground = Ground {
-            row: GROUND,
-            bare: 3,
-            dots: 3,
-        };
-        Self(Scene::new(COLS, ROWS, vec![tree], ground, false))
-    }
-
-    fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        self.0.frame(t, out);
-    }
-}
-
-pub struct FractalTreeWide(Scene);
-
-impl Canvas for FractalTreeWide {
-    const NAME: &'static str = "fractal-tree-wide";
-    const FPS: u32 = FractalTree::FPS;
-    const PALETTE: &'static [u32] = WIDE_PALETTE;
-
-    /// Upstream's tree scaled to the height in the middle, then trees of
-    /// 55% to 80% of it walking out from it either side until one stands past
-    /// the edge, the farthest first so the middle one is in front.
+    /// Upstream's tree scaled to fit, in the middle. Given more than
+    /// `GROVE` of its frames' width, trees of 55% to 80% of it walk out from
+    /// it either side until one stands past the edge, the farthest first so
+    /// the middle one is in front, and the ground runs edge to edge.
     fn new(cols: usize, rows: usize) -> Self {
         /// Half a full-size crown's width in columns, less a little so
         /// neighbours' leaves touch.
         const CROWN: f64 = 21.0;
-        let s = rows as f64 / ROWS as f64;
+        /// Upstream frames' widths, at the tree's scale, before a grove.
+        const GROVE: f64 = 1.4;
+        /// Columns the crown needs at upstream's scale.
+        const WIDE: f64 = 56.0;
+        let colour = crate::env_num(&["FRACTAL_TREE_COLOR"], 1, 0, 1) == 1;
+        let s = (rows as f64 / ROWS as f64).min(cols as f64 / WIDE);
         let ground = rows - 1;
+        let mid = cols as f64 / 2.0;
+        // A frame taller than the scaled tree lifts the crown on a longer
+        // trunk rather than leave the top half empty.
+        let lift = ((rows as f64 - ROWS as f64 * s) * 0.5).max(0.0);
         let at = |x: f64, k: f64, seed: u32| {
-            let fork = ground.saturating_sub(((GROUND - FORK) as f64 * s * k).round() as usize);
+            let trunk = (GROUND - FORK) as f64 * s * k + lift;
+            let fork = ground.saturating_sub(trunk.round() as usize);
             // Every other tree out from the middle is a cherry in bloom.
             let blossom = if seed.is_multiple_of(2) { 0.06 } else { 0.35 };
-            Tree::new(x - 0.5, fork, s * k, 1.6 * x / cols as f64, seed, blossom)
+            Tree::new(x - 0.5, fork, s * k, 1.6 * (x - mid) / cols as f64, seed, blossom)
         };
-        let mid = cols as f64 / 2.0;
         let mut trees = Vec::new();
-        let mut rng = Mulberry32(SEED + 100);
-        for side in [-1.0, 1.0] {
-            let (mut x, mut last) = (mid, 1.0);
-            while (x - mid).abs() < mid + 4.0 {
-                let k = 0.55 + 0.25 * rng.next();
-                x += side * CROWN * s * (last + k);
-                last = k;
-                trees.push((x, k));
+        let grove = cols as f64 > GROVE * COLS as f64 * s;
+        if grove {
+            let mut rng = Mulberry32(SEED + 100);
+            for side in [-1.0, 1.0] {
+                let (mut x, mut last) = (mid, 1.0);
+                while (x - mid).abs() < mid + 4.0 {
+                    let k = 0.55 + 0.25 * rng.next();
+                    x += side * CROWN * s * (last + k);
+                    last = k;
+                    trees.push((x, k));
+                }
             }
         }
         // Farthest from the middle drawn first.
         trees.sort_by(|a, b| (b.0 - mid).abs().total_cmp(&(a.0 - mid).abs()));
-        let mut grove: Vec<Tree> = trees
+        let mut all: Vec<Tree> = trees
             .iter()
             .enumerate()
             .map(|(i, &(x, k))| at(x, k, SEED + 1 + i as u32))
             .collect();
-        grove.push(at(mid, 1.0, SEED));
+        all.push(at(mid, 1.0, SEED));
+        // A lone tree's ground thins out short of the edges, as upstream's.
+        let ends = if grove { 0 } else { js_round(3.0 * s) as usize };
+        let ends = ends.min(cols / 4);
         let ground = Ground {
             row: ground,
-            bare: 0,
-            dots: 0,
+            bare: ends,
+            dots: ends,
         };
-        Self(Scene::new(cols, rows, grove, ground, true))
+        Self(Scene::new(cols, rows, all, ground, colour))
+    }
+
+    fn palette(&self) -> &'static [u32] {
+        if self.0.tone.is_empty() {
+            &[INK]
+        } else {
+            PALETTE
+        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {

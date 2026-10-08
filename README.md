@@ -4,7 +4,7 @@
 
 **HDMI screensavers on whichever Pi5 holds the monitor**
 
-72 savers · one ~230 KB static binary · straight to a DRM/KMS dumb buffer
+64 savers · one ~230 KB static binary · straight to a DRM/KMS dumb buffer
 
 [![build](https://github.com/NorthIsUp/afterglow/actions/workflows/image.yml/badge.svg)](https://github.com/NorthIsUp/afterglow/actions/workflows/image.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -165,13 +165,13 @@ Ports of [ascii.rest](https://ascii.rest)'s scenes, held on a cover view; `ASCII
 
 ### ascii.rest character pieces
 
-One ink each. Every piece also has a `-wide` twin in colour, drawn at the panel's own size, any shape, with no bars, and the pair opens on the twin as the scenes do. The shared engine: [the ascii.rest ports](docs/ascii-rest.md#character-pieces).
+Each draws in colour at the panel's own size and shape, recomposed for it rather than stretched, with no bars. The shared engine: [the ascii.rest ports](docs/ascii-rest.md#character-pieces).
 
 | `SAVER`                                                   | What                                                                            |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | [`aurora`](docs/savers/aurora.md)                         | A curtain of light over a spruce treeline at night.                             |
 | [`synthwave`](docs/savers/synthwave.md)                   | The eighties horizon.                                                           |
-| [`tv-static`](docs/savers/tv-static.md)                   | An old set showing snow, with a hum bar rolling through it.                     |
+| [`tv-static`](docs/savers/tv-static.md)                   | Snow with a hum bar rolling through it, full screen or on an old set.           |
 | [`vinyl`](docs/savers/vinyl.md)                           | A record turning on a turntable, seen from above.                               |
 | [`lighthouse`](docs/savers/lighthouse.md)                 | A banded lighthouse on a heap of rocks at night.                                |
 | [`fractal-tree`](docs/savers/fractal-tree.md)             | A trunk that forks seven times over into lobes of leaves, bending in the wind.  |

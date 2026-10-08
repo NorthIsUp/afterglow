@@ -45,9 +45,7 @@ WARMUP = {
     "strings": 4,
     "lissajous": 6,
     "reaction-diffusion": 10,
-    "reaction-diffusion-wide": 10,
     "fractal-tree": 4,
-    "fractal-tree-wide": 4,
 }
 DEFAULT_WARMUP = 2
 

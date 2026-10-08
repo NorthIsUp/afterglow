@@ -3,25 +3,29 @@
 //! dies back to a few survivors, and they grow out again.
 //!
 //! A simulation: every frame runs the steps since the last, so `frame` must
-//! see every tick in order, as [`super::Play`] gives it. The chemicals stay
+//! see every tick in order, as [`super::Fill`] gives it. The chemicals stay
 //! `f32` as upstream's `Float32Array`s, so the pattern grows the same way.
 //!
-//! `reaction-diffusion-wide` runs the same reaction on a dish the size of the
-//! panel, two cells to a character as upstream's is, spots at the left edge
-//! turning to stripes at the right, at upstream's rate. Seeds scale with the
-//! dish's area, so it fills as fast.
+//! The dish is the panel, two cells to a character as upstream's is. Spots
+//! turn to stripes along its long side — left to right on a landscape panel,
+//! top to bottom on a portrait one — and seeds scale with its area, so it
+//! fills as fast. `REACTION_DIFFUSION_COLOR` (on) gives each step of the ramp
+//! its own colour; off, at upstream's 60x24, it is upstream's picture cell
+//! for cell.
 
 use std::f64::consts::PI;
 
 use super::math::{smooth, Mulberry32};
-use super::{hex, text, Canvas, Piece};
+use super::{hex, text, Canvas};
 use crate::grid::Cell;
 
 /// The grid, two cells to a character so they are square.
 const W: usize = 60;
 const H: usize = 48;
 const N: usize = W * H;
+#[cfg(test)]
 const COLS: usize = 60;
+#[cfg(test)]
 const ROWS: usize = 24;
 /// Feed and kill rates.
 const SPOTS: [f64; 2] = [0.0367, 0.0649];
@@ -93,6 +97,7 @@ struct Dish {
     v: Vec<f32>,
     u2: Vec<f32>,
     v2: Vec<f32>,
+    /// Per cell, so the spots-to-stripes sweep can run down a portrait dish.
     feed: Vec<f32>,
     kill: Vec<f32>,
     fade: Vec<f32>,
@@ -104,26 +109,41 @@ struct Dish {
     bare: f64,
     /// Steps a second: `RATE`, or less for a dish over `BUDGET`.
     rate: f64,
-    /// Upstream's f64 arithmetic, cell for cell, in one ink; off, the step
-    /// runs in f32 across whole rows, which the compiler vectorises, and
-    /// each step of the ramp has its own colour.
+    /// Upstream's f64 arithmetic, cell for cell, on a dish no bigger than
+    /// upstream's; a bigger one steps in f32 across whole rows, which the
+    /// compiler vectorises.
     exact: bool,
+    /// Each step of the ramp its own colour, rather than upstream's one ink.
+    colour: bool,
 }
 
 impl Dish {
-    fn new(cols: usize, rows: usize, exact: bool) -> Self {
+    fn new(cols: usize, rows: usize, colour: bool) -> Self {
         let (w, h) = (cols.max(W), (rows * 2).max(H));
         let n = w * h;
-        let mut feed = vec![0.0; w];
-        let mut kill = vec![0.0; w];
-        for x in 0..w {
+        let down = h > w;
+        let len = if down { h } else { w };
+        let mut feed = vec![0.0; n];
+        let mut kill = vec![0.0; n];
+        for i in 0..len {
             let s = smooth(
                 0.1,
                 0.9,
-                (1.0 + ((2.0 * PI * (x as f64 + 0.5)) / w as f64).sin()) / 2.0,
+                (1.0 + ((2.0 * PI * (i as f64 + 0.5)) / len as f64).sin()) / 2.0,
             );
-            feed[x] = (STRIPES[0] + (SPOTS[0] - STRIPES[0]) * s) as f32;
-            kill[x] = (STRIPES[1] + (SPOTS[1] - STRIPES[1]) * s) as f32;
+            let (f, k) = (
+                (STRIPES[0] + (SPOTS[0] - STRIPES[0]) * s) as f32,
+                (STRIPES[1] + (SPOTS[1] - STRIPES[1]) * s) as f32,
+            );
+            if down {
+                feed[i * w..(i + 1) * w].fill(f);
+                kill[i * w..(i + 1) * w].fill(k);
+            } else {
+                for y in 0..h {
+                    feed[y * w + i] = f;
+                    kill[y * w + i] = k;
+                }
+            }
         }
         // The frame fades toward its edges, so the pattern thins out there.
         let mut fade = vec![0.0; cols * rows];
@@ -155,7 +175,8 @@ impl Dish {
             cycle: -1.0,
             bare: BARE * n as f64 / N as f64,
             rate: RATE.min(BUDGET / n as f64),
-            exact,
+            exact: n <= N,
+            colour,
         };
         rd.scatter((SEEDS * n).div_ceil(N));
         while rd.n < WARM {
@@ -250,7 +271,7 @@ impl Dish {
             let (um, uc, up) = (&u[ym..ym + w], &u[y0..y0 + w], &u[yp..yp + w]);
             let (vm, vc, vp) = (&v[ym..ym + w], &v[y0..y0 + w], &v[yp..yp + w]);
             let bite = &self.bite[y0..y0 + w];
-            let (feed, kill) = (&self.feed[..w], &self.kill[..w]);
+            let (feed, kill) = (&self.feed[y0..y0 + w], &self.kill[y0..y0 + w]);
             let (u2, v2) = (&mut self.u2[y0..y0 + w], &mut self.v2[y0..y0 + w]);
             let cell = |x: usize, xm: usize, xp: usize| {
                 let lu = 0.2 * (um[x] + up[x] + uc[xm] + uc[xp])
@@ -320,6 +341,7 @@ impl Dish {
                 ]
             };
             let bite = &self.bite[y0..y0 + w];
+            let (feed, kill) = (&feed[y0..y0 + w], &kill[y0..y0 + w]);
             let (u2, v2) = (&mut self.u2[y0..y0 + w], &mut self.v2[y0..y0 + w]);
             let mut at = |xm: usize, x: usize, xp: usize| {
                 (u2[x], v2[x]) = react(
@@ -365,11 +387,10 @@ impl Dish {
                     BLANK
                 } else {
                     let i = (RAMP.len() - 1).min((q * RAMP.len() as f64).floor() as usize);
-                    // The twin colours each step of the ramp; upstream has one ink.
-                    if self.exact {
-                        RAMP[i]
-                    } else {
+                    if self.colour {
                         text::tint(RAMP[i], i as u16)
+                    } else {
+                        RAMP[i]
                     }
                 };
             }
@@ -379,45 +400,43 @@ impl Dish {
 
 pub struct ReactionDiffusion(Dish);
 
-impl Piece for ReactionDiffusion {
+impl Canvas for ReactionDiffusion {
     const NAME: &'static str = "reaction-diffusion";
+    #[cfg(test)]
     const COLS: usize = COLS;
+    #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = 20;
-    const CELL: usize = 2;
-    const PALETTE: &'static [u32] = &[hex("#ff8a3d")];
-    const GROUND: u32 = 0;
-
-    fn new() -> Self {
-        Self(Dish::new(COLS, ROWS, true))
-    }
-
-    fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        self.0.frame(t, out);
-    }
-}
-
-pub struct ReactionDiffusionWide(Dish);
-
-impl Canvas for ReactionDiffusionWide {
-    const NAME: &'static str = "reaction-diffusion-wide";
-    const FPS: u32 = ReactionDiffusion::FPS;
-    /// Thin to thick: violet edges warming through rose and orange to a
-    /// pale-gold core.
-    const PALETTE: &'static [u32] = &[
-        hex("#7a3cc8"),
-        hex("#b04ad0"),
-        hex("#e0508c"),
-        hex("#ff7040"),
-        hex("#ffa83a"),
-        hex("#ffe27a"),
-    ];
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("REACTION_DIFFUSION_COLOR", "0")];
 
     fn new(cols: usize, rows: usize) -> Self {
-        Self(Dish::new(cols, rows, false))
+        let colour = crate::env_num(&["REACTION_DIFFUSION_COLOR"], 1, 0, 1) == 1;
+        Self(Dish::new(cols, rows, colour))
+    }
+
+    fn palette(&self) -> &'static [u32] {
+        if self.0.colour {
+            PALETTE
+        } else {
+            &[INK]
+        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
     }
 }
+
+/// Thin to thick: violet edges warming through rose and orange to a pale-gold
+/// core.
+const PALETTE: &[u32] = &[
+    hex("#7a3cc8"),
+    hex("#b04ad0"),
+    hex("#e0508c"),
+    hex("#ff7040"),
+    hex("#ffa83a"),
+    hex("#ffe27a"),
+];
+/// Upstream's one ink.
+const INK: u32 = hex("#ff8a3d");

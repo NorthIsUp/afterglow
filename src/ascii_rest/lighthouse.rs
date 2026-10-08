@@ -2,19 +2,20 @@
 //! round the lantern, long when it crosses the frame and a flash when it faces
 //! us, lighting the haze and the waves beneath; surf bursts on the rocks.
 //!
-//! `lighthouse-wide` is the same night at the panel's size: the tower, its
-//! rocks and the swell scaled to the panel's height, the sea and the sky run
-//! to both edges, and the beam reaches far enough to sweep the whole width.
-//! The beam, in both, turns all the way round: in front of the tower on the
-//! half that faces us, flaring over the lantern when square to us, behind it
-//! on the other (`LIGHTHOUSE_BEAM_FRONT`, on by default; upstream only ever
-//! passes behind).
+//! Drawn at the panel's size: the tower and its rocks scaled to the height
+//! (or, on a narrow panel, to the width) and centred, the sea and the sky run
+//! to every edge, and the beam reaches far enough to sweep the whole width.
+//! The beam turns all the way round: in front of the tower on the half that
+//! faces us, flaring over the lantern when square to us, behind it on the
+//! other (`LIGHTHOUSE_BEAM_FRONT`, on by default; upstream only ever passes
+//! behind). `LIGHTHOUSE_COLOR` (on) paints each part its own colour; with
+//! both off, at upstream's 64x30, it is upstream's picture cell for cell.
 
 use std::f64::consts::PI;
 use std::ops::Range;
 
 use super::math::{hash2, js_round, sign_or_one};
-use super::{hex, text, Canvas, Piece};
+use super::{hex, text, Canvas};
 use crate::grid::Cell;
 
 const RAMP: &[u8] = b" .:-=+*#%@";
@@ -22,8 +23,6 @@ const RAMP: &[u8] = b" .:-=+*#%@";
 const BEAM: &[u8] = b" .:-=+*#";
 const COLS: usize = 64;
 const ROWS: usize = 30;
-/// The tower's column.
-const TC: usize = 32;
 /// Rows the beam carries into the haze at its longest.
 const REACH: f64 = 22.0;
 /// The lamp's row.
@@ -108,7 +107,7 @@ fn beam_at(dx: f64, dy: f64, c: f64, s: f64, reach: f64, round: bool, span: f64)
         * gain
 }
 
-/// Where the picture sits: upstream's, or the same scaled to a grid.
+/// Where the picture sits on the grid.
 struct Layout {
     cols: usize,
     rows: usize,
@@ -116,9 +115,12 @@ struct Layout {
     tc: usize,
     /// Rows here to upstream's.
     s: f64,
+    /// Upstream's rows of sky added above its top, on a grid taller than the
+    /// scaled picture.
+    oy: f64,
     reach: f64,
     stars: i64,
-    /// Colour by part (`WIDE_PALETTE`) rather than upstream's one ink.
+    /// Colour by part (`PALETTE`) rather than upstream's one ink.
     colour: bool,
     /// The beam crosses in front of the tower on the half of its turn that
     /// faces us, and flares over the lantern when square to us. Upstream's
@@ -126,43 +128,47 @@ struct Layout {
     round: bool,
 }
 
-const ORIGINAL: Layout = Layout {
-    cols: COLS,
-    rows: ROWS,
-    tc: TC,
-    s: 1.0,
-    reach: REACH,
-    stars: 24,
-    colour: false,
-    round: false,
-};
-
 impl Layout {
     /// Upstream's picture scaled to the grid's height and centred, its sea
-    /// and sky run out to the sides and the beam's reach with them.
-    fn fit(cols: usize, rows: usize) -> Self {
-        let s = rows as f64 / ROWS as f64;
+    /// and sky run out to the sides and the beam's reach with them. A grid
+    /// too narrow for the rocks at that scale scales to its width instead,
+    /// and the rows left over go a little more to sky than to sea. At
+    /// upstream's 64x30 this is upstream's layout exactly.
+    fn fit(cols: usize, rows: usize, colour: bool, round: bool) -> Self {
+        let s = (rows as f64 / ROWS as f64).min(cols as f64 / ROCKS_WIDE);
+        let spare = rows as f64 / s - ROWS as f64;
         let half = cols as f64 / 4.0 / s;
         Self {
             cols,
             rows,
             tc: cols / 2,
             s,
+            oy: (spare * 0.55).max(0.0),
             reach: REACH * (half / (COLS / 4) as f64).max(1.0),
-            stars: (24 * cols / COLS) as i64,
-            colour: true,
-            round: true,
+            stars: (24 * cols * rows / (COLS * ROWS)) as i64,
+            colour,
+            round,
         }
     }
 
-    /// Upstream's row under row `r`.
+    /// Upstream's y (in its rows, from its top) at the middle of row `r`.
+    #[inline]
+    fn y(&self, r: usize) -> f64 {
+        (r as f64 + 0.5) / self.s - self.oy
+    }
+
+    /// Upstream's row under row `r`; the added sky is its row 0.
     #[inline]
     fn row(&self, r: usize) -> usize {
-        ((r as f64 + 0.5) / self.s).floor() as usize
+        self.y(r).floor().max(0.0) as usize
     }
 }
 
-/// The twin's colours, one per part: an amber beam fading to bronze in the
+/// Columns the heap of rocks needs at upstream's scale, with a little sea
+/// either side.
+const ROCKS_WIDE: f64 = 44.0;
+
+/// The colours, one per part: an amber beam fading to bronze in the
 /// thin haze, a pale-gold lamp, the sea in two blues with the beam's road on
 /// it in amber, a white tower banded red, grey-brown rocks, iron gallery and
 /// roof, white surf, blue-white stars.
@@ -178,7 +184,7 @@ const ROCK: u8 = 8;
 const SURF_INK: u8 = 9;
 const STAR: u8 = 10;
 const IRON: u8 = 11;
-const WIDE_PALETTE: &[u32] = &[
+const PALETTE: &[u32] = &[
     hex("#a8743a"),
     hex("#ffc860"),
     hex("#fff2c0"),
@@ -244,7 +250,7 @@ impl Scene {
             for c in 0..cols {
                 let k = r * cols + c;
                 let x = (c as f64 - tc as f64) / 2.0 / sc;
-                let y = (r as f64 + 0.5) / sc;
+                let y = lay.y(r);
                 // The rocks behind the tower first, then the tower, then the rocks before it.
                 let boulder = |i: usize, still: &mut [f32], rock_at: &mut [i8], still_tone: &mut [u8]| {
                     let [bx, by, rx, ry, wl] = ROCKS[i];
@@ -342,7 +348,7 @@ impl Scene {
             let [bx, _, rx, _, wl] = ROCKS[i];
             [
                 tc as f64 + 2.0 * sc * (bx + rx * side * 0.95),
-                (wl - 0.2) * sc,
+                (wl - 0.2 + lay.oy) * sc,
                 side,
                 ph,
             ]
@@ -403,7 +409,7 @@ impl Scene {
         };
         let offset = |r: usize, cc: usize| {
             let dx = (cc as f64 - tc as f64) / 2.0 / sc;
-            (dx, (r as f64 + 0.5) / sc - (LAMP as f64 + 0.5))
+            (dx, self.lay.y(r) - (LAMP as f64 + 0.5))
         };
         let glare_at =
             |dx: f64, dy: f64| (-(dx.hypot(dy) / bloom).powf(2.0)).exp() * (0.5 + 1.2 * face);
@@ -485,7 +491,7 @@ impl Scene {
             if v < 0.0 {
                 continue;
             }
-            if rock_at[k] >= 0 && ((k / cols) as f64 + 0.5) / sc > swell[rock_at[k] as usize] {
+            if rock_at[k] >= 0 && self.lay.y(k / cols) > swell[rock_at[k] as usize] {
                 continue;
             }
             let i = js_round(v * 9.0).clamp(1.0, 9.0);
@@ -655,48 +661,47 @@ impl Scene {
 
 pub struct Lighthouse(Scene);
 
-impl Piece for Lighthouse {
+impl Canvas for Lighthouse {
     const NAME: &'static str = "lighthouse";
+    #[cfg(test)]
     const COLS: usize = COLS;
+    #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = 20;
-    const CELL: usize = 2;
-    const PALETTE: &'static [u32] = &[hex("#ffd27a")];
-    const GROUND: u32 = 0;
     #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("LIGHTHOUSE_BEAM_FRONT", "0")];
-
-    fn new() -> Self {
-        let round = crate::env_num(&["LIGHTHOUSE_BEAM_FRONT"], 1, 0, 1) == 1;
-        Self(Scene::new(Layout { round, ..ORIGINAL }))
-    }
-
-    fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        self.0.frame(t, out);
-    }
-}
-
-pub struct LighthouseWide(Scene);
-
-impl Canvas for LighthouseWide {
-    const NAME: &'static str = "lighthouse-wide";
-    const FPS: u32 = Lighthouse::FPS;
-    const PALETTE: &'static [u32] = WIDE_PALETTE;
-    /// A night of deep navy rather than black.
-    const GROUND: u32 = hex("#050b1a");
+    const UPSTREAM: &'static [(&'static str, &'static str)] =
+        &[("LIGHTHOUSE_BEAM_FRONT", "0"), ("LIGHTHOUSE_COLOR", "0")];
 
     fn new(cols: usize, rows: usize) -> Self {
         let round = crate::env_num(&["LIGHTHOUSE_BEAM_FRONT"], 1, 0, 1) == 1;
-        Self(Scene::new(Layout {
-            round,
-            ..Layout::fit(cols, rows)
-        }))
+        let colour = crate::env_num(&["LIGHTHOUSE_COLOR"], 1, 0, 1) == 1;
+        Self(Scene::new(Layout::fit(cols, rows, colour, round)))
+    }
+
+    fn palette(&self) -> &'static [u32] {
+        if self.0.lay.colour {
+            PALETTE
+        } else {
+            &[INK]
+        }
+    }
+
+    /// A night of deep navy in colour, upstream's black without.
+    fn ground(&self) -> u32 {
+        if self.0.lay.colour {
+            hex("#050b1a")
+        } else {
+            0
+        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
     }
 }
+
+/// Upstream's one ink.
+const INK: u32 = hex("#ffd27a");
 
 /// A byte for upstream's `·` star in the ASCII-only buffer.
 const MIDDOT: u8 = 0x7f;

@@ -18,8 +18,9 @@ one row, with an `expanded` toggle in the bar that switches between them. Every
 pair starts expanded: clicking its row shows the `-wide` until someone unticks
 `expanded` for it, and then its original from then on, for every viewer — the
 choice is the server's, per pair, and `/meta` lists the expanded ones as
-`expanded`. Under 720 px wide the list becomes a drawer
-behind the button above the canvas.
+`expanded`. A character piece has no twin: it draws at the panel's own shape,
+so it is a plain row. Its old `-wide` name still selects it. Under 720 px
+wide the list becomes a drawer behind the button above the canvas.
 
 Each row has a tick box for whether rotation may pick it, and each group heading
 one for the whole group (half-ticked when some are in). A scene's box covers its

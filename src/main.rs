@@ -54,7 +54,8 @@
 //!   saver already showing, and a `/select` gives the saver it picked a full
 //!   interval before rotation moves on again.
 //! * `SAVER_ROTATE_EXCLUDE` — comma-separated savers rotation never picks
-//!   (default none; a scene takes its `-wide` twin with it). The startup set
+//!   (default none; a scene takes its `-wide` twin with it, and a character
+//!   piece's old `-wide` name is the piece). The startup set
 //!   only: the mirror page's toggles move it live. A click still shows them.
 //! * `SAVER_FPS`      — target frames/sec, 1..=120 (default 30)
 //! * `SAVER_PANEL_MM`   — the panel's visible width in mm, 0 (default) = unknown.

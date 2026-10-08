@@ -2,15 +2,18 @@
 //! is brightest and ripples; streaks rise from it and fade out below a clear
 //! sky of stars, and light drifts along it in slow surges.
 //!
-//! `aurora-wide` is the same night at the panel's size: the curtain folds on
-//! across the whole width, its hem sagging and lifting in a slow swell along
-//! it, the treeline runs edge to edge, and the hem, the streaks and the trees
-//! grow with the panel's height.
+//! Drawn at the panel's size: the curtain folds on across the whole width,
+//! its hem sagging and lifting in a slow swell along it on a panel wider than
+//! upstream's, and the treeline runs edge to edge. The hem, the streaks and
+//! the trees grow with the panel's height, or on a narrow panel with its
+//! width, standing on the ground line with any rows left over going to sky.
+//! `AURORA_COLOR` (on) paints each part its own colour; off, at upstream's
+//! 64x20, it is upstream's picture cell for cell.
 
 use std::f64::consts::PI;
 
 use super::math::Mulberry32;
-use super::{hex, text, Canvas, Piece};
+use super::{hex, text, Canvas};
 use crate::grid::Cell;
 
 /// Dim to bright, in upright strokes.
@@ -22,7 +25,7 @@ const STAR: Cell = text::cell('*');
 const TAU: f64 = PI * 2.0;
 const ROWS: usize = 20;
 
-/// Where things sit: upstream's literals, or the same scaled to a grid.
+/// Where things sit on the grid.
 struct Layout {
     /// The row the hem ripples about.
     hem: usize,
@@ -38,44 +41,45 @@ struct Layout {
     height: [f64; 2],
     /// Upstream rows to a row of trees.
     tall: f64,
-    /// The wide hem's long swell, in rows: 0 upstream.
+    /// The hem's long swell, in rows: 0 at upstream's width.
     swell: f64,
-    /// Colour by part (`WIDE_PALETTE`) rather than upstream's one ink.
+    /// Colour by part (`PALETTE`) rather than upstream's one ink.
     colour: bool,
 }
 
-const ORIGINAL: Layout = Layout {
-    hem: 12,
-    ridge: 18,
-    stars: 40,
-    fold: [1.2, 0.55],
-    hem_w: [0.6, 0.35],
-    glow: 1.5,
-    height: [1.5, 6.5],
-    tall: 1.0,
-    swell: 0.0,
-    colour: false,
-};
-
 impl Layout {
-    /// Upstream's proportions on a `cols x rows` grid, stars as dense.
-    fn fit(cols: usize, rows: usize) -> Self {
+    /// Upstream's proportions on a `cols x rows` grid, scaled to its height
+    /// or, when narrower than `NARROW` columns to a row, its width: the
+    /// ground and hem keep upstream's rows above the bottom at that scale,
+    /// the rest is sky, which the streaks rise into, and stars are as dense. At upstream's 64x20 this is
+    /// upstream's layout exactly.
+    fn fit(cols: usize, rows: usize, colour: bool) -> Self {
         let sy = rows as f64 / ROWS as f64;
-        let hem = (rows * 12 + 10) / 20;
+        let s = sy.min(cols as f64 / NARROW);
+        // A tall panel's streaks reach up into its extra sky.
+        let rise = sy.min(2.0 * s);
+        let ridge = rows.saturating_sub((2.0 * s).round() as usize).min(rows - 1);
+        let hem = ridge.saturating_sub((6.0 * s).round() as usize);
+        // The swell needs width to read as one: none at upstream's, all of
+        // it from twice that.
+        let wide = ((cols as f64 / s - 64.0) / 64.0).clamp(0.0, 1.0);
         Self {
             hem,
-            ridge: ((rows * 18 + 10) / 20).min(rows - 1),
+            ridge,
             stars: 40 * cols * (hem + 2) / (64 * 14),
-            fold: [1.2 * sy, 0.55 * sy],
-            hem_w: [0.6 * sy, 0.35 * sy],
-            glow: 1.5 * sy,
-            height: [1.5 * sy, 6.5 * sy],
-            tall: sy,
-            swell: 1.6 * sy,
-            colour: true,
+            fold: [1.2 * s, 0.55 * s],
+            hem_w: [0.6 * s, 0.35 * s],
+            glow: 1.5 * s,
+            height: [1.5 * s, 6.5 * rise],
+            tall: s,
+            swell: 1.6 * s * wide,
+            colour,
         }
     }
 }
+
+/// Columns to a row of upstream's scale below which the width sets it.
+const NARROW: f64 = 32.0;
 
 /// This piece's own hash: integer lattice, three mixing rounds, not
 /// `math::hash`.
@@ -121,7 +125,7 @@ struct Scene {
     reach: Vec<f64>,
 }
 
-/// The twin's colours: curtain green, teal and violet low to high, a
+/// The colours: curtain green, teal and violet low to high, a
 /// magenta hem, white and blue-white stars, dark teal spruces.
 const GREEN: u16 = 0;
 const TEAL: u16 = 1;
@@ -130,7 +134,7 @@ const MAGENTA: u16 = 3;
 const BRIGHT: u16 = 4;
 const DIM: u16 = 5;
 const TREES: u16 = 6;
-const WIDE_PALETTE: &[u32] = &[
+const PALETTE: &[u32] = &[
     hex("#6dffa0"),
     hex("#3fd8d0"),
     hex("#a878ff"),
@@ -295,7 +299,7 @@ impl Scene {
         }
     }
 
-    /// The twin's colours over this frame's glyphs: the trees, and the
+    /// The colours over this frame's glyphs: the trees, and the
     /// curtain by height over its hem, green and teal trading places in slow
     /// bands along it.
     fn tint(&self, t: f64, out: &mut [Cell]) {
@@ -327,38 +331,42 @@ impl Scene {
 
 pub struct Aurora(Scene);
 
-impl Piece for Aurora {
+impl Canvas for Aurora {
     const NAME: &'static str = "aurora";
+    #[cfg(test)]
     const COLS: usize = 64;
+    #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = 20;
-    const CELL: usize = 2;
-    const PALETTE: &'static [u32] = &[hex("#7dffb0")];
-    const GROUND: u32 = 0;
-
-    fn new() -> Self {
-        Self(Scene::new(Self::COLS, Self::ROWS, ORIGINAL))
-    }
-
-    fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        self.0.frame(t, out);
-    }
-}
-
-pub struct AuroraWide(Scene);
-
-impl Canvas for AuroraWide {
-    const NAME: &'static str = "aurora-wide";
-    const FPS: u32 = Aurora::FPS;
-    const PALETTE: &'static [u32] = WIDE_PALETTE;
-    /// A deep night blue rather than black.
-    const GROUND: u32 = hex("#040a1c");
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("AURORA_COLOR", "0")];
 
     fn new(cols: usize, rows: usize) -> Self {
-        Self(Scene::new(cols, rows, Layout::fit(cols, rows)))
+        let colour = crate::env_num(&["AURORA_COLOR"], 1, 0, 1) == 1;
+        Self(Scene::new(cols, rows, Layout::fit(cols, rows, colour)))
+    }
+
+    fn palette(&self) -> &'static [u32] {
+        if self.0.lay.colour {
+            PALETTE
+        } else {
+            &[INK]
+        }
+    }
+
+    /// A deep night blue in colour, upstream's black without.
+    fn ground(&self) -> u32 {
+        if self.0.lay.colour {
+            hex("#040a1c")
+        } else {
+            0
+        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
     }
 }
+
+/// Upstream's one ink.
+const INK: u32 = hex("#7dffb0");

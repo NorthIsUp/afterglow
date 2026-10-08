@@ -1,13 +1,16 @@
 //! synthwave: the eighties horizon. A grid floor rolls toward the viewer under
 //! a setting sun cut by thinning stripes, behind a ridge of mountains.
 //!
-//! `synthwave-wide` is the same horizon at the panel's size: the sun, the
-//! ridge and the floor's depth scale with its height, the ridge runs edge to
-//! edge, and as many rails fan out from the vanishing point as reach the
-//! sides.
+//! Drawn at the panel's size: the sky and the floor keep upstream's shares of
+//! the height, the floor's depth scales with it, the ridge runs edge to edge,
+//! and as many rails fan out from the vanishing point as reach the sides. The
+//! sun and the ridge scale with the height too, but no wider than the panel
+//! allows, so a square or portrait panel gets a sun that still fits.
+//! `SYNTHWAVE_COLOR` (on) paints each part its own colour; off, at upstream's
+//! 65x28, it is upstream's picture cell for cell.
 
 use super::math::{js_round, Mulberry32};
-use super::{hex, text, Canvas, Piece};
+use super::{hex, text, Canvas};
 use crate::grid::Cell;
 
 /// Rail k crosses k * S columns a row.
@@ -21,7 +24,8 @@ fn band(k: f64) -> f64 {
     0.2 * k + (0.3 * k * k) / 26.0
 }
 
-/// Where things sit: upstream's literals, or the same scaled to a grid.
+/// Where things sit on the grid.
+#[derive(Debug, PartialEq)]
 struct Layout {
     cols: usize,
     rows: usize,
@@ -44,11 +48,12 @@ struct Layout {
     peak: i64,
     climb: f64,
     quiet: f64,
-    /// Colour by part (`WIDE_PALETTE`) rather than upstream's one ink.
+    /// Colour by part (`PALETTE`) rather than upstream's one ink.
     colour: bool,
 }
 
 impl Layout {
+    /// Upstream's literals, which `fit` reproduces at its grid.
     const ORIGINAL: Self = Self {
         cols: 65,
         rows: 28,
@@ -67,30 +72,34 @@ impl Layout {
     };
 
     /// Upstream's proportions on a `cols x rows` grid: the sky and the floor
-    /// keep their shares of the height, and the floor its depth.
-    fn fit(cols: usize, rows: usize) -> Self {
+    /// keep their shares of the height, and the floor its depth. The sun and
+    /// the ridge follow the sky's height until the sun would outgrow
+    /// `SUN_WIDE` of the width.
+    fn fit(cols: usize, rows: usize, colour: bool) -> Self {
         let o = Self::ORIGINAL;
         let hz = ((rows * o.hz + o.rows / 2) / o.rows).min(rows - 1);
         let sy = hz as f64 / o.hz as f64;
+        let ss = sy.min(SUN_WIDE * cols as f64 / o.cols as f64);
         let fr = (rows - hz) as f64;
         let k = o.k * fr / (o.rows - o.hz) as f64;
         let cx = cols as f64 / 2.0;
-        let sun_r = o.sun_r * sy;
+        let sun_r = o.sun_r * ss;
         Self {
             cols,
             rows,
             hz,
             sun_r,
-            sun_y: 2.0 * hz as f64 - 6.0 * sy,
-            stripe: sy,
+            sun_y: 2.0 * hz as f64 - 6.0 * ss,
+            stripe: ss,
             k,
             far: js_round(k.sqrt()) as usize,
             rails: o.rails.max((cx / (S * fr * 0.5)).ceil() as usize),
             stars: o.stars * cols * hz.saturating_sub(3) / (o.cols * (o.hz - 3)),
-            peak: (7.0 * sy).round() as i64,
-            climb: sy,
-            quiet: 0.6 * sun_r / cx,
-            colour: true,
+            peak: (7.0 * ss).round() as i64,
+            climb: ss,
+            // Written so each factor is exactly 1 at upstream's grid.
+            quiet: o.quiet * (sun_r / o.sun_r) * (o.cx() / cx),
+            colour,
         }
     }
 
@@ -113,7 +122,7 @@ impl Layout {
     }
 }
 
-/// The twin's colours: the sun from gold at its crown to hot pink at the
+/// The colours: the sun from gold at its crown to hot pink at the
 /// horizon, purple mountains, a magenta floor crossed by cyan rails, white
 /// stars.
 const SUN: u16 = 0;
@@ -123,7 +132,7 @@ const LINE: u16 = 6;
 const RAIL: u16 = 7;
 const STAR: u16 = 8;
 const HAZE: u16 = 9;
-const WIDE_PALETTE: &[u32] = &[
+const PALETTE: &[u32] = &[
     hex("#ffe14a"),
     hex("#ffb238"),
     hex("#ff7a3c"),
@@ -347,7 +356,7 @@ impl Scene {
         }
     }
 
-    /// The twin's colours over this frame's glyphs, by row and glyph.
+    /// The colours over this frame's glyphs, by row and glyph.
     fn tint(&self, out: &mut [Cell]) {
         const BLOCKS: [Cell; 3] = text::cells(['▀', '▄', '█']);
         const RIDGES: [Cell; 3] = text::cells(['/', '\\', '_']);
@@ -383,19 +392,45 @@ impl Scene {
     }
 }
 
+/// The sun's widest, over upstream's, per unit of width over upstream's:
+/// past this a tall panel's sun scales with the width instead.
+const SUN_WIDE: f64 = 1.3;
+
+/// Upstream's one ink.
+const INK: u32 = hex("#ff4fb8");
+
 pub struct Synthwave(Scene);
 
-impl Piece for Synthwave {
+impl Canvas for Synthwave {
     const NAME: &'static str = "synthwave";
+    #[cfg(test)]
     const COLS: usize = Layout::ORIGINAL.cols;
+    #[cfg(test)]
     const ROWS: usize = Layout::ORIGINAL.rows;
     const FPS: u32 = 20;
-    const CELL: usize = 2;
-    const PALETTE: &'static [u32] = &[hex("#ff4fb8")];
-    const GROUND: u32 = 0;
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("SYNTHWAVE_COLOR", "0")];
 
-    fn new() -> Self {
-        Self(Scene::new(Layout::ORIGINAL))
+    fn new(cols: usize, rows: usize) -> Self {
+        let colour = crate::env_num(&["SYNTHWAVE_COLOR"], 1, 0, 1) == 1;
+        Self(Scene::new(Layout::fit(cols, rows, colour)))
+    }
+
+    fn palette(&self) -> &'static [u32] {
+        if self.0.lay.colour {
+            PALETTE
+        } else {
+            &[INK]
+        }
+    }
+
+    /// A night of deep purple in colour, upstream's black without.
+    fn ground(&self) -> u32 {
+        if self.0.lay.colour {
+            hex("#0b0418")
+        } else {
+            0
+        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
@@ -403,20 +438,15 @@ impl Piece for Synthwave {
     }
 }
 
-pub struct SynthwaveWide(Scene);
+#[cfg(test)]
+mod tests {
+    use super::Layout;
 
-impl Canvas for SynthwaveWide {
-    const NAME: &'static str = "synthwave-wide";
-    const FPS: u32 = Synthwave::FPS;
-    const PALETTE: &'static [u32] = WIDE_PALETTE;
-    /// A night of deep purple rather than black.
-    const GROUND: u32 = hex("#0b0418");
-
-    fn new(cols: usize, rows: usize) -> Self {
-        Self(Scene::new(Layout::fit(cols, rows)))
-    }
-
-    fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        self.0.frame(t, out);
+    /// The golden test needs upstream's checkout; this holds the layout to
+    /// upstream's literals without it.
+    #[test]
+    fn fit_at_upstreams_grid_is_upstreams_layout() {
+        let o = Layout::ORIGINAL;
+        assert_eq!(Layout::fit(o.cols, o.rows, false), o);
     }
 }

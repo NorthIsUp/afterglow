@@ -1,20 +1,21 @@
 //! tv-static: an old set showing snow, with a hum bar rolling through it. The
 //! dial clicks over, a test card rolls into place and holds, then is lost.
 //!
-//! Upstream's `set` option is on by default and always on here.
-//! `TV_STATIC_COLOR` (on by default) paints the set in the twin's colours:
-//! the card's bars in their own, a grey cabinet and an amber dial. Off, it is
-//! upstream's one ink, cell for cell.
+//! Drawn at the panel's size in one of two forms. By default the panel is the
+//! screen: the tube's rounded corners meet its edges inside a thin bezel, the
+//! snow, hum bar and card fill all of it, and the channel dial is set into the
+//! bezel's foot. `TV_STATIC_SET=1` draws upstream's set instead, scaled to the
+//! panel's height (or width) and centred, its screen as big as the set allows;
+//! a panel too small for a legible set gets the screen form. Upstream's `set`
+//! option is that form, always on.
 //!
-//! `tv-static-wide` makes the panel the screen: the tube's rounded corners
-//! meet its edges inside a thin bezel, the snow, hum bar and card fill all
-//! of it, and the channel knob is a dial set into the bezel's foot. A 4:3 set
-//! centred on a 3.2:1 panel would leave as much black beside it as the
-//! original does, and a room around it would shrink the snow to a third of
-//! the glass.
+//! `TV_STATIC_COLOR` (on by default) paints either form: the card's bars in
+//! their own colours, a grey cabinet or bezel and an amber dial. With the set
+//! on and colour off, at upstream's 58x26, it is upstream's picture cell for
+//! cell.
 
 use super::math::{js_round, smooth};
-use super::{hex, text, Canvas, Piece};
+use super::{hex, text, Canvas};
 use crate::grid::Cell;
 
 const COLS: usize = 58;
@@ -54,16 +55,6 @@ struct Layout {
     stride: i32,
 }
 
-const ORIGINAL: Layout = Layout {
-    cols: COLS,
-    x0: 4,
-    y0: 7,
-    sw: 39,
-    sh: 15,
-    dial: 9 * COLS + 49,
-    stride: 97,
-};
-
 impl Layout {
     /// The whole grid inside a one-cell bezel.
     fn fit(cols: usize, rows: usize) -> Self {
@@ -92,10 +83,23 @@ fn hash(a: i32, b: i32, c: i32) -> f64 {
     f64::from(h ^ (h >> 16)) / 4_294_967_296.0
 }
 
-/// The set: cabinet, rounded screen bezel, two knobs, a grille, legs and ears.
-fn draw_set() -> Vec<Vec<char>> {
-    let mut g = vec![vec![' '; COLS]; ROWS];
-    let mut boxed = |x0: usize, y0: usize, x1: usize, y1: usize, c: [char; 6]| {
+/// Upstream's set as it lands on a `cols x rows` grid: its own 58x26
+/// drawing, every coordinate scaled to the largest set of that shape the grid
+/// holds and the whole centred, with the picture area inside its screen.
+/// None when that set would be too small to read.
+fn draw_set(cols: usize, rows: usize) -> Option<(Vec<Vec<char>>, Layout)> {
+    let h = rows.min(cols * ROWS / COLS);
+    let w = cols.min((h as f64 * COLS as f64 / ROWS as f64).round() as usize);
+    if w < COLS * 2 / 3 || h < ROWS * 2 / 3 {
+        return None;
+    }
+    let (ox, oy) = ((cols - w) / 2, (rows - h) / 2);
+    let (fx, fy) = ((w - 1) as f64 / (COLS - 1) as f64, (h - 1) as f64 / (ROWS - 1) as f64);
+    let x = |v: usize| ox + (v as f64 * fx).round() as usize;
+    let y = |v: usize| oy + (v as f64 * fy).round() as usize;
+    let mut g = vec![vec![' '; cols]; rows];
+    let mut boxed = |(x0, y0, x1, y1): (usize, usize, usize, usize), c: [char; 6]| {
+        let (x0, y0, x1, y1) = (x(x0), y(y0), x(x1), y(y1));
         g[y0][x0 + 1..x1].fill(c[4]);
         g[y1][x0 + 1..x1].fill(c[4]);
         for row in &mut g[y0 + 1..y1] {
@@ -108,35 +112,60 @@ fn draw_set() -> Vec<Vec<char>> {
         g[y1][x1] = c[3];
     };
     let round = ['╭', '╮', '╰', '╯', '─', '│'];
-    boxed(1, 5, 56, 23, round);
-    boxed(3, 6, 43, 22, round);
-    boxed(46, 8, 52, 10, round); // the channel knob
-    boxed(46, 12, 52, 14, round); // the volume knob
-    boxed(45, 16, 53, 21, ['┌', '┐', '└', '┘', '─', '│']); // the speaker
-    for row in &mut g[17..=20] {
-        row[46..=52].fill('═');
+    boxed((1, 5, 56, 23), round);
+    boxed((3, 6, 43, 22), round);
+    boxed((46, 8, 52, 10), round); // the channel knob
+    boxed((46, 12, 52, 14), round); // the volume knob
+    boxed((45, 16, 53, 21), ['┌', '┐', '└', '┘', '─', '│']); // the speaker
+    for row in &mut g[y(17)..=y(20)] {
+        row[x(46)..=x(52)].fill('═');
     }
-    g[13][49] = '╲';
-    let mut put = |x: usize, y: usize, s: &str| {
-        for (i, ch) in s.chars().enumerate() {
-            g[y][x + i] = ch;
+    g[y(13)][x(49)] = '╲';
+    // The antenna's base, as tall as the gap down to the cabinet.
+    let foot: Vec<char> = "▄▄███▄▄".chars().collect();
+    for (n, row) in g[y(4)..y(5)].iter_mut().enumerate() {
+        for (i, c) in row[x(25)..=x(31)].iter_mut().enumerate() {
+            *c = if n == 0 {
+                foot[((i as f64 / fx).round() as usize).min(6)]
+            } else {
+                '█'
+            };
+        }
+    }
+    // Rods and legs: straight runs between upstream's ends, a cell a row,
+    // reaching the base and the cabinet however far apart scaling sets them.
+    let mut line = |(r0, c0): (usize, usize), (r1, c1): (usize, usize), ch: char| {
+        let (c0, c1) = (c0 as f64, c1 as f64);
+        let lo = r0.min(r1);
+        for (n, row) in g[lo..=r0.max(r1)].iter_mut().enumerate() {
+            let f = if r0 == r1 {
+                0.0
+            } else {
+                ((lo + n) as f64 - r0 as f64) / (r1 as f64 - r0 as f64)
+            };
+            row[(c0 + (c1 - c0) * f).round() as usize] = ch;
         }
     };
-    put(25, 4, "▄▄███▄▄");
-    put(5, 24, "╱");
-    put(4, 25, "╱");
-    put(52, 24, "╲");
-    put(53, 25, "╲");
-    for k in 1..=4 {
-        g[4 - k][25 - k] = '╲';
-        g[4 - k][31 + k] = '╱';
-    }
-    g[0][21] = 'o';
-    g[0][35] = 'o';
-    g
+    line((y(23) + 1, x(5)), (y(25), x(4)), '╱');
+    line((y(23) + 1, x(52)), (y(25), x(53)), '╲');
+    line((y(4) - 1, x(24)), (y(0), x(21)), '╲');
+    line((y(4) - 1, x(32)), (y(0), x(35)), '╱');
+    g[y(0)][x(21)] = 'o';
+    g[y(0)][x(35)] = 'o';
+    let (sw, sh) = (x(43) - x(3) - 1, y(22) - y(6) - 1);
+    let lay = Layout {
+        cols,
+        x0: x(3) + 1,
+        y0: y(6) + 1,
+        sw,
+        sh,
+        dial: y(9) * cols + x(49),
+        stride: 97.max(sw as i32),
+    };
+    Some((g, lay))
 }
 
-/// The wide set: a bezel round the panel's edge, the dial in its foot.
+/// The screen form's set: a bezel round the panel's edge, the dial in its foot.
 fn draw_bezel(cols: usize, rows: usize) -> Vec<Vec<char>> {
     let mut g = vec![vec![' '; cols]; rows];
     if cols < 3 || rows < 3 {
@@ -250,7 +279,7 @@ fn draw_card(sw: usize, sh: usize) -> Vec<Px> {
     card
 }
 
-/// The twin's colours: snow in the set's blue-white (entry 0, which the
+/// The colours: snow in the set's blue-white (entry 0, which the
 /// snow's cells already carry), the card's bars in their real colours, a
 /// grey bezel and an amber dial.
 const WHITE: u16 = 1;
@@ -260,25 +289,21 @@ const BAR_TONES: [u16; 7] = [1, 2, 3, 4, 5, 6, 7];
 const CASTLE_TONES: [u16; 7] = [7, 0, 5, 0, 3, 0, 1];
 const BEZEL: u16 = 8;
 const DIAL_INK: u16 = 9;
-const fn palette(snow: u32) -> [u32; 10] {
-    [
-        snow,
-        hex("#e8e8e8"),
-        hex("#f0e040"),
-        hex("#40e0e8"),
-        hex("#50e050"),
-        hex("#e050e0"),
-        hex("#f04040"),
-        hex("#4c6cff"),
-        hex("#6a7080"),
-        hex("#ffb347"),
-    ]
-}
-const WIDE_PALETTE: &[u32] = &palette(hex("#d8e8ff"));
-/// Upstream's ink first, so the knob off draws exactly what upstream does.
-const SET_PALETTE: &[u32] = &palette(hex("#cfe6ff"));
+/// Upstream's ink first, so colour off draws exactly what upstream does.
+const PALETTE: &[u32] = &[
+    hex("#cfe6ff"),
+    hex("#e8e8e8"),
+    hex("#f0e040"),
+    hex("#40e0e8"),
+    hex("#50e050"),
+    hex("#e050e0"),
+    hex("#f04040"),
+    hex("#4c6cff"),
+    hex("#6a7080"),
+    hex("#ffb347"),
+];
 
-/// Each card cell's colour, for the twin: its bar's, or white for the
+/// Each card cell's colour: its bar's, or white for the
 /// circle, the crosshair and the bottom strip.
 fn card_tones(card: &[Px], sw: usize, sh: usize) -> Vec<u16> {
     (0..sw * sh)
@@ -299,7 +324,7 @@ struct Scene {
     lay: Layout,
     set: Vec<Cell>,
     card: Vec<Px>,
-    /// The twin's `card_tones`; empty upstream, whose card is one ink.
+    /// `card_tones`; empty with colour off, the card in one ink.
     tone: Vec<u16>,
     /// Which picture cells the curved tube leaves in.
     inside: Vec<bool>,
@@ -425,40 +450,33 @@ impl Scene {
 
 pub struct TvStatic(Scene);
 
-impl Piece for TvStatic {
+impl Canvas for TvStatic {
     const NAME: &'static str = "tv-static";
+    #[cfg(test)]
     const COLS: usize = COLS;
+    #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = FPS;
-    const CELL: usize = 2;
-    const PALETTE: &'static [u32] = SET_PALETTE;
-    const GROUND: u32 = 0;
     #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("TV_STATIC_COLOR", "0")];
-
-    fn new() -> Self {
-        let colour = crate::env_num(&["TV_STATIC_COLOR"], 1, 0, 1) == 1;
-        Self(Scene::new(ORIGINAL, draw_set(), colour))
-    }
-
-    fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        self.0.frame(t, out);
-    }
-}
-
-pub struct TvStaticWide(Scene);
-
-impl Canvas for TvStaticWide {
-    const NAME: &'static str = "tv-static-wide";
-    const FPS: u32 = FPS;
-    const PALETTE: &'static [u32] = WIDE_PALETTE;
+    const UPSTREAM: &'static [(&'static str, &'static str)] =
+        &[("TV_STATIC_SET", "1"), ("TV_STATIC_COLOR", "0")];
 
     fn new(cols: usize, rows: usize) -> Self {
-        Self(Scene::new(
-            Layout::fit(cols, rows),
-            draw_bezel(cols, rows),
-            true,
-        ))
+        let set = crate::env_num(&["TV_STATIC_SET"], 0, 0, 1) == 1;
+        let colour = crate::env_num(&["TV_STATIC_COLOR"], 1, 0, 1) == 1;
+        let (chars, lay) = set
+            .then(|| draw_set(cols, rows))
+            .flatten()
+            .unwrap_or_else(|| (draw_bezel(cols, rows), Layout::fit(cols, rows)));
+        Self(Scene::new(lay, chars, colour))
+    }
+
+    fn palette(&self) -> &'static [u32] {
+        if self.0.tone.is_empty() {
+            &PALETTE[..1]
+        } else {
+            PALETTE
+        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
