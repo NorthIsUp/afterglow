@@ -197,8 +197,8 @@ pub fn effective(knob: &Knob) -> String {
 
 /// `TOASTER_TOAST_PCT` -> `toast pct`, given the saver's other keys: the
 /// longest underscore-ended prefix they all share is the saver's own and says
-/// nothing — unless that would leave every label one word. A saver with one
-/// knob keeps all but its first word.
+/// nothing — unless that would leave a label of a letter or two. A saver with
+/// one knob keeps all but its first word.
 pub fn label(key: &str, all: &[Knob]) -> String {
     let mut cut = key.find('_').map_or(0, |i| i + 1);
     if all.len() > 1 {
@@ -213,9 +213,8 @@ pub fn label(key: &str, all: &[Knob]) -> String {
         });
         cut = first[..shared].rfind('_').map_or(0, |i| i + 1);
         // `MATRIX_CELL_W` and `_H` share `MATRIX_CELL_`, which would leave
-        // `w` and `h`: when the shared part takes all but the last word of
-        // every key, it has eaten a word that belongs to the label.
-        if cut > 0 && all.iter().all(|k| !k.key[cut..].contains('_')) {
+        // `w` and `h`: a label that short has lost a word it needed.
+        if cut > 0 && all.iter().any(|k| k.key.len() - cut <= 2) {
             cut = first[..cut - 1].rfind('_').map_or(0, |i| i + 1);
         }
     }
@@ -400,5 +399,11 @@ mod tests {
         assert_eq!(label("FIRE_SCALE", &[num("FIRE_SCALE", 0, 0, 0)]), "scale");
         let matrix = [num("MATRIX_CELL_W", 0, 0, 0), num("MATRIX_CELL_H", 0, 0, 0)];
         assert_eq!(label("MATRIX_CELL_H", &matrix), "cell h");
+        // The tour off: only its switch and the title left, both still words.
+        let scene = [
+            num("ASCII_REST_TOUR", 0, 0, 1),
+            num("ASCII_REST_TITLE", 0, 0, 1),
+        ];
+        assert_eq!(label("ASCII_REST_TOUR", &scene), "tour");
     }
 }

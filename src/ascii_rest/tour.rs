@@ -796,9 +796,9 @@ mod tests {
                 frame(&mut on, &mut off, &mut a, &mut b);
                 assert!(on.pic == off.pic, "the title reached the picture");
                 let g = &on.cam.grid;
-                let (rows, cw, ch) = (g.rows(), g.cell_w(), g.cell_h());
-                let t = on.title.as_ref().unwrap();
-                let corner = |x: usize, y: usize| x < t.w() * cw && y >= (rows - t.h()) * ch;
+                let (cols, rows, cw, ch) = (g.cols(), g.rows(), g.cell_w(), g.cell_h());
+                let (tw, th) = on.title.as_ref().unwrap().size(cols, rows).unwrap();
+                let corner = |x: usize, y: usize| x < tw * cw && y >= (rows - th) * ch;
                 let mut inside = 0;
                 for y in 0..panel.h {
                     for x in 0..panel.w {

@@ -52,8 +52,9 @@ ascii.rest's thirteen halftone scenes — landscapes shaded cell by cell and dra
 The title is stamped onto the grid after the picture is mapped, so a piece's
 `frame` — and the golden test — never sees it; off, it costs one `Option` check
 a frame. A scene's cell is a few pixels wide, so its title is the font's glyphs
-drawn in dots, rows paired and blank columns trimmed; a character piece's cell
-holds a glyph, so it gets one per cell.
+drawn in dots, rows paired and blank columns trimmed. A tour close-up's cells
+are several times wider, so once the dots would take more than half the width
+the title switches to one glyph per cell, as a character piece's always is.
 
 ## The scene tour
 
