@@ -26,7 +26,7 @@ design notes.
   falls back to `sc`)
 - `MOIRE_CELL_W` / `MOIRE_CELL_H` (px, 8..64 / 24..128, default 8 / 32)
 - `MOIRE_SPACING` (line pitch of the first grating, px, 6..400, default 64;
-  each further grating is 11% wider so they beat)
+  each further grating adds 11% of that pitch, so they beat)
 - `MOIRE_DUTY` (percent of each period that is ink, 2..90, default 22)
 - `MOIRE_SPIN` (rotation, millidegrees per second, 0..60000, default 400;
   alternate gratings turn opposite ways)

@@ -26,9 +26,12 @@ design notes.
 - `FRACTAL_FADE_MS` (dip to dark around each cut, ms, 0..5000, default 900;
   capped at 40% of the cycle)
 - `FRACTAL_ZOOM_PCT` (percent of the view width the zoom eats each second,
-  1..90, default 22; held so a cycle zooms at most 16 octaves)
+  1..90, default 22; held so a cycle zooms at most 16 octaves, then scaled down
+  per family to the depth that family was measured to keep structure at)
 - `FRACTAL_JULIA_DRIFT` (how fast the Julia constant's argument turns,
   milli-radians per second, 0..2000, default 90)
 - `FRACTAL_ITER` (iteration budget at the start of a zoom, 16..512, default 40;
   rises by 8 per octave of zoom)
-- `FRACTAL_ITER_MAX` (cap on that budget, 32..2000, default 110)
+- `FRACTAL_ITER_MAX` (cap on that budget, 32..2000, default 110). Some
+  families run under a lower fixed cap whatever this says: the three Newtons
+  24, Nova and the two magnets 40, the power-4 and power-5 Multibrots 64
