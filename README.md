@@ -148,16 +148,16 @@ Ports of [ascii.rest](https://ascii.rest)'s scenes; the camera slowly tours each
 
 One ink each. Every piece also has a `-wide` twin drawn at the panel's own size, any shape, with no bars. The shared engine: [the ascii.rest ports](docs/ascii-rest.md#character-pieces).
 
-| `SAVER`                                                   | `-wide`                                                        | What                                                                            |
-| --------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| [`aurora`](docs/savers/aurora.md)                         | [`aurora-wide`](docs/savers/aurora.md#aurora-wide)             | A curtain of light over a spruce treeline at night.                             |
-| [`synthwave`](docs/savers/synthwave.md)                   | [`synthwave-wide`](docs/savers/synthwave.md#synthwave-wide)    | The eighties horizon.                                                           |
-| [`tv-static`](docs/savers/tv-static.md)                   | [`tv-static-wide`](docs/savers/tv-static.md#tv-static-wide)    | An old set showing snow, with a hum bar rolling through it.                     |
-| [`vinyl`](docs/savers/vinyl.md)                           | [`vinyl-wide`](docs/savers/vinyl.md#vinyl-wide)                | A record turning on a turntable, seen from above.                               |
-| [`lighthouse`](docs/savers/lighthouse.md)                 | [`lighthouse-wide`](docs/savers/lighthouse.md#lighthouse-wide) | A banded lighthouse on a heap of rocks at night.                                |
-| [`fractal-tree`](docs/savers/fractal-tree.md)             |                                                                | A trunk that forks seven times over into lobes of leaves, bending in the wind.  |
-| [`reaction-diffusion`](docs/savers/reaction-diffusion.md) |                                                                | A Gray-Scott reaction whose spots on the left give way to stripes on the right. |
-| [`double-pendulum`](docs/savers/double-pendulum.md)       |                                                                | Two equal rods hung end to end from one pivot, stepped with RK4.                |
+| `SAVER`                                                   | `-wide`                                                              | What                                                                            |
+| --------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| [`aurora`](docs/savers/aurora.md)                         | [`aurora-wide`](docs/savers/aurora.md#aurora-wide)                   | A curtain of light over a spruce treeline at night.                             |
+| [`synthwave`](docs/savers/synthwave.md)                   | [`synthwave-wide`](docs/savers/synthwave.md#synthwave-wide)          | The eighties horizon.                                                           |
+| [`tv-static`](docs/savers/tv-static.md)                   | [`tv-static-wide`](docs/savers/tv-static.md#tv-static-wide)          | An old set showing snow, with a hum bar rolling through it.                     |
+| [`vinyl`](docs/savers/vinyl.md)                           | [`vinyl-wide`](docs/savers/vinyl.md#vinyl-wide)                      | A record turning on a turntable, seen from above.                               |
+| [`lighthouse`](docs/savers/lighthouse.md)                 | [`lighthouse-wide`](docs/savers/lighthouse.md#lighthouse-wide)       | A banded lighthouse on a heap of rocks at night.                                |
+| [`fractal-tree`](docs/savers/fractal-tree.md)             | [`fractal-tree-wide`](docs/savers/fractal-tree.md#fractal-tree-wide) | A trunk that forks seven times over into lobes of leaves, bending in the wind.  |
+| [`reaction-diffusion`](docs/savers/reaction-diffusion.md) |                                                                      | A Gray-Scott reaction whose spots on the left give way to stripes on the right. |
+| [`double-pendulum`](docs/savers/double-pendulum.md)       |                                                                      | Two equal rods hung end to end from one pivot, stepped with RK4.                |
 
 ## Docs
 

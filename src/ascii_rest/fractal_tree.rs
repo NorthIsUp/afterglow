@@ -4,11 +4,17 @@
 //!
 //! The limb ends stay `f32` as upstream's `Float32Array`s: a child grows from
 //! its parent's rounded end, so an f64 copy drifts down the tree.
+//!
+//! `fractal-tree-wide` grows a grove across the panel: upstream's tree, scaled
+//! to the panel's height, in the middle, smaller trees of other seeds either
+//! side out past both edges, all on one ground line that runs edge to edge.
+//! The wind reaches each tree a moment after the one to its left, so a gust
+//! crosses the grove.
 
 use std::f64::consts::PI;
 
 use super::math::{hash2, js_round, sign_or_one, Mulberry32};
-use super::{hex, text, Piece};
+use super::{hex, text, Canvas, Piece};
 use crate::grid::Cell;
 
 const DEPTH: u8 = 7;
@@ -23,13 +29,15 @@ const TAU: f64 = PI * 2.0;
 const MAX_LEAN: f64 = 1.1;
 /// Upstream's `seed` option, at its default.
 const SEED: u32 = 4;
+const COLS: usize = 60;
+const ROWS: usize = 24;
 /// The row the trunk stands on.
 const GROUND: usize = 23;
 /// The row the trunk first forks at.
 const FORK: usize = 15;
 const X0: f64 = 60.0 / 2.0 - 0.5;
-
-
+/// The trunk's first limbs, in columns.
+const LEN: f64 = 6.0;
 
 /// The wind: a slow sway, a quicker shiver and a gust, all within LOOP.
 fn wind(u: f64) -> f64 {
@@ -86,27 +94,77 @@ fn grow(limbs: &mut Vec<Limb>, rand: &mut Mulberry32, parent: Option<usize>, dep
     }
 }
 
-pub struct FractalTree {
+/// One tree: where it stands, how big, and its limbs and lobes.
+struct Tree {
+    x0: f64,
+    fork: usize,
+    /// Upstream's sizes to this tree's.
+    s: f64,
+    /// Seconds the wind reaches it late.
+    lag: f64,
     limbs: Vec<Limb>,
     lobes: Vec<Lobe>,
     order: Vec<Placed>,
+    px: Vec<f32>,
+    py: Vec<f32>,
+    pa: Vec<f32>,
+}
+
+impl Tree {
+    fn new(x0: f64, fork: usize, s: f64, lag: f64, seed: u32) -> Self {
+        let mut rand = Mulberry32(seed);
+        let mut limbs = Vec::new();
+        grow(&mut limbs, &mut rand, None, 1, LEN * s);
+        let mut lobes = Vec::new();
+        for (i, l) in limbs.iter().enumerate() {
+            if l.depth != LOBE {
+                continue;
+            }
+            let mut end = i + 1;
+            while end < limbs.len() && limbs[end].depth > LOBE {
+                end += 1;
+            }
+            let ph = rand.next() * TAU;
+            let bump = 0.12 + rand.next() * 0.1;
+            lobes.push(Lobe {
+                start: i,
+                end,
+                ph,
+                bump,
+            });
+        }
+        Self {
+            x0,
+            fork,
+            s,
+            lag,
+            order: vec![Placed::default(); lobes.len()],
+            px: vec![0.0; limbs.len()],
+            py: vec![0.0; limbs.len()],
+            pa: vec![0.0; limbs.len()],
+            limbs,
+            lobes,
+        }
+    }
+}
+
+/// One tree's strokes and leaves, cell by cell, before it joins the grove.
+struct Canopy {
+    cols: usize,
+    rows: usize,
     ink: Vec<u8>,
     depth_at: Vec<u8>,
     shade: Vec<f32>,
     /// How far inside the crown.
     inner: Vec<f32>,
-    px: Vec<f32>,
-    py: Vec<f32>,
-    pa: Vec<f32>,
-    cells: [Cell; 128],
 }
 
-impl FractalTree {
+impl Canopy {
     fn put(&mut self, c: i64, r: i64, ch: u8, d: u8) {
-        if c < 0 || c >= Self::COLS as i64 || r < 0 || r >= Self::ROWS as i64 {
+        if c < 0 || c >= self.cols as i64 || r < 0 || r >= self.rows as i64 {
             return;
         }
-        let k = c as usize + r as usize * Self::COLS;
+        let k = c as usize + r as usize * self.cols;
         if self.depth_at[k] != 0 && self.depth_at[k] <= d {
             return;
         }
@@ -143,71 +201,20 @@ impl FractalTree {
             last = Some(c);
         }
     }
-}
 
-impl Piece for FractalTree {
-    const NAME: &'static str = "fractal-tree";
-    const COLS: usize = 60;
-    const ROWS: usize = 24;
-    const FPS: u32 = 15;
-    const CELL: usize = 2;
-    const PALETTE: &'static [u32] = &[hex("#9be36b")];
-    const GROUND: u32 = 0;
-
-    fn new() -> Self {
-        let n = Self::COLS * Self::ROWS;
-        let mut rand = Mulberry32(SEED);
-        let mut limbs = Vec::new();
-        grow(&mut limbs, &mut rand, None, 1, 6.0);
-        let mut lobes = Vec::new();
-        for (i, l) in limbs.iter().enumerate() {
-            if l.depth != LOBE {
-                continue;
-            }
-            let mut end = i + 1;
-            while end < limbs.len() && limbs[end].depth > LOBE {
-                end += 1;
-            }
-            let ph = rand.next() * TAU;
-            let bump = 0.12 + rand.next() * 0.1;
-            lobes.push(Lobe {
-                start: i,
-                end,
-                ph,
-                bump,
-            });
-        }
-        let mut cells = [Cell::CLEAR; 128];
-        for (b, cell) in cells.iter_mut().enumerate().take(0x7f).skip(0x20) {
-            *cell = text::cell(b as u8 as char);
-        }
-        Self {
-            order: vec![Placed::default(); lobes.len()],
-            px: vec![0.0; limbs.len()],
-            py: vec![0.0; limbs.len()],
-            pa: vec![0.0; limbs.len()],
-            limbs,
-            lobes,
-            ink: vec![b' '; n],
-            depth_at: vec![0; n],
-            shade: vec![0.0; n],
-            inner: vec![0.0; n],
-            cells,
-        }
-    }
-
-    fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        let (cols, rows) = (Self::COLS, Self::ROWS);
+    /// `tree` at `t`, standing on row `ground`, into a cleared canopy.
+    fn draw(&mut self, tree: &mut Tree, ground: usize, t: f64) {
+        let (cols, rows, s) = (self.cols, self.rows, tree.s);
         self.ink.fill(b' ');
         self.depth_at.fill(0);
         self.shade.fill(-1.0);
         self.inner.fill(0.0);
         // The trunk: two cells of heartwood between its edges, flaring into
         // roots at the foot.
-        for r in FORK..=GROUND {
+        for r in tree.fork..=ground {
             let r_ = r as i64;
-            let c = js_round(X0 - 1.0) as i64;
-            let flare = (r_ - GROUND as i64 + 2).max(0);
+            let c = js_round(tree.x0 - 1.0) as i64;
+            let flare = (r_ - ground as i64 + 2).max(0);
             for i in -flare..2 + flare {
                 self.put(c + i, r_, b'#', 1);
             }
@@ -215,19 +222,19 @@ impl Piece for FractalTree {
             self.put(c + 2 + flare, r_, if flare != 0 { b'\\' } else { b'|' }, 1);
         }
         // Each limb feels the wind a moment after its parent.
-        for i in 0..self.limbs.len() {
+        for i in 0..tree.limbs.len() {
             let (parent, depth, turn, len) = {
-                let l = &self.limbs[i];
+                let l = &tree.limbs[i];
                 (l.parent, l.depth, l.turn, l.len)
             };
             let df = f64::from(depth);
-            let bend = (0.02 + 0.035 * df) * (0.25 + wind(t - df * 0.12));
+            let bend = (0.02 + 0.035 * df) * (0.25 + wind(t - tree.lag - df * 0.12));
             let (x, y, mut a) = match parent {
-                None => (X0 + 0.5, FORK as f64 + 0.5, 0.0),
+                None => (tree.x0 + 0.5, tree.fork as f64 + 0.5, 0.0),
                 Some(p) => (
-                    f64::from(self.px[p]),
-                    f64::from(self.py[p]),
-                    f64::from(self.pa[p]),
+                    f64::from(tree.px[p]),
+                    f64::from(tree.py[p]),
+                    f64::from(tree.pa[p]),
                 ),
             };
             // Limbs reach for the light: each turns a little back toward upright.
@@ -237,16 +244,16 @@ impl Piece for FractalTree {
             if depth < LOBE + 1 {
                 self.stroke(x, y, x1, y1, depth);
             }
-            self.px[i] = x1 as f32;
-            self.py[i] = y1 as f32;
-            self.pa[i] = a as f32;
+            tree.px[i] = x1 as f32;
+            tree.py[i] = y1 as f32;
+            tree.pa[i] = a as f32;
         }
         // The lobes, highest first, so each lower one stands in front of the
         // shaded underside of the one above it. The light falls on the crown
         // as a whole from the upper left, and on each lobe the same way.
-        let (px, py) = (&self.px, &self.py);
+        let (px, py) = (&tree.px, &tree.py);
         let (mut x0, mut x1, mut y0, mut y1) = (cols as f64, 0.0f64, rows as f64, 0.0f64);
-        for b in &self.lobes {
+        for b in &tree.lobes {
             for j in b.start..b.end {
                 let (x, y) = (f64::from(px[j]), f64::from(py[j]));
                 x0 = x0.min(x);
@@ -256,10 +263,10 @@ impl Piece for FractalTree {
             }
         }
         let (gx, gy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-        let (grx, gry) = ((x1 - x0) / 2.0 + 3.0, (y1 - y0) / 2.0 + 1.5);
-        for (li, b) in self.lobes.iter().enumerate() {
+        let (grx, gry) = ((x1 - x0) / 2.0 + 3.0 * s, (y1 - y0) / 2.0 + 1.5 * s);
+        for (li, b) in tree.lobes.iter().enumerate() {
             // Over the twigs' ends and the fork they spring from.
-            let p = self.limbs[b.start]
+            let p = tree.limbs[b.start]
                 .parent
                 .expect("a lobe's limb has a parent");
             let ends = (b.start..b.end).chain(std::iter::once(p));
@@ -275,19 +282,19 @@ impl Piece for FractalTree {
                 wx = wx.max((f64::from(px[j]) - cx).abs());
                 wy = wy.max((f64::from(py[j]) - cy).abs());
             }
-            self.order[li] = Placed {
+            tree.order[li] = Placed {
                 lobe: li,
                 cx,
-                cy: cy - 0.4,
-                rx: 1.8 + wx * 0.9,
-                ry: 1.0 + wy * 0.9,
+                cy: cy - 0.4 * s,
+                rx: 1.8 * s + wx * 0.9,
+                ry: 1.0 * s + wy * 0.9,
             };
         }
         // Stable, as upstream's sort is; insertion so it never allocates.
-        for i in 1..self.order.len() {
+        for i in 1..tree.order.len() {
             let mut j = i;
-            while j > 0 && self.order[j - 1].cy > self.order[j].cy {
-                self.order.swap(j - 1, j);
+            while j > 0 && tree.order[j - 1].cy > tree.order[j].cy {
+                tree.order.swap(j - 1, j);
                 j -= 1;
             }
         }
@@ -297,9 +304,9 @@ impl Piece for FractalTree {
             cy,
             rx,
             ry,
-        } in &self.order
+        } in &tree.order
         {
-            let b = &self.lobes[lobe];
+            let b = &tree.lobes[lobe];
             let mut r = (cy - ry - 1.0).floor();
             while r <= cy + ry + 1.0 {
                 let mut c = (cx - rx - 1.0).floor();
@@ -346,15 +353,153 @@ impl Piece for FractalTree {
                 2 + i
             }];
         }
+    }
+}
+
+/// The ground line's ends: columns left bare, then columns of dots before
+/// the rule.
+struct Ground {
+    row: usize,
+    bare: usize,
+    dots: usize,
+}
+
+struct Scene {
+    /// Back to front.
+    trees: Vec<Tree>,
+    ground: Ground,
+    canopy: Canopy,
+    ink: Vec<u8>,
+    cells: [Cell; 128],
+}
+
+impl Scene {
+    fn new(cols: usize, rows: usize, trees: Vec<Tree>, ground: Ground) -> Self {
+        let n = cols * rows;
+        let mut cells = [Cell::CLEAR; 128];
+        for (b, cell) in cells.iter_mut().enumerate().take(0x7f).skip(0x20) {
+            *cell = text::cell(b as u8 as char);
+        }
+        Self {
+            trees,
+            ground,
+            canopy: Canopy {
+                cols,
+                rows,
+                ink: vec![b' '; n],
+                depth_at: vec![0; n],
+                shade: vec![0.0; n],
+                inner: vec![0.0; n],
+            },
+            ink: vec![b' '; n],
+            cells,
+        }
+    }
+
+    fn frame(&mut self, t: f64, out: &mut [Cell]) {
+        let cols = self.canopy.cols;
+        self.ink.fill(b' ');
+        for tree in &mut self.trees {
+            self.canopy.draw(tree, self.ground.row, t);
+            for (o, &i) in self.ink.iter_mut().zip(&self.canopy.ink) {
+                if i != b' ' {
+                    *o = i;
+                }
+            }
+        }
         // The ground either side of the roots.
-        for c in 3..cols - 3 {
-            let k = c + GROUND * cols;
+        let Ground { row, bare, dots } = self.ground;
+        for c in bare..cols - bare {
+            let k = c + row * cols;
             if self.ink[k] == b' ' {
-                self.ink[k] = if c < 6 || c > cols - 7 { b'.' } else { b'_' };
+                self.ink[k] = if c < bare + dots || c + bare + dots >= cols {
+                    b'.'
+                } else {
+                    b'_'
+                };
             }
         }
         for (cell, &b) in out.iter_mut().zip(self.ink.iter()) {
             *cell = self.cells[b as usize];
         }
+    }
+}
+
+pub struct FractalTree(Scene);
+
+impl Piece for FractalTree {
+    const NAME: &'static str = "fractal-tree";
+    const COLS: usize = COLS;
+    const ROWS: usize = ROWS;
+    const FPS: u32 = 15;
+    const CELL: usize = 2;
+    const PALETTE: &'static [u32] = &[hex("#9be36b")];
+    const GROUND: u32 = 0;
+
+    fn new() -> Self {
+        let tree = Tree::new(X0, FORK, 1.0, 0.0, SEED);
+        let ground = Ground {
+            row: GROUND,
+            bare: 3,
+            dots: 3,
+        };
+        Self(Scene::new(COLS, ROWS, vec![tree], ground))
+    }
+
+    fn frame(&mut self, t: f64, out: &mut [Cell]) {
+        self.0.frame(t, out);
+    }
+}
+
+pub struct FractalTreeWide(Scene);
+
+impl Canvas for FractalTreeWide {
+    const NAME: &'static str = "fractal-tree-wide";
+    const FPS: u32 = FractalTree::FPS;
+    const PALETTE: &'static [u32] = FractalTree::PALETTE;
+
+    /// Upstream's tree scaled to the height in the middle, then trees of
+    /// 55% to 80% of it walking out from it either side until one stands past
+    /// the edge, the farthest first so the middle one is in front.
+    fn new(cols: usize, rows: usize) -> Self {
+        /// Half a full-size crown's width in columns, less a little so
+        /// neighbours' leaves touch.
+        const CROWN: f64 = 21.0;
+        let s = rows as f64 / ROWS as f64;
+        let ground = rows - 1;
+        let at = |x: f64, k: f64, seed: u32| {
+            let fork = ground.saturating_sub(((GROUND - FORK) as f64 * s * k).round() as usize);
+            Tree::new(x - 0.5, fork, s * k, 1.6 * x / cols as f64, seed)
+        };
+        let mid = cols as f64 / 2.0;
+        let mut trees = Vec::new();
+        let mut rng = Mulberry32(SEED + 100);
+        for side in [-1.0, 1.0] {
+            let (mut x, mut last) = (mid, 1.0);
+            while (x - mid).abs() < mid + 4.0 {
+                let k = 0.55 + 0.25 * rng.next();
+                x += side * CROWN * s * (last + k);
+                last = k;
+                trees.push((x, k));
+            }
+        }
+        // Farthest from the middle drawn first.
+        trees.sort_by(|a, b| (b.0 - mid).abs().total_cmp(&(a.0 - mid).abs()));
+        let mut grove: Vec<Tree> = trees
+            .iter()
+            .enumerate()
+            .map(|(i, &(x, k))| at(x, k, SEED + 1 + i as u32))
+            .collect();
+        grove.push(at(mid, 1.0, SEED));
+        let ground = Ground {
+            row: ground,
+            bare: 0,
+            dots: 0,
+        };
+        Self(Scene::new(cols, rows, grove, ground))
+    }
+
+    fn frame(&mut self, t: f64, out: &mut [Cell]) {
+        self.0.frame(t, out);
     }
 }
