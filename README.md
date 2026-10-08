@@ -62,7 +62,7 @@ falls back to `ascii` — a headless pod must never crash-loop on a typo.
 | `podracer` | First-person Boonta Eve: two podracer engines hang ahead of you on their cables, flaring and yawing independently as you turn, while an ochre canyon rips past on both sides. One ray per cell column finds the wall; the floor and sky fall out of the ground-plane solve. Arches you fly through, rock spires, slot canyons barely wider than the pod, heat shimmer over the rim, and every so often a rival's engine wash crossing the view. Full repaint — it damages most of the panel every frame, because most of the panel is moving. | `PODRACER_CELL` (px, 4..32, default 8), `PODRACER_SPEED` (course m/s, 40..900, default 300), `PODRACER_FOV` (focal as a percent of panel width, 30..200, default 78), `PODRACER_WIDTH` (canyon half-width in metres, 6..90, default 30), `PODRACER_PINCH` (how far a slot closes, percent, 0..90, default 64), `PODRACER_SPREAD` (engine separation, percent of panel width, 10..90, default 46), `PODRACER_ENGINE` (engine radius, percent of panel width, 3..30, default 7, capped at 22% of the aspect-corrected height), `PODRACER_SHIMMER` (0..100, default 70), `PODRACER_FEATURES` (arches and spires alive at once, 0..24, default 7), `PODRACER_WASH_SECS` (mean seconds between a rival's wash, 0 = off..600, default 9), `PODRACER_SEED` (0 = roll one from the clock and pid; any other value reproduces the run exactly) |
 | `speeder` | A first-person speeder-bike chase through the forest moon — enormous redwood trunks rush past at parallax while the bike weaves between them on two incommensurate sines, dappled canopy light streams over the mossy floor, and every so often a fallen trunk sweeps up out of frame to be ducked under or another bike flashes across the view. One spawn in twenty is aimed at where the camera WILL be, so the near misses are deliberate; a trunk moving too fast for the eye to hold an edge on is stippled rather than solid. Its grid is SQUARE, so all of the perspective is in cells and `SAVER_PIXEL_ASPECT` corrects it for free — the opposite choice to `warp`'s. | `SPEEDER_CELL` (px, 4..32, default 8, square), `SPEEDER_SPEED` (metres/sec, 10..300, default 58), `SPEEDER_TRUNKS` (8..400, default 60), `SPEEDER_FOV` (focal as a per-cent of COLUMNS, 20..200, default 62 — smaller is wider and faster-looking), `SPEEDER_HORIZON` (eye line as a per-cent of rows, 10..80, default 44), `SPEEDER_WEAVE` (swing off the path in DECIMETRES, 0..200, default 64; 0 flies straight), `SPEEDER_DAPPLE` (per-cent of the floor in a pool of light, 0..100, default 34), `SPEEDER_LOG_SECS` (mean seconds between fallen trunks, 0..600, default 16; 0 = off), `SPEEDER_RIDER_SECS` (mean seconds between other bikes, 0..600, default 12; 0 = off), `SPEEDER_SEED` (0 = roll one from the clock and pid; any other value reproduces the ride exactly) |
 | `xwing` | The Death Star run from the cockpit, in three acts on a loop: the station swelling out of a starfield, a low pass over its greebled surface, then the trench — walls closing in and the targeting computer swinging down over the view. Green fire comes in and red goes out in every act, TIE fighters cross, chase and pass the canopy, and anything a red bolt reaches explodes. | `XWING_SEED`, `XWING_APPROACH_SECS` / `XWING_SURFACE_SECS` / `XWING_TRENCH_SECS` (1..600, default 11 / 9 / 13), `XWING_SPEED` (world units/sec, 50..20000, default 900), `XWING_GREEBLE` (plating block size, 4..2000, default 60), `XWING_FOV` (focal length in thousandths of the visual panel width, 200..3000, default 800), `XWING_STARS` (0..4000, default 170), `XWING_TOWERS` (0..400, default 16), `XWING_BOLTS` (0..400, default 28), `XWING_TIE_SECS` (mean seconds between TIE sorties, 0..600, default 7; 0 = none), `XWING_TIES` (0..200, default 6), `XWING_BOOM_SECS` (mean seconds between surface explosions, 0..600, default 9; 0 = none), `XWING_BOOMS` (0..200, default 6), `XWING_PITCH_MS` (act 2's nose coming up, 0..10000, default 1600), `XWING_RISE_MS` (act 3's walls rising, 0..10000, default 1400), `XWING_CELL_W` / `XWING_CELL_H` (4..32, default 8 / 8) |
-| `alpine-dawn` `aurora-fjord` `deep-reef` `desert-night` `earthrise` `kyoto-dusk` `marine-drive` `misty-forest` `night-coast` `ocean-sunset` `storm-plains` `taj-dawn` `varanasi-ghats` | ascii.rest's thirteen halftone scenes — landscapes shaded cell by cell and drawn as dots whose size is their brightness. See [ascii.rest ports](#about-the-ascii-rest-ports). | none |
+| `alpine-dawn` `aurora-fjord` `deep-reef` `desert-night` `earthrise` `kyoto-dusk` `marine-drive` `misty-forest` `night-coast` `ocean-sunset` `storm-plains` `taj-dawn` `varanasi-ghats` | ascii.rest's thirteen halftone scenes — landscapes shaded cell by cell and drawn as dots whose size is their brightness. See [ascii.rest ports](#about-the-ascii-rest-ports); the camera slowly tours each one ([the tour](#the-scene-tour)). | `ASCII_REST_TOUR` (0..1, default 1; 0 is the fixed cover view), `ASCII_REST_TOUR_HOLD_SECS` (1..3600, default 14, each hold drawn from 60%..140% of it), `ASCII_REST_TOUR_MAX_ZOOM_PCT` (100..600, default 250, of the cover view's cell), `ASCII_REST_TOUR_SEED` (0 = roll one from the clock and pid; any other value reproduces the tour exactly) |
 | `plasma` `aurora` `synthwave` `tv-static` `vinyl` `lighthouse` `fractal-tree` `reaction-diffusion` `double-pendulum` | ascii.rest's character pieces, one ink each. See [ascii.rest ports](#about-the-ascii-rest-ports). | none |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
@@ -980,6 +980,27 @@ ASCII_REST_GOLDEN=/tmp/golden cargo test --release ascii_rest -- --ignored --noc
 
 Cost: night-coast measures 2.3x matrix per panel frame, plasma 1.0x.
 
+#### The scene tour
+
+For the halftone scenes the camera moves: it holds a view for 8-20 seconds,
+glides to the next over 3-6, and every third to fifth move pulls back to the
+cover view or briefly to the whole picture, ground-colour bars and all. Zoom is
+cell size, so every picture cell is still one grid cell and the dots just get
+bigger: up to 2.5x the cover cell, stepping through each integer width on the
+way. Close-ups go where the picture has something in it. Each move scores the
+frame on screen in 4x4-cell blocks (the dither's period) by contrast with
+their neighbours and by brightness. It frames a block drawn by that score
+(the moon, the lamp, the dome), or a corner or edge weighted the same way,
+and plays down anything the last three close-ups showed.
+
+A hold costs what the fixed view costs. While the tour holds the cover view it
+draws through the same grid, byte for byte. A glide repaints the whole panel
+at each new cell width, and on pine with 1 s holds (nearly all glide)
+night-coast measures 1.75x matrix against 1.49x untoured. The terminal host
+shows the tour; the web mirror always shows the cover view: each zoom step is a new geometry, and
+re-describing the mirror for each one would reconnect every viewer a dozen
+times per glide.
+
 ## Gotchas
 
 - **The mirror looks perfect while the panel is wrong** — the mirror publishes `saver.grid().cells()`, the frame we just _wrote_, not a read-back of the scanout. Anything that clobbers the panel downstream of that write (fbcon, another DRM client) is invisible to it, which is why it sat green for four days while the monitor showed console text. Fix: trust the mirror for "is the renderer running", never for "is this what the screen shows".
@@ -989,6 +1010,7 @@ Cost: night-coast measures 2.3x matrix per panel frame, plasma 1.0x.
 - **The mirror page says "no display yet (503)" and retries** — `/meta` is written at modeset, and the pod idles rather than crash-looping when the node holds no monitor. Fix: nothing to fix on the mirror; check `kubectl logs` for the DRM failure, which is the real problem.
 - **The mirror is frames behind, or arrives in bursts** — an nginx in front buffers a proxied response by default. Fix: keep the `X-Accel-Buffering: no` header `/stream` sets; don't strip it, and don't "fix" it by adding a streaming exception to the shared `tailscale-auth` component.
 - **The mirror shows the wrong colours after `SAVER` changes** — palette and geometry belong to a modeset, and a viewer holding the old ones would mis-colour every cell. Deliberate: the stream closes on modeset. Fix: none, the page reconnects and re-reads `/meta` within two seconds.
+- **The mirror shows a scene's cover view while the panel is zoomed in** — deliberate: the tour changes the panel's cell size every zoom step, and the mirror's geometry is fixed per epoch. Fix: none; `ASCII_REST_TOUR=0` if the two must match.
 - **A dump takes 6 seconds instead of finishing instantly** — the dump path drives the mirror, so it is paced at `SAVER_FPS` whenever the mirror is live. Fix: `SAVER_HTTP=off` for a dump you only want the PPMs from.
 
 ## How it works

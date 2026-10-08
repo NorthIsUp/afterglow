@@ -360,8 +360,10 @@ pub fn run(cfg: &Config, mirror: &Mirror) -> Result<(), String> {
             buf = vec![0u32; panel.buf_len()];
         }
         saver::frame(saver.as_mut(), &mut buf, &panel);
-        mirror.publish(saver.grid().cells());
-        screen.compose(saver.grid(), saver.palette());
+        if mirror.watched() {
+            mirror.publish(saver.mirror_cells());
+        }
+        screen.compose(saver.shown(), saver.palette());
         let mut out = std::io::stdout().lock();
         out.write_all(screen.emit())
             .and_then(|()| out.flush())

@@ -204,6 +204,12 @@ impl Mirror {
             });
     }
 
+    /// Anyone watching. The render loop asks before building the frame it
+    /// would publish, so a saver's mirror-only work costs nothing unwatched.
+    pub fn watched(&self) -> bool {
+        self.viewers.load(Ordering::Relaxed) != 0
+    }
+
     /// Publish this frame's cells. Called from the render thread, once per
     /// frame, and deliberately gives up rather than waits: see the module doc.
     pub fn publish(&self, cells: &[Cell]) {
