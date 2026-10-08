@@ -7,7 +7,7 @@ streak reads as distance rather than as a dim near one.
 Streaks are drawn in braille quarters rather than ASCII `|`, so a streak is
 continuous, moves in 4px steps, and the wind shifts it half a cell sideways. The
 ground row is reserved for splashes, so streaks and splashes never write the
-same cells.
+same cells. Only the two nearer tiers splash; far rain lands behind the scene.
 
 A frame rewrites about 1.5k of the panel's 16k cells — a bit under a third of a
 full repaint, around 30-40m of a Pi 5 core at 1920x1080/15fps against matrix's
@@ -18,8 +18,8 @@ notes.
 
 ## Knobs
 
-- `RAIN_CELL_W` / `RAIN_CELL_H` (px, 4..64 / 4..128, default 8 / 16; 8x16 is
-  the braille cell's own size, anything else stretches the streak)
+- `RAIN_CELL_W` / `RAIN_CELL_H` (px, 4..64 / 4..128, default 8 / 16; streaks
+  move in quarter-cell steps, so the 4px step above is at the default height)
 - `RAIN_DENSITY` (streaks per 1000 cells, 0..200, default 11 — about 180 streaks
   at 1920x1080)
 - `RAIN_SPEED` (rows per second for the nearest tier; the others are a
