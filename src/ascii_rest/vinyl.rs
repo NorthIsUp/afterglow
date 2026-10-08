@@ -767,7 +767,12 @@ pub struct VinylWide(Scene);
 impl Canvas for VinylWide {
     const NAME: &'static str = "vinyl-wide";
     const FPS: u32 = Vinyl::FPS;
-    const PALETTE: &'static [u32] = WIDE_PALETTE;
+    #[cfg(test)]
+    const COLS: usize = <Vinyl as super::Piece>::COLS;
+    #[cfg(test)]
+    const ROWS: usize = <Vinyl as super::Piece>::ROWS;
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[];
 
     /// Two decks as tall as the panel allows, so long as two of them and a
     /// mixer at least `MIX` wide still fit across it.
@@ -813,6 +818,9 @@ impl Canvas for VinylWide {
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
+    }
+    fn palette(&self) -> &'static [u32] {
+        WIDE_PALETTE
     }
 }
 

@@ -20,9 +20,9 @@
 //! the rows each scene can spare ([`Fit::Cover`]); text pieces stay whole.
 //! Cover pieces then tour: [`tour`] zooms by cell size, never by resampling.
 //!
-//! A text piece's `-wide` twin is this repo's own: a [`Canvas`] sized to the
-//! panel's grid rather than a fixed picture, drawn by [`Fill`]. It shares its
-//! original's module and drawing code, parameterised by size.
+//! The text pieces are [`Canvas`]es instead: drawn at whatever grid the panel
+//! gives them, by [`Fill`], composed for its shape. At upstream's grid with
+//! their `UPSTREAM` knobs they draw upstream's picture cell for cell.
 
 // Ports keep upstream's literals (`6.28`, `3.14`) rather than TAU/PI: the
 // golden test compares against what upstream computes, not what it meant.
@@ -49,8 +49,8 @@ pub mod tour;
 /// piece its module builds, so a `-wide` recomposition sits beside its original.
 /// `#[no_upstream]` marks this repo's own pieces (the `-wide` recompositions),
 /// which get no golden test: upstream has no output for them. `#[fill]` marks
-/// a [`Canvas`] drawn at the panel's size by [`Fill`]; it has no upstream
-/// either.
+/// a [`Canvas`] drawn at the panel's size by [`Fill`], golden-tested at
+/// upstream's grid.
 macro_rules! each_piece {
     ($cb:ident) => {
         $cb! {
@@ -63,7 +63,7 @@ macro_rules! each_piece {
             earthrise::{Earthrise, #[no_upstream] EarthriseWide},
             fractal_tree::{FractalTree, #[fill] FractalTreeWide},
             kyoto_dusk::{KyotoDusk, #[no_upstream] KyotoDuskWide},
-            lighthouse::{Lighthouse, #[fill] LighthouseWide},
+            lighthouse::{#[fill] Lighthouse},
             marine_drive::{MarineDrive, #[no_upstream] MarineDriveWide},
             misty_forest::{MistyForest, #[no_upstream] MistyForestWide},
             night_coast::{NightCoast, #[no_upstream] NightCoastWide},
@@ -125,7 +125,18 @@ macro_rules! exercise {
 #[cfg(test)]
 macro_rules! golden {
     (no_upstream $m:ident::$t:ident) => {};
-    (fill $m:ident::$t:ident) => {};
+    (fill $m:ident::$t:ident) => {
+        #[test]
+        #[ignore = "needs ASCII_REST_GOLDEN; see tools/ascii-rest-golden.ts"]
+        fn golden() {
+            tests::golden_fill::<crate::ascii_rest::$m::$t>();
+        }
+
+        #[test]
+        fn upstream_knobs_change_the_picture() {
+            tests::upstream_knobs_change_the_canvas::<crate::ascii_rest::$m::$t>();
+        }
+    };
     ($m:ident::$t:ident) => {
         #[test]
         #[ignore = "needs ASCII_REST_GOLDEN; see tools/ascii-rest-golden.ts"]
@@ -190,18 +201,34 @@ pub trait Piece: Sized + 'static {
     fn frame(&mut self, t: f64, out: &mut [Cell]);
 }
 
-/// A text piece recomposed for whatever grid the panel has: `cols x rows`
-/// is the grid's, every cell is the picture's, and there is nothing to fit.
+/// A text piece composed for whatever grid the panel has: `cols x rows` is
+/// the grid's, every cell is the picture's, and there is nothing to fit.
 pub trait Canvas: Sized + 'static {
     const NAME: &'static str;
+    /// Upstream's grid. Built at it with the `UPSTREAM` knobs, `frame` draws
+    /// upstream's picture cell for cell — the golden test holds it to that.
+    #[cfg(test)]
+    const COLS: usize;
+    #[cfg(test)]
+    const ROWS: usize;
     const FPS: u32;
-    /// A text cell, two widths tall; here so the mirror groups it with its
-    /// original.
+    /// A text cell, two widths tall; here so the mirror groups it as text.
     const CELL: usize = 2;
-    const PALETTE: &'static [u32];
-    const GROUND: u32 = 0;
+    /// Knob values that draw upstream's picture: a port's own additions,
+    /// colour among them, default on.
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)];
 
     fn new(cols: usize, rows: usize) -> Self;
+
+    /// What the cells' colour indices address: the piece's colours, or
+    /// upstream's one ink with its colour knob off.
+    fn palette(&self) -> &'static [u32];
+
+    /// What shows behind the picture.
+    fn ground(&self) -> u32 {
+        0
+    }
 
     /// Write every one of the `cols * rows` cells of the picture at `t`.
     fn frame(&mut self, t: f64, out: &mut [Cell]);
@@ -241,6 +268,7 @@ impl Clock {
 /// cells of `ASCII_REST_TEXT_CELL_W x _H` glass pixels.
 pub struct Fill<P: Canvas> {
     piece: P,
+    palette: &'static [u32],
     pic: Vec<Cell>,
     grid: Grid,
     title: Option<Title>,
@@ -251,12 +279,16 @@ impl<P: Canvas> Fill<P> {
     pub fn new(panel: &Panel, fps: u32) -> Self {
         let w = crate::env_num(&["ASCII_REST_TEXT_CELL_W"], 12, 4, 64) as usize;
         let h = crate::env_num(&["ASCII_REST_TEXT_CELL_H"], 24, 8, 128) as usize;
-        let grid = Grid::new(panel, w, h).with_ground(P::GROUND);
+        let grid = Grid::new(panel, w, h);
         let (cols, rows) = (grid.cols(), grid.rows());
+        let piece = P::new(cols, rows);
+        let palette = piece.palette();
+        let grid = grid.with_ground(piece.ground());
         let title = (crate::env_num(&["ASCII_REST_TITLE"], 0, 0, 1) == 1)
-            .then(|| Title::new(P::NAME, P::CELL, P::PALETTE));
+            .then(|| Title::new(P::NAME, P::CELL, palette));
         Self {
-            piece: P::new(cols, rows),
+            piece,
+            palette,
             pic: vec![Cell::CLEAR; cols * rows],
             grid,
             title,
@@ -279,7 +311,7 @@ impl<P: Canvas> Saver for Fill<P> {
         if let Some(title) = &self.title {
             title.stamp(&mut self.grid);
         }
-        self.grid.flush(s, P::PALETTE);
+        self.grid.flush(s, self.palette);
     }
 
     fn name(&self) -> &'static str {
@@ -291,7 +323,7 @@ impl<P: Canvas> Saver for Fill<P> {
     }
 
     fn palette(&self) -> &[u32] {
-        P::PALETTE
+        self.palette
     }
 }
 
@@ -717,16 +749,20 @@ pub(crate) mod tests {
     }
 
     /// A [`Canvas`]'s checks, on every panel shape down to the 128px square
-    /// the saver tests build at: its grid covers the panel, the picture is
-    /// in range and not blank, it moves, and steady-state frames never
-    /// allocate. On the two full panels it must also reach both sides: a
-    /// `-wide` twin that left the edges empty would be its original again.
+    /// the saver tests build at — pine's 3.2:1, 16:9, 4:3, square, portrait:
+    /// its grid covers the panel, the picture is in range and not blank, it
+    /// moves, and steady-state frames never allocate. On the landscape
+    /// panels it must also reach both sides: a responsive piece that left
+    /// the edges empty would be upstream's fixed picture again.
     pub fn exercise_fill<P: Canvas>() {
         use crate::grid::with_test_aspect;
         for (w, h, aspect) in [
             (1920, 1080, 180),
             (1920, 1080, 100),
             (1280, 400, 100),
+            (1024, 768, 100),
+            (1080, 1080, 100),
+            (1080, 1920, 100),
             (800, 1280, 100),
             (128, 128, 100),
         ] {
@@ -746,7 +782,7 @@ pub(crate) mod tests {
             let first = fill.pic.clone();
             for c in &first {
                 assert!(c.glyph() < crate::font::GLYPHS.len(), "{at}: glyph");
-                assert!(c.colour() < P::PALETTE.len(), "{at}: colour");
+                assert!(c.colour() < fill.palette.len(), "{at}: colour");
             }
             assert!(first.iter().any(|c| *c != Cell::CLEAR), "{at}: blank");
             let blank = text::cell(' ');
@@ -761,7 +797,7 @@ pub(crate) mod tests {
                 }
             }
             assert_ne!(first, fill.pic, "{at}: nothing moved in four seconds");
-            if w == 1920 {
+            if w > h && w >= 1024 {
                 assert_eq!(reach, [true; 2], "{at}: a side stays empty");
             }
             let n = allocs_during(|| {
@@ -773,23 +809,28 @@ pub(crate) mod tests {
         }
     }
 
-    /// `P` built with its `UPSTREAM` knobs, each checked against what its
-    /// constructor really reads.
-    fn upstream<P: Piece>() -> P {
-        let _knobs = config::SHARED_KNOBS
+    /// `build` run with `knobs` set, each checked against what it really
+    /// reads.
+    fn with_knobs<T>(name: &str, knobs: &[(&str, &str)], build: impl Fn() -> T) -> T {
+        let _lock = config::SHARED_KNOBS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let knobs = config::discover(|| drop(P::new()));
-        for (key, value) in P::UPSTREAM {
-            let knob = knobs.iter().find(|k| k.key == *key);
-            let knob = knob.unwrap_or_else(|| panic!("{}: reads no {key}", P::NAME));
+        let read = config::discover(|| drop(build()));
+        for (key, value) in knobs {
+            let knob = read.iter().find(|k| k.key == *key);
+            let knob = knob.unwrap_or_else(|| panic!("{name}: reads no {key}"));
             config::set(knob, value).unwrap();
         }
-        let piece = P::new();
-        for (key, _) in P::UPSTREAM {
+        let built = build();
+        for (key, _) in knobs {
             config::reset(key);
         }
-        piece
+        built
+    }
+
+    /// `P` built with its `UPSTREAM` knobs.
+    fn upstream<P: Piece>() -> P {
+        with_knobs(P::NAME, P::UPSTREAM, P::new)
     }
 
     /// The upstream knobs are the port's own picture switched off, so they
@@ -803,13 +844,55 @@ pub(crate) mod tests {
             p.frame(4.0, &mut out);
             out
         }
-        let ours = {
-            let _knobs = config::SHARED_KNOBS
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            P::new()
+        assert_ne!(
+            pic(with_knobs(P::NAME, &[], P::new)),
+            pic(upstream::<P>()),
+            "{}",
+            P::NAME
+        );
+    }
+
+    /// A canvas's colour, at least, is its own: every one has an `UPSTREAM`
+    /// knob, and switching them must change its picture at upstream's grid.
+    pub fn upstream_knobs_change_the_canvas<P: Canvas>() {
+        assert!(!P::UPSTREAM.is_empty(), "{}: no UPSTREAM knobs", P::NAME);
+        let new = || P::new(P::COLS, P::ROWS);
+        let pic = |mut p: P| {
+            let mut out = vec![Cell::CLEAR; P::COLS * P::ROWS];
+            p.frame(4.0, &mut out);
+            out
         };
-        assert_ne!(pic(ours), pic(upstream::<P>()), "{}", P::NAME);
+        let (ours, theirs) = (
+            with_knobs(P::NAME, &[], new),
+            with_knobs(P::NAME, P::UPSTREAM, new),
+        );
+        assert_ne!(pic(ours), pic(theirs), "{}", P::NAME);
+    }
+
+    /// [`golden_cells`] for a [`Piece`].
+    pub fn golden<P: Piece>() {
+        let mut piece = upstream::<P>();
+        golden_cells(
+            P::NAME,
+            [P::COLS, P::ROWS, P::FPS as usize],
+            P::CELL,
+            |t, pic| {
+                piece.frame(t, pic);
+            },
+        );
+    }
+
+    /// [`golden_cells`] for a [`Canvas`], built at upstream's grid.
+    pub fn golden_fill<P: Canvas>() {
+        let mut piece = with_knobs(P::NAME, P::UPSTREAM, || P::new(P::COLS, P::ROWS));
+        golden_cells(
+            P::NAME,
+            [P::COLS, P::ROWS, P::FPS as usize],
+            P::CELL,
+            |t, pic| {
+                piece.frame(t, pic);
+            },
+        );
     }
 
     /// Compare the port with upstream's own output, written by
@@ -818,9 +901,15 @@ pub(crate) mod tests {
     ///
     /// Exact, cell for cell: `math` reproduces JavaScriptCore wherever libm
     /// differs, so one stray cell is a port bug, not rounding noise.
-    pub fn golden<P: Piece>() {
+    fn golden_cells(
+        name: &str,
+        geometry: [usize; 3],
+        cell: usize,
+        mut frame: impl FnMut(f64, &mut [Cell]),
+    ) {
+        let [cols, rows, fps] = geometry;
         let dir = std::env::var("ASCII_REST_GOLDEN").expect("set ASCII_REST_GOLDEN");
-        let path = format!("{dir}/{}.golden", P::NAME);
+        let path = format!("{dir}/{name}.golden");
         let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
         let mut lines = src.lines();
         let head: Vec<usize> = lines
@@ -829,12 +918,8 @@ pub(crate) mod tests {
             .split(' ')
             .map(|v| v.parse().unwrap())
             .collect();
-        assert_eq!(
-            head,
-            [P::COLS, P::ROWS, P::FPS as usize],
-            "{path}: geometry"
-        );
-        let halftone = P::CELL == 1;
+        assert_eq!(head, geometry, "{path}: geometry");
+        let halftone = cell == 1;
         let glyph = |c: char| -> u16 {
             if halftone {
                 let i = " ·•●".chars().position(|d| d == c).expect("halftone char");
@@ -843,30 +928,29 @@ pub(crate) mod tests {
                 glyph::of(c)
             }
         };
-        let mut piece = upstream::<P>();
-        let mut pic = vec![Cell::CLEAR; P::COLS * P::ROWS];
+        let mut pic = vec![Cell::CLEAR; cols * rows];
         let mut tick = 0u64;
         let mut differ = 0usize;
         while let Some(at) = lines.next() {
             let want: u64 = at.strip_prefix('@').unwrap().parse().unwrap();
             while tick <= want {
-                piece.frame(tick as f64 / f64::from(P::FPS), &mut pic);
+                frame(tick as f64 / fps as f64, &mut pic);
                 tick += 1;
             }
-            let mut expect = vec![Cell::CLEAR; P::COLS * P::ROWS];
-            for r in 0..P::ROWS {
+            let mut expect = vec![Cell::CLEAR; cols * rows];
+            for r in 0..rows {
                 let row: Vec<char> = lines.next().unwrap().chars().collect();
-                assert_eq!(row.len(), P::COLS, "{path} @{want} row {r} width");
+                assert_eq!(row.len(), cols, "{path} @{want} row {r} width");
                 for (x, &c) in row.iter().enumerate() {
-                    expect[r * P::COLS + x] = Cell::new(glyph(c), 0);
+                    expect[r * cols + x] = Cell::new(glyph(c), 0);
                 }
             }
             if halftone {
-                for r in 0..P::ROWS {
+                for r in 0..rows {
                     let row = lines.next().unwrap().as_bytes();
-                    for x in 0..P::COLS {
+                    for x in 0..cols {
                         let h = std::str::from_utf8(&row[x * 2..x * 2 + 2]).unwrap();
-                        let e = &mut expect[r * P::COLS + x];
+                        let e = &mut expect[r * cols + x];
                         *e = Cell::new(e.glyph() as u16, u16::from_str_radix(h, 16).unwrap());
                     }
                 }
@@ -875,20 +959,20 @@ pub(crate) mod tests {
             differ += bad.len();
             println!(
                 "{} @{want}: {} of {} cells differ{}",
-                P::NAME,
+                name,
                 bad.len(),
                 expect.len(),
                 bad.first()
                     .map(|&i| format!(
                         ", first at col {} row {}: want {:?} got {:?}",
-                        i % P::COLS,
-                        i / P::COLS,
+                        i % cols,
+                        i / cols,
                         (expect[i].glyph(), expect[i].colour()),
                         (pic[i].glyph(), pic[i].colour())
                     ))
                     .unwrap_or_default()
             );
         }
-        assert_eq!(differ, 0, "{}: cells differ from upstream", P::NAME);
+        assert_eq!(differ, 0, "{name}: cells differ from upstream");
     }
 }

@@ -287,6 +287,7 @@ impl Mirror {
         let Some(i) = saver::index_of(name) else {
             return false;
         };
+        let name = saver::name_at(i);
         for i in std::iter::once(i).chain(saver::twin_of(name).and_then(saver::index_of)) {
             let bit = 1 << (i % 64);
             if on {
@@ -838,8 +839,7 @@ fn config_route(mirror: &Mirror, method: &str, query: &str) -> (&'static str, St
             format!("{{\"error\":{}}}", json_str(msg)),
         )
     };
-    let Some((i, name)) = param(query, "saver").and_then(|n| saver::index_of(&n).map(|i| (i, n)))
-    else {
+    let Some(i) = param(query, "saver").and_then(|n| saver::index_of(&n)) else {
         return bad("unknown saver");
     };
     let knobs = knobs_of(i, mirror.fps);
@@ -848,7 +848,7 @@ fn config_route(mirror: &Mirror, method: &str, query: &str) -> (&'static str, St
     }
     let key = param(query, "key").unwrap_or_default();
     let Some(knob) = knobs.iter().find(|k| k.key == key) else {
-        return bad(&format!("{key:?} is not a knob of {name}"));
+        return bad(&format!("{key:?} is not a knob of {}", saver::name_at(i)));
     };
     match param(query, "value").filter(|v| method == "POST" && !v.is_empty()) {
         Some(v) => {
@@ -1584,6 +1584,9 @@ mod tests {
             ),
             "{body}"
         );
+        // A character piece's old `-wide` name reads the piece's knobs.
+        let body = req(addr, "GET /config?saver=tv-static-wide");
+        assert!(body.contains(r#""key":"TV_STATIC_COLOR""#), "{body}");
 
         let body = req(
             addr,
@@ -1742,9 +1745,9 @@ mod tests {
     }
 
     /// `/meta`'s `expanded` is the Rust default until a pick moves it: every
-    /// pair starts on its `-wide`, the text pieces included, and a
-    /// pick of either half sticks. Picking by index — rotation, and the
-    /// startup `SAVER` — moves nothing.
+    /// scene's pair starts on its `-wide`, and a pick of either half sticks.
+    /// Picking by index — rotation, and the startup `SAVER` — moves nothing.
+    /// A character piece is one row, so it is in no pair.
     #[test]
     fn pairs_start_expanded_and_a_pick_sticks() {
         let m = Mirror::new(15);
@@ -1756,20 +1759,17 @@ mod tests {
         };
         let e = expanded();
         assert!(e.starts_with(r#"["alpine-dawn-wide","#), "{e}");
-        assert!(
-            e.contains(r#""night-coast-wide""#) && e.contains(r#""vinyl-wide""#),
-            "{e}"
-        );
-        assert_eq!(e.matches("-wide").count(), 21, "{e}");
+        assert!(e.contains(r#""night-coast-wide""#), "{e}");
+        assert!(!e.contains("vinyl"), "{e}");
+        assert_eq!(e.matches("-wide").count(), 13, "{e}");
 
         m.select_at(saver::index_of("night-coast").unwrap());
         assert!(expanded().contains(r#""night-coast-wide""#));
         assert!(m.select("night-coast"));
         assert!(!expanded().contains("night-coast"));
-        assert!(m.select("vinyl"));
-        assert!(!expanded().contains("vinyl"));
         assert!(m.select("vinyl-wide"));
-        assert!(expanded().contains(r#""vinyl-wide""#));
+        assert_eq!(m.selected(), saver::index_of("vinyl").unwrap());
+        assert!(!expanded().contains("vinyl"));
         assert!(m.select("night-coast-wide"));
         assert!(expanded().contains(r#""night-coast-wide""#));
     }
@@ -1793,6 +1793,7 @@ mod tests {
             head.contains(r#""night-coast":"night-coast-wide""#),
             "{head}"
         );
+        assert!(!head.contains(r#""vinyl":"#), "{head}");
         assert!(
             head.contains(r#"{"name":"classics","savers":["ascii","blocks","matrix""#),
             "{head}"
@@ -1831,8 +1832,13 @@ mod tests {
         assert!(body.starts_with("HTTP/1.1 405 "), "{body}");
         req(addr, "POST /rotation?saver=night-coast-wide&on=1");
         assert!(tail(&req(addr, "GET /meta")).contains(r#""excluded":[]"#));
+        // A character piece's old `-wide` name is the piece.
+        let body = req(addr, "POST /rotation?saver=vinyl-wide&on=0");
+        assert!(body.ends_with(r#"{"excluded":["vinyl"]}"#), "{body}");
+        req(addr, "POST /rotation?saver=vinyl&on=1");
 
-        assert_eq!(m.exclude("dvd, nope,,matrix"), ["nope"]);
+        assert_eq!(m.exclude("dvd, nope,,matrix, aurora-wide"), ["nope"]);
+        assert!(!m.in_rotation(saver::index_of("aurora").unwrap()));
         assert!(!m.in_rotation(saver::index_of("dvd").unwrap()));
         assert!(!m.in_rotation(saver::index_of("matrix").unwrap()));
     }

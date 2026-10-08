@@ -402,16 +402,12 @@ pub struct ReactionDiffusionWide(Dish);
 impl Canvas for ReactionDiffusionWide {
     const NAME: &'static str = "reaction-diffusion-wide";
     const FPS: u32 = ReactionDiffusion::FPS;
-    /// Thin to thick: violet edges warming through rose and orange to a
-    /// pale-gold core.
-    const PALETTE: &'static [u32] = &[
-        hex("#7a3cc8"),
-        hex("#b04ad0"),
-        hex("#e0508c"),
-        hex("#ff7040"),
-        hex("#ffa83a"),
-        hex("#ffe27a"),
-    ];
+    #[cfg(test)]
+    const COLS: usize = <ReactionDiffusion as super::Piece>::COLS;
+    #[cfg(test)]
+    const ROWS: usize = <ReactionDiffusion as super::Piece>::ROWS;
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[];
 
     fn new(cols: usize, rows: usize) -> Self {
         Self(Dish::new(cols, rows, false))
@@ -419,5 +415,16 @@ impl Canvas for ReactionDiffusionWide {
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
+    }
+    fn palette(&self) -> &'static [u32] {
+        const P: &[u32] = &[
+        hex("#7a3cc8"),
+        hex("#b04ad0"),
+        hex("#e0508c"),
+        hex("#ff7040"),
+        hex("#ffa83a"),
+        hex("#ffe27a"),
+    ];
+        P
     }
 }

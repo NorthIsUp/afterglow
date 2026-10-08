@@ -196,13 +196,14 @@ pub fn group_at(i: usize) -> usize {
 /// reaching either.
 pub fn wide_of(name: &str) -> Option<&'static str> {
     let wide = format!("{name}-wide");
-    index_of(&wide).map(name_at)
+    row_of(&wide).map(name_at)
 }
 
 /// The other half of a scene's pair, either way round, for the rotation
 /// toggle: the page lists the pair as one row, so one toggle covers both.
 pub fn twin_of(name: &str) -> Option<&'static str> {
-    wide_of(name).or_else(|| name.strip_suffix("-wide").and_then(index_of).map(name_at))
+    row_of(name)?;
+    wide_of(name).or_else(|| name.strip_suffix("-wide").and_then(row_of).map(name_at))
 }
 
 /// How many savers there are, for `Rotate`'s bag. A const because the bag is a
@@ -226,7 +227,21 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 
 /// Position in `SAVERS`, or None for a name no saver answers to. The one place
 /// a user-supplied name is validated — `make` cannot report a bad name.
+///
+/// A character piece also answers to `<name>-wide`, the twin it had before it
+/// drew at any size, so a deployment or bookmark naming one still lands on it.
 pub fn index_of(name: &str) -> Option<usize> {
+    row_of(name).or_else(|| {
+        let piece = name.strip_suffix("-wide")?;
+        PIECE_CELL
+            .iter()
+            .any(|&(n, cell)| n == piece && cell == 2)
+            .then(|| row_of(piece))?
+    })
+}
+
+/// Position in `SAVERS` of exactly `name`, no aliases.
+fn row_of(name: &str) -> Option<usize> {
     SAVERS.iter().position(|(n, _)| *n == name)
 }
 
@@ -822,6 +837,33 @@ mod tests {
             t0.elapsed()
         );
     }
+    /// A character piece's old `-wide` name still reaches it, and nothing
+    /// else gains a `-wide` that never existed. The alias is not a row.
+    #[test]
+    fn a_character_piece_answers_to_its_old_wide_name() {
+        for n in [
+            "aurora",
+            "synthwave",
+            "tv-static",
+            "vinyl",
+            "lighthouse",
+            "fractal-tree",
+            "reaction-diffusion",
+            "double-pendulum",
+        ] {
+            let wide = format!("{n}-wide");
+            assert_eq!(index_of(&wide), index_of(n), "{wide}");
+            assert!(index_of(n).is_some(), "{n}");
+            assert!(!names().any(|x| x == wide), "{wide} is a row");
+        }
+        assert_eq!(
+            index_of("night-coast-wide").map(name_at),
+            Some("night-coast-wide")
+        );
+        assert_eq!(index_of("plasma-wide"), None);
+        assert_eq!(index_of("matrix-wide"), None);
+    }
+
     /// The groups table is a second list beside `SAVERS`, so it is checked
     /// against it: every saver lands in a real group, and no row there names a
     /// saver that does not exist or is a port (ports sort themselves).
@@ -844,9 +886,9 @@ mod tests {
         assert_eq!(group_at(index_of("night-coast").unwrap()), SCENES);
         assert_eq!(group_at(index_of("night-coast-wide").unwrap()), SCENES);
         assert_eq!(group_at(index_of("vinyl").unwrap()), ASCII_REST);
-        assert_eq!(group_at(index_of("aurora-wide").unwrap()), ASCII_REST);
         assert_eq!(wide_of("night-coast"), Some("night-coast-wide"));
-        assert_eq!(wide_of("aurora"), Some("aurora-wide"));
+        assert_eq!(wide_of("aurora"), None);
+        assert_eq!(twin_of("aurora-wide"), None);
         assert_eq!(wide_of("plasma"), None);
     }
 

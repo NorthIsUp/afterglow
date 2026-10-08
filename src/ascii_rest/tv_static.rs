@@ -451,7 +451,12 @@ pub struct TvStaticWide(Scene);
 impl Canvas for TvStaticWide {
     const NAME: &'static str = "tv-static-wide";
     const FPS: u32 = FPS;
-    const PALETTE: &'static [u32] = WIDE_PALETTE;
+    #[cfg(test)]
+    const COLS: usize = <TvStatic as super::Piece>::COLS;
+    #[cfg(test)]
+    const ROWS: usize = <TvStatic as super::Piece>::ROWS;
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[];
 
     fn new(cols: usize, rows: usize) -> Self {
         Self(Scene::new(
@@ -463,5 +468,8 @@ impl Canvas for TvStaticWide {
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
+    }
+    fn palette(&self) -> &'static [u32] {
+        WIDE_PALETTE
     }
 }

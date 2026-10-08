@@ -350,9 +350,12 @@ pub struct AuroraWide(Scene);
 impl Canvas for AuroraWide {
     const NAME: &'static str = "aurora-wide";
     const FPS: u32 = Aurora::FPS;
-    const PALETTE: &'static [u32] = WIDE_PALETTE;
-    /// A deep night blue rather than black.
-    const GROUND: u32 = hex("#040a1c");
+    #[cfg(test)]
+    const COLS: usize = <Aurora as super::Piece>::COLS;
+    #[cfg(test)]
+    const ROWS: usize = <Aurora as super::Piece>::ROWS;
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[];
 
     fn new(cols: usize, rows: usize) -> Self {
         Self(Scene::new(cols, rows, Layout::fit(cols, rows)))
@@ -360,5 +363,12 @@ impl Canvas for AuroraWide {
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
+    }
+    fn palette(&self) -> &'static [u32] {
+        WIDE_PALETTE
+    }
+
+    fn ground(&self) -> u32 {
+        hex("#040a1c")
     }
 }

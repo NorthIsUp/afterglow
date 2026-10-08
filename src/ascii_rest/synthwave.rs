@@ -408,9 +408,12 @@ pub struct SynthwaveWide(Scene);
 impl Canvas for SynthwaveWide {
     const NAME: &'static str = "synthwave-wide";
     const FPS: u32 = Synthwave::FPS;
-    const PALETTE: &'static [u32] = WIDE_PALETTE;
-    /// A night of deep purple rather than black.
-    const GROUND: u32 = hex("#0b0418");
+    #[cfg(test)]
+    const COLS: usize = <Synthwave as super::Piece>::COLS;
+    #[cfg(test)]
+    const ROWS: usize = <Synthwave as super::Piece>::ROWS;
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[];
 
     fn new(cols: usize, rows: usize) -> Self {
         Self(Scene::new(Layout::fit(cols, rows)))
@@ -418,5 +421,12 @@ impl Canvas for SynthwaveWide {
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
+    }
+    fn palette(&self) -> &'static [u32] {
+        WIDE_PALETTE
+    }
+
+    fn ground(&self) -> u32 {
+        hex("#0b0418")
     }
 }

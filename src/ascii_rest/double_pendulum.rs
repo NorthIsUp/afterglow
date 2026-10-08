@@ -381,7 +381,12 @@ pub struct DoublePendulumWide(Scene);
 impl Canvas for DoublePendulumWide {
     const NAME: &'static str = "double-pendulum-wide";
     const FPS: u32 = DoublePendulum::FPS;
-    const PALETTE: &'static [u32] = WIDE_PALETTE;
+    #[cfg(test)]
+    const COLS: usize = <DoublePendulum as super::Piece>::COLS;
+    #[cfg(test)]
+    const ROWS: usize = <DoublePendulum as super::Piece>::ROWS;
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[];
 
     /// One pendulum a slot as wide as its reach (with a little air), the
     /// slots sharing out the width; each lets go a little further round.
@@ -403,5 +408,8 @@ impl Canvas for DoublePendulumWide {
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
+    }
+    fn palette(&self) -> &'static [u32] {
+        WIDE_PALETTE
     }
 }

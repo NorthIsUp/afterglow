@@ -509,7 +509,12 @@ pub struct FractalTreeWide(Scene);
 impl Canvas for FractalTreeWide {
     const NAME: &'static str = "fractal-tree-wide";
     const FPS: u32 = FractalTree::FPS;
-    const PALETTE: &'static [u32] = WIDE_PALETTE;
+    #[cfg(test)]
+    const COLS: usize = <FractalTree as super::Piece>::COLS;
+    #[cfg(test)]
+    const ROWS: usize = <FractalTree as super::Piece>::ROWS;
+    #[cfg(test)]
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[];
 
     /// Upstream's tree scaled to the height in the middle, then trees of
     /// 55% to 80% of it walking out from it either side until one stands past
@@ -556,5 +561,8 @@ impl Canvas for FractalTreeWide {
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
+    }
+    fn palette(&self) -> &'static [u32] {
+        WIDE_PALETTE
     }
 }
