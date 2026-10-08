@@ -1,7 +1,7 @@
 //! plasma: the old demo-scene effect. Four sine fields, one a set of rings
 //! round a wandering centre, summed and read as soft blobs of density.
 //!
-//! Started as a port of ascii.rest's plasma (credit in THIRD_PARTY.md): the
+//! Started as a port of ascii.rest's plasma (credit in `THIRD_PARTY.md`): the
 //! ramp, the four terms and the 30 s loop are upstream's. Upstream draws a
 //! fixed 64x22 picture in one ink; this evaluates the field at the grid's own
 //! resolution, so it fills any panel, and colours it.

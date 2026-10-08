@@ -140,6 +140,7 @@ use std::time::Duration;
 /// First key PRESENT wins; present-but-unparseable or out-of-range falls back to
 /// `default`. Clamp-or-default rather than fail-fast is the right shape for a
 /// headless pod: a typo in an env var must never crash-loop it.
+#[must_use]
 pub fn env_num(keys: &[&str], default: i64, lo: i64, hi: i64) -> i64 {
     for key in keys {
         let Ok(raw) = std::env::var(key) else {
@@ -168,6 +169,7 @@ pub fn env_num(keys: &[&str], default: i64, lo: i64, hi: i64) -> i64 {
 /// The clock alone is a poor seed (two pods starting in the same second draw
 /// the same scene), so the pid mixes in, and the pair is stirred rather than
 /// used raw.
+#[must_use]
 pub fn saver_seed(keys: &[&str], fallback: u32) -> u32 {
     let pinned = env_num(keys, 0, 0, u32::MAX as i64) as u32;
     if pinned != 0 {
@@ -175,8 +177,7 @@ pub fn saver_seed(keys: &[&str], fallback: u32) -> u32 {
     }
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
-        .unwrap_or(fallback);
+        .map_or(fallback, |d| d.subsec_nanos() ^ d.as_secs() as u32);
     let mut seed = nanos ^ std::process::id().wrapping_mul(0x9E37_79B9);
     next_rand(&mut seed);
     seed.max(1)
@@ -196,6 +197,7 @@ pub fn next_rand(rng: &mut u32) -> u32 {
 }
 
 /// As `env_num`, for the values that are names rather than numbers.
+#[must_use]
 pub fn env_str(keys: &[&str], default: &str) -> String {
     keys.iter()
         .find_map(|k| std::env::var(k).ok())
@@ -264,7 +266,7 @@ fn main() {
     mirror.set_rotate_secs(cfg.rotate_secs);
     if cfg.http != "off" {
         let (m, addr) = (Arc::clone(&mirror), cfg.http.clone());
-        std::thread::spawn(move || mirror::serve(m, &addr));
+        std::thread::spawn(move || mirror::serve(&m, &addr));
     }
 
     // Checked before anything touches DRM, so a dump runs on a laptop with no

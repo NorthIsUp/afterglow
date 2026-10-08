@@ -46,7 +46,7 @@ fn bump() {
 /// Allocations counted on this thread so far. Use `allocs_during` unless you
 /// need to bracket something a closure cannot wrap.
 pub fn count() -> usize {
-    N.with(|n| n.get())
+    N.with(std::cell::Cell::get)
 }
 
 /// Allocations made by `f` on this thread.
@@ -55,9 +55,9 @@ pub fn count() -> usize {
 /// test see another's allocations — which is the whole reason this is a
 /// `thread_local` and not an atomic.
 pub fn allocs_during(f: impl FnOnce()) -> usize {
-    let before = N.with(|n| n.get());
+    let before = N.with(std::cell::Cell::get);
     f();
-    N.with(|n| n.get()) - before
+    N.with(std::cell::Cell::get) - before
 }
 
 /// Declared here rather than in `main.rs` so the whole mechanism is one file:

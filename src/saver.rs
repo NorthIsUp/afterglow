@@ -211,8 +211,7 @@ impl Rotate {
         // Same trick sakura grows its tree from.
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
-            .unwrap_or(0x5EED_1234);
+            .map_or(0x5EED_1234, |d| d.subsec_nanos() ^ d.as_secs() as u32);
         Self::seeded(now, seed ^ std::process::id().wrapping_mul(0x9E37_79B9))
     }
 

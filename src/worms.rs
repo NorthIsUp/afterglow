@@ -119,6 +119,7 @@ pub struct Worms {
     grid: Grid,
     cols: usize,
     rows: usize,
+    #[allow(clippy::struct_field_names)] // the worms are what `Worms` is
     worms: Vec<Worm>,
     /// Which worm lit each cell, 1-based; 0 is unlit. See the module doc.
     owner: Vec<u16>,

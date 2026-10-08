@@ -659,7 +659,7 @@ impl Slot {
     /// Only the tests ask this — the render path wants the whole profile, not
     /// one bit of it, which is the point of folding family and brightness into
     /// one index.
-    fn warm(&self) -> bool {
+    fn warm(self) -> bool {
         self.draw == WARM_IX
     }
 }
@@ -2007,8 +2007,7 @@ mod tests {
         assert!(
             with_cores >= 2,
             "only {with_cores} of 4 panels has a dark service core: a column dark for \
-             {} rows inside a facade of five columns on one roofline",
-            STEP_MIN_H
+             {STEP_MIN_H} rows inside a facade of five columns on one roofline"
         );
     }
 

@@ -343,7 +343,7 @@ impl Hypercube {
     }
 
     fn draw_edges(&mut self) {
-        for &(a, b) in EDGES.iter() {
+        for &(a, b) in &EDGES {
             let (p, q) = (self.proj[a as usize], self.proj[b as usize]);
             let Some((t0, t1)) = clip(p.x, p.y, q.x, q.y, self.dw as f32, self.dh as f32) else {
                 continue;
@@ -500,12 +500,12 @@ mod tests {
     fn sixteen_vertices_thirty_two_edges_each_once() {
         assert_eq!(VERTS.len(), 16);
         assert_eq!(EDGES.len(), 32);
-        for &(a, b) in EDGES.iter() {
+        for &(a, b) in &EDGES {
             assert_eq!((a ^ b).count_ones(), 1, "{a}-{b} is not a cube edge");
             assert!(a < b, "{a}-{b} is the same edge twice");
         }
         let mut seen = std::collections::HashSet::new();
-        for &e in EDGES.iter() {
+        for &e in &EDGES {
             assert!(seen.insert(e), "{e:?} listed twice");
         }
         // Every vertex has one neighbour per axis.

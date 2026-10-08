@@ -1113,8 +1113,7 @@ impl Sakura {
         if seed == 0 {
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
-                .unwrap_or(0x5a_2a_91_7d);
+                .map_or(0x5a_2a_91_7d, |d| d.subsec_nanos() ^ d.as_secs() as u32);
             seed = nanos ^ std::process::id().wrapping_mul(0x9E37_79B9);
             next_rand(&mut seed);
             seed = seed.max(1);

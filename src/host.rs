@@ -216,7 +216,9 @@ mod tests {
         let budget = Duration::from_millis(20);
 
         // Frame that took longer than the budget: nothing left to sleep.
-        let late = Instant::now() - Duration::from_millis(50);
+        let late = Instant::now()
+            .checked_sub(Duration::from_millis(50))
+            .unwrap();
         pace(&m, budget, late);
         assert_eq!(m.overruns(), 1);
         pace(&m, budget, late);

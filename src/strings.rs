@@ -299,11 +299,11 @@ impl Strings {
     }
 
     fn step(&mut self) {
-        for h in self.heat.iter_mut() {
+        for h in &mut self.heat {
             *h = h.saturating_sub(self.decay);
         }
         let (max_x, max_y) = (self.max_x, self.max_y);
-        for v in self.verts.iter_mut() {
+        for v in &mut self.verts {
             Self::bounce(&mut v.x, &mut v.vx, max_x);
             Self::bounce(&mut v.y, &mut v.vy, max_y);
         }
@@ -478,7 +478,7 @@ mod tests {
             let mut c = Strings::new(&p, 15);
             // Faster than the panel is wide, so a single reflection overshoots
             // the far wall and only the clamp saves the index.
-            for v in c.verts.iter_mut() {
+            for v in &mut c.verts {
                 v.vx = c.max_x * 3.0;
                 v.vy = -c.max_y * 7.0;
             }

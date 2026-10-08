@@ -534,7 +534,7 @@ impl Speeder {
 
     /// A half-open span of rows or columns, clamped to the frame.
     #[inline]
-    fn span(&self, a: f32, b: f32, n: usize) -> (usize, usize) {
+    fn span(a: f32, b: f32, n: usize) -> (usize, usize) {
         let lo = a.clamp(0.0, n as f32) as usize;
         let hi = b.clamp(0.0, n as f32) as usize;
         (lo, hi)
@@ -555,7 +555,7 @@ impl Speeder {
         let ramp = TRUNK0 + bucket(z) * 3;
         let base = self.horizon + CAM_H * self.focal / z;
         let top = self.horizon - (CANOPY_H - CAM_H) * self.focal / z;
-        let (r0, r1) = self.span(top, base, self.rows);
+        let (r0, r1) = Self::span(top, base, self.rows);
         // The buttressed foot: a redwood is not a post, and the flare is what
         // plants it on the ground rather than merely ending at it.
         // Never more than a third of what is visible of THIS trunk: a flare
@@ -572,7 +572,7 @@ impl Speeder {
             } else {
                 half
             };
-            let (c0, c1) = self.span(sx - hw, sx + hw + 1.0, self.cols);
+            let (c0, c1) = Self::span(sx - hw, sx + hw + 1.0, self.cols);
             let inv = 0.5 / hw;
             for c in c0..c1 {
                 // Across the trunk: 0 on the lit edge, 1 on the shadow side.
@@ -605,7 +605,7 @@ impl Speeder {
             return;
         }
         let row = |h: f32| self.horizon - (h - CAM_H) * self.focal / z;
-        let (r0, r1) = self.span(row(LOG_H + LOG_R), row(LOG_H - LOG_R) + 1.0, self.rows);
+        let (r0, r1) = Self::span(row(LOG_H + LOG_R), row(LOG_H - LOG_R) + 1.0, self.rows);
         for r in r0..r1 {
             let colour = if r == r0 { LOG_LIT } else { LOG_DARK };
             for c in 0..self.cols {
@@ -625,16 +625,16 @@ impl Speeder {
         let sy = self.horizon - (RIDER_H - CAM_H) * self.focal / z;
         // The wake is behind it, which is the side it came from.
         let tail = if self.rider_vx > 0.0 { -1.0 } else { 1.0 } * half * 7.0;
-        let (wr0, wr1) = self.span(sy - half * 0.25, sy + half * 0.25 + 1.0, self.rows);
-        let (w0, w1) = self.span(sx.min(sx + tail), sx.max(sx + tail), self.cols);
+        let (wr0, wr1) = Self::span(sy - half * 0.25, sy + half * 0.25 + 1.0, self.rows);
+        let (w0, w1) = Self::span(sx.min(sx + tail), sx.max(sx + tail), self.cols);
         for r in wr0..wr1 {
             for c in w0..w1 {
                 self.grid
                     .set(r * self.cols + c, Cell::new(font::SHADE, RIDER_WAKE));
             }
         }
-        let (r0, r1) = self.span(sy - half * 0.45, sy + half * 0.45 + 1.0, self.rows);
-        let (c0, c1) = self.span(sx - half, sx + half + 1.0, self.cols);
+        let (r0, r1) = Self::span(sy - half * 0.45, sy + half * 0.45 + 1.0, self.rows);
+        let (c0, c1) = Self::span(sx - half, sx + half + 1.0, self.cols);
         for r in r0..r1 {
             for c in c0..c1 {
                 self.grid

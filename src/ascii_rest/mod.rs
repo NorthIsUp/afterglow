@@ -23,6 +23,16 @@
 // Ports keep upstream's literals (`6.28`, `3.14`) rather than TAU/PI: the
 // golden test compares against what upstream computes, not what it meant.
 #![allow(clippy::approx_constant)]
+// Same reason for the control flow: a port mirrors upstream's `if`/`else`
+// order, comparison chains and literals line for line, so it diffs cleanly
+// against the JavaScript it has to match bit for bit.
+#![allow(
+    clippy::if_not_else,
+    clippy::comparison_chain,
+    clippy::single_match_else,
+    clippy::decimal_bitwise_operands,
+    clippy::range_plus_one
+)]
 
 pub mod halftone;
 pub mod math;
@@ -448,12 +458,12 @@ pub(crate) mod tests {
         }
     }
 
-    fn short_tour() -> Option<Knobs> {
-        Some(Knobs {
+    fn short_tour() -> Knobs {
+        Knobs {
             hold_secs: 1,
             max_zoom_pct: 250,
             seed: 11,
-        })
+        }
     }
 
     /// What reaches the panel — only the reported rects, as simpledrm copies
@@ -464,7 +474,7 @@ pub(crate) mod tests {
     fn panel_is_the_tours_view<P: Piece>(pw: usize, ph: usize, aspect: usize) {
         with_test_aspect(aspect, || {
             let panel = Panel::new(pw, ph, pw);
-            let mut play = Play::<P>::with_tour(&panel, 30, short_tour());
+            let mut play = Play::<P>::with_tour(&panel, 30, Some(short_tour()));
             let mut buf = vec![0xDEAD_BEEFu32; panel.buf_len()];
             let mut hw = buf.clone();
             let mut fresh = vec![0u32; panel.buf_len()];
@@ -528,7 +538,7 @@ pub(crate) mod tests {
     fn touring_never_allocates() {
         with_test_aspect(180, || {
             let panel = Panel::new(1920, 1080, 1920);
-            let mut play = Play::<Probe<200, 100>>::with_tour(&panel, 30, short_tour());
+            let mut play = Play::<Probe<200, 100>>::with_tour(&panel, 30, Some(short_tour()));
             let mut buf = vec![0u32; panel.buf_len()];
             let mut frame = |play: &mut Play<Probe<200, 100>>| {
                 let mut s = Surface::new(&mut buf, &panel);
@@ -556,7 +566,7 @@ pub(crate) mod tests {
     fn the_mirror_and_the_first_hold_are_the_untoured_saver() {
         with_test_aspect(180, || {
             let panel = Panel::new(1920, 1080, 1920);
-            let mut on = Play::<Probe<200, 100>>::with_tour(&panel, 30, short_tour());
+            let mut on = Play::<Probe<200, 100>>::with_tour(&panel, 30, Some(short_tour()));
             let mut off = Play::<Probe<200, 100>>::with_tour(&panel, 30, None);
             let (mut a, mut b) = (vec![0u32; panel.buf_len()], vec![0u32; panel.buf_len()]);
             let mut held = true;

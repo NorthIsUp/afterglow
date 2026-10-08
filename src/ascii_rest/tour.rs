@@ -233,10 +233,9 @@ impl Tour {
         if self.wide_in == 0 || self.max_w <= self.base.w as usize {
             self.wide_in = self.close_ups();
             return match self.to.kind {
-                Kind::Full => self.base,
                 Kind::Base => self.full,
                 Kind::Close if next_rand(&mut self.rng) & 1 == 0 => self.full,
-                Kind::Close => self.base,
+                Kind::Full | Kind::Close => self.base,
             };
         }
         self.wide_in -= 1;

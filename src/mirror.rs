@@ -47,6 +47,7 @@
 //! `prev` starts impossible), later ones only what changed; `count == 0` is the
 //! idle keepalive that notices a dead socket.
 
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -250,7 +251,8 @@ impl Mirror {
         self.ready.notify_all();
 
         let mut json = String::with_capacity(8 << 10);
-        json.push_str(&format!(
+        let _ = write!(
+            json,
             "{{\"saver\":\"{saver}\",\"savers\":[{savers}],\"epoch\":{epoch},\
              \"panel_w\":{pw},\"panel_h\":{ph},\"pixel_aspect\":{pa},\"panel_mm\":{pmm},\
              \"cols\":{cols},\"rows\":{rows},\
@@ -271,19 +273,15 @@ impl Mirror {
                 .map(|n| format!("\"{n}\""))
                 .collect::<Vec<_>>()
                 .join(",")
-        ));
+        );
         for (i, c) in pal.iter().enumerate() {
-            json.push_str(&format!(
-                "{}{}",
-                if i > 0 { "," } else { "" },
-                c & 0xFF_FFFF
-            ));
+            let _ = write!(json, "{}{}", if i > 0 { "," } else { "" }, c & 0xFF_FFFF);
         }
         json.push_str("],\"glyphs\":[");
         for (i, g) in font::GLYPHS.iter().enumerate() {
             json.push_str(if i > 0 { ",[" } else { "[" });
             for (j, b) in g.iter().enumerate() {
-                json.push_str(&format!("{}{b}", if j > 0 { "," } else { "" }));
+                let _ = write!(json, "{}{b}", if j > 0 { "," } else { "" });
             }
             json.push(']');
         }
@@ -296,7 +294,7 @@ impl Mirror {
 
 /// Bind and accept forever. Returns only if the bind fails — a mirror that
 /// cannot listen must not take the screensaver down with it.
-pub fn serve(mirror: Arc<Mirror>, addr: &str) {
+pub fn serve(mirror: &Arc<Mirror>, addr: &str) {
     let listener = match TcpListener::bind(addr) {
         Ok(l) => l,
         Err(e) => {
@@ -306,7 +304,7 @@ pub fn serve(mirror: Arc<Mirror>, addr: &str) {
     };
     eprintln!("[screensaver] mirror listening on {addr}");
     for stream in listener.incoming().flatten() {
-        let m = Arc::clone(&mirror);
+        let m = Arc::clone(mirror);
         // Thread per connection: a request is a route match and then either a
         // one-shot body or a long-lived stream, and a thread models the second
         // one for free. Concurrency is bounded by MAX_VIEWERS at the only route
@@ -370,11 +368,11 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
         },
         // Minutes, because that is the unit anyone setting this thinks in; the
         // renderer's own unit is seconds and `/meta` reports those. 0 is off.
-        ("POST", "/rotate") => match param(&query, "mins")
-            .and_then(|v| v.parse::<u64>().ok())
-            .filter(|m| *m <= MAX_ROTATE_MINS)
-        {
-            Some(mins) => {
+        ("POST", "/rotate") => {
+            if let Some(mins) = param(&query, "mins")
+                .and_then(|v| v.parse::<u64>().ok())
+                .filter(|m| *m <= MAX_ROTATE_MINS)
+            {
                 mirror.set_rotate_secs(mins * 60);
                 send(
                     &mut s,
@@ -382,10 +380,9 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
                     "application/json",
                     rotate_json(mirror).as_bytes(),
                 )
-            }
-            // Anything else changes nothing: a garbled number must not be able
-            // to turn rotation off, which is what a lenient parse would do.
-            None => {
+            } else {
+                // Anything else changes nothing: a garbled number must not be able
+                // to turn rotation off, which is what a lenient parse would do.
                 eprintln!(
                     "[screensaver] rejected rotate mins {:?}",
                     param(&query, "mins")
@@ -397,7 +394,7 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
                     br#"{"error":"rotate mins must be 0..=1440"}"#,
                 )
             }
-        },
+        }
         (_, "/") => send(
             &mut s,
             "200 OK",
@@ -415,7 +412,7 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
                 // cached with the rest, because `/rotate` moves it between
                 // modesets and a stale one is a page showing a number that is
                 // not what the panel is doing.
-                meta.push_str(&format!(",\"rotate_secs\":{}}}", mirror.rotate_secs()));
+                let _ = write!(meta, ",\"rotate_secs\":{}}}", mirror.rotate_secs());
                 send(&mut s, "200 OK", "application/json", meta.as_bytes())
             }
         }
