@@ -68,7 +68,7 @@ macro_rules! each_piece {
             misty_forest::{MistyForest, #[no_upstream] MistyForestWide},
             night_coast::{NightCoast, #[no_upstream] NightCoastWide},
             ocean_sunset::{OceanSunset, #[no_upstream] OceanSunsetWide},
-            reaction_diffusion::{ReactionDiffusion, #[fill] ReactionDiffusionWide},
+            reaction_diffusion::{#[fill] ReactionDiffusion},
             storm_plains::{StormPlains, #[no_upstream] StormPlainsWide},
             synthwave::{Synthwave, #[fill] SynthwaveWide},
             taj_dawn::{TajDawn, #[no_upstream] TajDawnWide},
