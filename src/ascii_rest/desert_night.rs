@@ -9,24 +9,22 @@
 //! reads as star dust, softened toward an ordered one inside the band; the sand
 //! keeps an ordered dither so its slopes read as smooth surfaces. Each cell is
 //! one dot, in the palette colour nearest its hue.
+//!
+//! `desert-night-wide` is the same scene recomposed for a 3.2:1 panel. The
+//! camera's view widens over the same dune field; the acacia and the galaxy's
+//! core move 60 columns right with it, the town 50, and the milky way sweeps
+//! further so its arch spans the whole sky.
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, hash, js_hypot, js_round, mix, noise, smooth, unit};
 use super::{Fit, Piece, hex};
 use crate::grid::Cell;
 
-const W: usize = 200;
 const H: usize = 100;
-const N: usize = W * H;
 const K: f64 = 0.62;
 const HZ: f64 = 64.0; // eye level, in rows
 const CAM: f64 = 6.0;
 const HMAX: f64 = 16.0; // no dune is taller
-const TOWN: [f64; 2] = [30.0, 66.0]; // the far glow, just under the horizon
-const CORE: [f64; 2] = [152.0, 38.0]; // the galaxy's bright centre
-const ARC: [f64; 3] = [50.0, 209.8, 199.8]; // the milky way's arch: centre and radius
-const ARC_S: [f64; 2] = [-1.035, 0.8]; // its angle at the core, and the sweep to the west edge
-const ACACIA: usize = 150;
 
 const SKY: u8 = 0;
 const SAND: u8 = 1;
@@ -116,41 +114,6 @@ fn march(u: f64, v: f64) -> f64 {
     0.0
 }
 
-/// Meteor 0 is already falling; meteor n starts somewhere in its 7 second
-/// slot. `[start, x0, y0, dx, dy, speed]`.
-fn meteor(n: usize) -> [f64; 6] {
-    let nf = n as f64;
-    let start = if n == 0 {
-        -0.35
-    } else {
-        7.0 * (nf - 1.0) + 2.5 + hash(nf, 71.0) * 2.5
-    };
-    let x0 = if n == 0 {
-        199.0
-    } else {
-        30.0 + hash(nf, 72.0) * 140.0
-    };
-    let y0 = if n == 0 {
-        4.0
-    } else {
-        4.0 + hash(nf, 73.0) * 18.0
-    };
-    // each one heads across the sky rather than straight off its nearer edge
-    let a = if n == 0 {
-        2.65
-    } else {
-        (if x0 > 100.0 { 2.6 } else { 0.55 }) + (hash(nf, 75.0) - 0.5) * 0.4
-    };
-    [
-        start,
-        x0,
-        y0,
-        a.cos(),
-        a.sin(),
-        52.0 + hash(nf, 76.0) * 30.0,
-    ]
-}
-
 struct Star {
     k: usize,
     bright: f64,
@@ -159,7 +122,57 @@ struct Star {
     ph: f64,
 }
 
-pub struct DesertNight {
+/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+struct Layout {
+    name: &'static str,
+    w: usize,
+    anchor: f64,
+    /// The camera's centre column.
+    cx: f64,
+    /// The far glow, just under the horizon.
+    town: [f64; 2],
+    /// The galaxy's bright centre.
+    core: [f64; 2],
+    /// The milky way's arch: centre and radius.
+    arc: [f64; 3],
+    /// Its angle at the core, and the sweep to the west edge.
+    arc_s: [f64; 2],
+    acacia: usize,
+    /// Where meteors start: the first one's column, and the span the rest start
+    /// in from column 30.
+    meteor_x: [f64; 2],
+}
+
+const ORIGINAL: Layout = Layout {
+    name: "desert-night",
+    w: 200,
+    anchor: 0.35,
+    cx: 100.0,
+    town: [30.0, 66.0],
+    core: [152.0, 38.0],
+    arc: [50.0, 209.8, 199.8],
+    arc_s: [-1.035, 0.8],
+    acacia: 150,
+    meteor_x: [199.0, 140.0],
+};
+
+const WIDE: Layout = Layout {
+    name: "desert-night-wide",
+    w: 320,
+    anchor: 0.5,
+    cx: 160.0,
+    town: [80.0, 66.0],
+    core: [212.0, 38.0],
+    arc: [110.0, 209.8, 199.8],
+    arc_s: [-1.035, 1.12],
+    acacia: 210,
+    meteor_x: [319.0, 260.0],
+};
+
+pub type DesertNight = Scene<false>;
+pub type DesertNightWide = Scene<true>;
+
+pub struct Scene<const IS_WIDE: bool> {
     dots: Dots,
     mat: Vec<u8>,
     s_r: Vec<f32>,
@@ -182,13 +195,56 @@ pub struct DesertNight {
     floor: Vec<f32>,
 }
 
-impl Piece for DesertNight {
-    const NAME: &'static str = "desert-night";
-    const COLS: usize = W;
+impl<const IS_WIDE: bool> Scene<IS_WIDE> {
+    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
+    const W: usize = Self::L.w;
+    const N: usize = Self::W * H;
+
+    /// Meteor 0 is already falling; meteor n starts somewhere in its 7 second
+    /// slot. `[start, x0, y0, dx, dy, speed]`.
+    fn meteor(n: usize) -> [f64; 6] {
+        let nf = n as f64;
+        let start = if n == 0 {
+            -0.35
+        } else {
+            7.0 * (nf - 1.0) + 2.5 + hash(nf, 71.0) * 2.5
+        };
+        let x0 = if n == 0 {
+            Self::L.meteor_x[0]
+        } else {
+            30.0 + hash(nf, 72.0) * Self::L.meteor_x[1]
+        };
+        let y0 = if n == 0 {
+            4.0
+        } else {
+            4.0 + hash(nf, 73.0) * 18.0
+        };
+        // each one heads across the sky rather than straight off its nearer edge
+        let a = if n == 0 {
+            2.65
+        } else {
+            (if x0 > Self::L.cx { 2.6 } else { 0.55 }) + (hash(nf, 75.0) - 0.5) * 0.4
+        };
+        [
+            start,
+            x0,
+            y0,
+            a.cos(),
+            a.sin(),
+            52.0 + hash(nf, 76.0) * 30.0,
+        ]
+    }
+}
+
+impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
+    const NAME: &'static str = Self::L.name;
+    const COLS: usize = Self::W;
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
-    const FIT: Fit = Fit::Cover { anchor: 0.35 };
+    const FIT: Fit = Fit::Cover {
+        anchor: Self::L.anchor,
+    };
     const GROUND: u32 = hex("#04060c");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[
@@ -210,21 +266,21 @@ impl Piece for DesertNight {
         let g = unit([0.6, 0.5, 0.4]);
 
         // --- the dunes, raymarched once --------------------------------------
-        let mut mat = vec![SKY; N];
-        let mut depth = vec![0f32; N];
-        let (mut s_r, mut s_g, mut s_b) = (vec![0f32; N], vec![0f32; N], vec![0f32; N]);
-        let mut crest = vec![0f32; N];
-        let mut top = [H as i16; W];
+        let mut mat = vec![SKY; Self::N];
+        let mut depth = vec![0f32; Self::N];
+        let (mut s_r, mut s_g, mut s_b) = (vec![0f32; Self::N], vec![0f32; Self::N], vec![0f32; Self::N]);
+        let mut crest = vec![0f32; Self::N];
+        let mut top = vec![H as i16; Self::W];
         for r in 0..H {
             let v = ((HZ - (r as f64 + 0.5)) / 100.0) * K;
             for (x, col_top) in top.iter_mut().enumerate() {
                 let xf = x as f64;
-                let u = ((xf + 0.5 - 100.0) / 100.0) * K;
+                let u = ((xf + 0.5 - Self::L.cx) / 100.0) * K;
                 let z = march(u, v);
                 if z == 0.0 {
                     continue;
                 }
-                let k = r * W + x;
+                let k = r * Self::W + x;
                 mat[k] = SAND;
                 depth[k] = z as f32;
                 if (r as i16) < *col_top {
@@ -265,7 +321,7 @@ impl Piece for DesertNight {
                     0.55 + 0.45 * smooth(0.2, 0.72, ph)
                 };
                 let near = 0.72 + 0.28 * smooth(5.0, 25.0, z);
-                let reach = (0.55 + 0.45 * (-(xf - TOWN[0]).abs() / 90.0).exp())
+                let reach = (0.55 + 0.45 * (-(xf - Self::L.town[0]).abs() / 90.0).exp())
                     * fall
                     * near
                     * smooth(300.0, 120.0, z);
@@ -287,7 +343,7 @@ impl Piece for DesertNight {
                 // distance thins the light into the horizon's haze
                 let haze =
                     clamp(1.0 - (-z / 260.0).exp()) * mix(0.7, 0.92, smooth(120.0, 300.0, z));
-                let hg = (-(xf - TOWN[0]).abs() / 40.0).exp() * 0.18;
+                let hg = (-(xf - Self::L.town[0]).abs() / 40.0).exp() * 0.18;
                 cr = mix(cr, 0.07 + hg, haze);
                 cg = mix(cg, 0.085 + hg * 0.6, haze);
                 cb = mix(cb, 0.15 + hg * 0.3, haze);
@@ -306,10 +362,10 @@ impl Piece for DesertNight {
         }
 
         // --- the acacia, on the crest under the galaxy's core -----------------
-        let mut bark = vec![0f32; N]; // warm light from the core caught on the canopy's top
+        let mut bark = vec![0f32; Self::N]; // warm light from the core caught on the canopy's top
         {
-            let ac = ACACIA as f64;
-            let base = f64::from(top[ACACIA]);
+            let ac = Self::L.acacia as f64;
+            let base = f64::from(top[Self::L.acacia]);
             let canopy_top = base - 16.0;
             // an umbrella: a low lumpy dome on top, thinning to the tips, tufts below
             const SPAN: f64 = 17.0;
@@ -341,7 +397,7 @@ impl Piece for DesertNight {
             // upstream's typed arrays drop writes past the last row
             let r1 = (base as usize + 1).min(H - 1);
             for r in r0..=r1 {
-                for x in ACACIA - 26..=ACACIA + 26 {
+                for x in Self::L.acacia - 26..=Self::L.acacia + 26 {
                     let (px, py) = (x as f64 + 0.5, r as f64 + 0.5);
                     let mut on = canopy(x as f64, px, py);
                     for &([ax, ay], [bx, by], w) in &limbs {
@@ -353,18 +409,18 @@ impl Piece for DesertNight {
                         }
                     }
                     if on {
-                        mat[r * W + x] = TREE;
+                        mat[r * Self::W + x] = TREE;
                     }
                 }
             }
             // the canopy's upper edge, rimmed by the bulge behind it
             for r in 1..H {
-                for x in 0..W {
-                    let k = r * W + x;
-                    if mat[k] != TREE || mat[k - W] != SKY {
+                for x in 0..Self::W {
+                    let k = r * Self::W + x;
+                    if mat[k] != TREE || mat[k - Self::W] != SKY {
                         continue;
                     }
-                    let (dx, dy) = (x as f64 + 0.5 - CORE[0], (r as f64 - CORE[1]) * 1.3);
+                    let (dx, dy) = (x as f64 + 0.5 - Self::L.core[0], (r as f64 - Self::L.core[1]) * 1.3);
                     bark[k] = (0.25 + 0.75 * (-(dx * dx + dy * dy).sqrt() / 18.0).exp()) as f32;
                 }
             }
@@ -372,34 +428,34 @@ impl Piece for DesertNight {
 
         // --- the town's lights, a few pinpricks along the far horizon ---------
         let mut lamps: Vec<[f64; 3]> = Vec::with_capacity(5);
-        let town = TOWN[0] as usize;
+        let town = Self::L.town[0] as usize;
         for x in town - 9..=town + 9 {
             if lamps.len() >= 5 {
                 break;
             }
             let xf = x as f64;
             let r = top[x] as usize;
-            if r >= H || depth[r * W + x] < 140.0 || hash(xf, 91.0) > 0.45 {
+            if r >= H || depth[r * Self::W + x] < 140.0 || hash(xf, 91.0) > 0.45 {
                 continue;
             }
-            if lamps.iter().any(|l| (l[0] as usize % W).abs_diff(x) < 2) {
+            if lamps.iter().any(|l| (l[0] as usize % Self::W).abs_diff(x) < 2) {
                 continue;
             }
             lamps.push([
-                (r * W + x) as f64,
+                (r * Self::W + x) as f64,
                 hash(xf, 92.0) * 6.28,
                 0.7 + hash(xf, 93.0) * 1.4,
             ]);
         }
 
         // --- the sky: gradient, the town's glow and the milky way ------------
-        let (mut k_r, mut k_g, mut k_b) = (vec![0f32; N], vec![0f32; N], vec![0f32; N]);
-        let mut air = vec![0f32; N];
-        let mut band = vec![0f32; N];
+        let (mut k_r, mut k_g, mut k_b) = (vec![0f32; Self::N], vec![0f32; Self::N], vec![0f32; Self::N]);
+        let mut air = vec![0f32; Self::N];
+        let mut band = vec![0f32; Self::N];
         for r in 0..H {
-            for xi in 0..W {
+            for xi in 0..Self::W {
                 let x = xi as f64;
-                let k = r * W + xi;
+                let k = r * Self::W + xi;
                 let y = r as f64 + 0.5;
                 let v = clamp(y / HZ);
                 // a saturated navy, so the dither's specks read as colour
@@ -408,7 +464,7 @@ impl Piece for DesertNight {
                 let mut cb = 0.1 + 0.08 * v * v;
                 // the town: an amber dome rising from below the horizon, its warmth
                 // taking over from the navy rather than greying it
-                let (tx, ty) = (x + 0.5 - TOWN[0], (y - TOWN[1]) * 1.9);
+                let (tx, ty) = (x + 0.5 - Self::L.town[0], (y - Self::L.town[1]) * 1.9);
                 let td = (tx * tx + ty * ty).sqrt();
                 let glow = (-td / 16.0).exp() * 0.4 + (-td / 60.0).exp() * 0.22;
                 let cool = 1.0 - 0.85 * clamp((-td / 22.0).exp() * 1.5);
@@ -425,9 +481,9 @@ impl Piece for DesertNight {
                     * cool
                     * along) as f32;
                 // the milky way, along an arc from the core up and over to the west
-                let (ax, ay) = (x + 0.5 - ARC[0], y - ARC[1]);
-                let d = (ax * ax + ay * ay).sqrt() - ARC[2];
-                let s_raw = (ARC_S[0] - ay.atan2(ax)) / ARC_S[1]; // 0 at the core end
+                let (ax, ay) = (x + 0.5 - Self::L.arc[0], y - Self::L.arc[1]);
+                let d = (ax * ax + ay * ay).sqrt() - Self::L.arc[2];
+                let s_raw = (Self::L.arc_s[0] - ay.atan2(ax)) / Self::L.arc_s[1]; // 0 at the core end
                 let s = clamp(s_raw);
                 // the band ends at the core
                 let end = if s_raw < 0.0 {
@@ -441,13 +497,19 @@ impl Piece for DesertNight {
                     1.0
                 };
                 let w = 9.0 + 8.0 * (1.0 - s).powf(1.4);
-                let lane0 = (noise(s * 9.0, 3.3, 0.0) - 0.5) * w * 0.5 * smooth(0.0, 0.25, s);
+                // (wide: the lanes stretch with the longer sweep)
+                let lane_s = if IS_WIDE {
+                    s * 9.0 * Self::L.arc_s[1] / 0.8
+                } else {
+                    s * 9.0
+                };
+                let lane0 = (noise(lane_s, 3.3, 0.0) - 0.5) * w * 0.5 * smooth(0.0, 0.25, s);
                 let mut b = (-(d / w).powi(2)).exp();
                 let clump = fbm(x * 0.09, y * 0.09, 4);
                 b *= 0.35 + 1.1 * smooth(0.3, 0.75, clump);
                 b *= (0.55 + 0.55 * (1.0 - s)) * end;
                 // the core's bulge
-                let (cx, cy) = (x + 0.5 - CORE[0], (y - CORE[1]) * 1.3);
+                let (cx, cy) = (x + 0.5 - Self::L.core[0], (y - Self::L.core[1]) * 1.3);
                 let cd = (cx * cx + cy * cy).sqrt();
                 let core = (-cd / 6.0).exp() * 0.5 + (-cd / 22.0).exp() * 0.25;
                 b += core;
@@ -476,11 +538,11 @@ impl Piece for DesertNight {
         }
 
         // per-cell dither and floor: random in open sky, half ordered in the band
-        let mut dith = vec![0f32; N];
-        let mut floor0 = vec![0f32; N];
+        let mut dith = vec![0f32; Self::N];
+        let mut floor0 = vec![0f32; Self::N];
         for r in 0..H {
-            for x in 0..W {
-                let k = r * W + x;
+            for x in 0..Self::W {
+                let k = r * Self::W + x;
                 let bay = bayer(r, x);
                 if mat[k] == SKY {
                     // the band and the glow low down get a wider, half-ordered dither, so
@@ -501,8 +563,8 @@ impl Piece for DesertNight {
         // --- stars: thick in the band, a few bright ones everywhere -----------
         let mut stars = Vec::new();
         for r in 0..HZ as usize + 2 {
-            for xi in 0..W {
-                let k = r * W + xi;
+            for xi in 0..Self::W {
+                let k = r * Self::W + xi;
                 if mat[k] != SKY {
                     continue;
                 }
@@ -547,10 +609,10 @@ impl Piece for DesertNight {
             dith,
             floor0,
             stars,
-            f_r: vec![0f32; N],
-            f_g: vec![0f32; N],
-            f_b: vec![0f32; N],
-            floor: vec![0f32; N],
+            f_r: vec![0f32; Self::N],
+            f_g: vec![0f32; Self::N],
+            f_b: vec![0f32; Self::N],
+            floor: vec![0f32; Self::N],
         }
     }
 
@@ -564,8 +626,8 @@ impl Piece for DesertNight {
         // the airglow drifts slowly along the horizon
         let air0 = (HZ * 0.3).floor() as usize;
         for r in air0..HZ as usize + 2 {
-            for x in 0..W {
-                let k = r * W + x;
+            for x in 0..Self::W {
+                let k = r * Self::W + x;
                 if self.mat[k] != SKY {
                     continue;
                 }
@@ -576,7 +638,7 @@ impl Piece for DesertNight {
                 bump(&mut fb[k], a * 1.2);
             }
         }
-        for k in 0..N {
+        for k in 0..Self::N {
             let m = self.mat[k];
             if m == SAND {
                 fr[k] = self.s_r[k];
@@ -623,7 +685,7 @@ impl Piece for DesertNight {
         let n = ((t - 2.5) / 7.0).floor() + 1.0;
         let first = (n - 1.0).max(0.0) as usize;
         for i in first..=(n + 1.0) as usize {
-            let [start, x0, y0, dx, dy, speed] = meteor(i);
+            let [start, x0, y0, dx, dy, speed] = Self::meteor(i);
             let age = t - start;
             if !(0.0..=0.9).contains(&age) {
                 continue;
@@ -637,10 +699,10 @@ impl Piece for DesertNight {
                 j += 1.0;
                 let px = js_round(hx - dx * f * len);
                 let py = js_round(hy - dy * f * len * 0.75);
-                if px < 0.0 || px >= W as f64 || py < 0.0 || py >= H as f64 {
+                if px < 0.0 || px >= Self::W as f64 || py < 0.0 || py >= H as f64 {
                     continue;
                 }
-                let k = py as usize * W + px as usize;
+                let k = py as usize * Self::W + px as usize;
                 if self.mat[k] != SKY {
                     continue;
                 }
@@ -655,8 +717,8 @@ impl Piece for DesertNight {
         let hf = H as f64;
         for r in 0..H {
             let edge = smooth(hf + 1.0, hf - 12.0, r as f64 + 0.5);
-            for x in 0..W {
-                let k = r * W + x;
+            for x in 0..Self::W {
+                let k = r * Self::W + x;
                 let rgb = [f64::from(fr[k]), f64::from(fg[k]), f64::from(fb[k])];
                 let fl = f64::from(floor[k]);
                 let peak = rgb[0].max(rgb[1]).max(rgb[2]).max(1e-4);
