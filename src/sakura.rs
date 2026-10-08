@@ -1105,19 +1105,8 @@ fn rake_ring(r: &mut Raster, sx0: i32, sy0: i32, rx: i32) {
 
 impl Sakura {
     pub fn new(panel: &Panel, fps: u32) -> Self {
-        // 0 means "a different scene every time the pod starts". The clock
-        // alone is a poor seed — two pods started in the same second would
-        // draw the same tree — so the pid goes in too, and the pair is mixed
-        // rather than used raw.
-        let mut seed = env_num(&["SAKURA_SEED"], 0, 0, u32::MAX as i64) as u32;
-        if seed == 0 {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0x5a_2a_91_7d, |d| d.subsec_nanos() ^ d.as_secs() as u32);
-            seed = nanos ^ std::process::id().wrapping_mul(0x9E37_79B9);
-            next_rand(&mut seed);
-            seed = seed.max(1);
-        }
+        // Unset means "a different scene every time the pod starts".
+        let seed = crate::saver_seed(&["SAKURA_SEED"], 0x5a_2a_91_7d);
         let mut pick = seed;
         let setting = Setting::pick(&mut pick);
         let style = Style::pick(&mut pick);

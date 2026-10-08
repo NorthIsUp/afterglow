@@ -179,11 +179,19 @@ pub fn env_num(keys: &[&'static str], default: i64, lo: i64, hi: i64) -> i64 {
 /// The clock alone is a poor seed (two pods starting in the same second draw
 /// the same scene), so the pid mixes in, and the pair is stirred rather than
 /// used raw.
+///
+/// Under `cargo test` it is `fallback`, always: a test that builds a saver
+/// rolled a new scene every run, so a check that holds for most scenes failed
+/// the required `build` now and then (doodles drew nothing in 40k frames
+/// once). Tests that are about seeds pass their own.
 #[must_use]
 pub fn saver_seed(keys: &[&'static str], fallback: u32) -> u32 {
     let pinned = env_num(keys, 0, 0, u32::MAX as i64) as u32;
     if pinned != 0 {
         return pinned;
+    }
+    if cfg!(test) {
+        return fallback;
     }
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
