@@ -158,9 +158,9 @@ Set it and the mirror page grows three controls, labelled `actual`:
 | **size**      | the panel's shape AND physical size, so a saver on the page is the size it is on the wall.                            |
 | **calibrate** | teaches the page how big your screen is, which is what makes `size` exact.                                            |
 
-`ratio` and `size` are modes, and the choice is remembered per device. Without
-`SAVER_PANEL_MM` the whole group is hidden: `ratio` is the CSS default anyway,
-and offering `size` next to it would be offering a button that lies.
+`ratio` and `size` are modes, and the choice is remembered per device and kept
+across saver switches. Without `SAVER_PANEL_MM` the whole group is hidden:
+`ratio` is the fallback anyway, and offering `size` next to it would be offering a button that lies.
 
 **`size` is the default.** CSS cannot supply the other half of the sum — how big
 the viewer's own monitor is — because `width: 200mm` is 200mm only when the
