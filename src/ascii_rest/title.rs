@@ -60,18 +60,19 @@ impl Title {
         self.pick(cols, rows).map(|b| (b.w, b.h))
     }
 
-    /// Over `grid`'s bottom-left corner.
+    /// Over the bottom-left corner of the cells wholly on the panel, so a
+    /// shifted grid's caption is never cut by the glass's edge.
     #[inline]
     pub fn stamp(&self, grid: &mut Grid) {
-        let (cols, rows) = (grid.cols(), grid.rows());
-        let Some(b) = self.pick(cols, rows) else {
+        let (xs, ys) = grid.inside();
+        let Some(b) = self.pick(xs.len(), ys.len()) else {
             return;
         };
-        let top = rows - b.h;
+        let (cols, top) = (grid.cols(), ys.end - b.h);
         for y in 0..b.h {
             let row = &b.cells[y * b.w..(y + 1) * b.w];
             for (x, &c) in row.iter().enumerate() {
-                grid.set((top + y) * cols + x, c);
+                grid.set((top + y) * cols + xs.start + x, c);
             }
         }
     }

@@ -233,8 +233,9 @@ pub fn label(key: &str, all: &[Knob]) -> String {
 /// One line for the knobs whose name does not say enough.
 pub fn help(key: &str) -> Option<&'static str> {
     Some(match key {
-        "ASCII_REST_TOUR" => "the slow camera: zooms into detail, pulls back now and then",
-        "ASCII_REST_TOUR_HOLD_SECS" => "seconds each view holds before the camera moves",
+        "ASCII_REST_TOUR" => "the slow camera: drifts into detail, pulls back now and then",
+        "ASCII_REST_TOUR_SHOT_SECS" => "seconds a shot takes, give or take; slow moves end sooner",
+        "ASCII_REST_TOUR_CUTS" => "cut between framings and drift, instead of one long move",
         "ASCII_REST_TOUR_MAX_ZOOM_PCT" => "closest zoom, per cent of the cover view's cell",
         "ASCII_REST_TITLE" => "the scene's name in a corner",
         k if k.ends_with("_SEED") => "0 rolls a new one every build; anything else pins it",
@@ -360,7 +361,8 @@ mod tests {
         for k in [
             "ASCII_REST_TITLE",
             "ASCII_REST_TOUR",
-            "ASCII_REST_TOUR_HOLD_SECS",
+            "ASCII_REST_TOUR_SHOT_SECS",
+            "ASCII_REST_TOUR_CUTS",
             "ASCII_REST_TOUR_MAX_ZOOM_PCT",
         ] {
             assert!(keys.contains(&k), "{k} not in {keys:?}");
