@@ -458,7 +458,7 @@ def main() -> None:
 
         p()
         p("/// Every non-ASCII character an ascii.rest text piece prints, sorted by")
-        p("/// char so `text::glyph` can binary-search it.")
+        p("/// char so `glyph::of` can binary-search it.")
         p("#[rustfmt::skip]")
         body = ", ".join(f"({ch!r}, {idx})" for ch, idx in text)
         p(f"pub const TEXT: [(char, u16); {len(text)}] = [{body}];")

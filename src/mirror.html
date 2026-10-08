@@ -337,12 +337,11 @@
   // Storage only seeds it, and a private window that cannot store still keeps
   // its calibration for as long as the tab is open.
   let pxmm = calibrated();
-  // The slider's value while calibrate is open, 0 otherwise — the size being
-  // previewed, which survives a switch just as the committed one does.
-  let preview = 0;
 
+  // While calibrate is open the slider IS the size being previewed, so it
+  // survives a switch just as the committed one does.
   function pxPerMm() {
-    return preview || pxmm || NOMINAL_PX_MM;
+    return (!cal.hidden && parseFloat(slider.value)) || pxmm || NOMINAL_PX_MM;
   }
 
   function setPxPerMm(v) {
@@ -407,8 +406,12 @@
   const aspect = () =>
     (meta.panel_w * meta.pixel_aspect) / (meta.panel_h * 100);
 
-  // The box `ratio` fits into: the window, less everything else on the page
-  // and the pinned calibrate panel's reserved strip.
+  // Keeps the canvas off the window's edge.
+  const MARGIN = 8;
+
+  // The box the canvas's content must fit in, in both modes: the window, less
+  // everything else on the page, the pinned calibrate panel's reserved strip,
+  // and the canvas's own border, which sits outside the width set from JS.
   function room() {
     const st = getComputedStyle(document.body);
     let h = innerHeight - parseFloat(st.paddingBottom);
@@ -416,17 +419,21 @@
       if (el === canvas || !el.offsetHeight) continue;
       h -= el.offsetHeight + parseFloat(st.rowGap);
     }
-    // 2 for the canvas border, 8 so the page does not sit flush to an edge.
-    return [innerWidth - 10, h - 10];
+    const border = canvas.offsetWidth - canvas.clientWidth;
+    return [innerWidth - border - MARGIN, h - border - MARGIN];
   }
 
-  function paintModes() {
+  function paintModes(tooBig) {
     mratio.setAttribute("aria-pressed", String(!sized()));
     msize.setAttribute("aria-pressed", String(sized()));
     // Say WHICH number `size` is using: uncalibrated it is the browser's
     // nominal inch, a guess, and a viewer holding the page against the real
     // panel deserves to know that before concluding the maths is wrong.
-    msize.textContent = pxmm ? "size ✓" : "size";
+    msize.textContent = tooBig
+      ? "size — too big for this window"
+      : pxmm
+        ? "size ✓"
+        : "size";
     msize.title = pxmm
       ? "matched to your screen"
       : "using the browser's nominal 96dpi — calibrate to make it exact";
@@ -435,22 +442,19 @@
   function applyActualSize() {
     if (!meta) return;
     modes.hidden = !meta.panel_mm;
-    paintModes();
     const ar = aspect();
+    const [rw, rh] = room();
     let w, h;
     if (sized()) {
       // A fixed physical size: an oversized panel must overflow and say so
       // rather than be shrunk.
       w = meta.panel_mm * pxPerMm();
       h = w / ar;
-      if (w > innerWidth || h > innerHeight - 48) {
-        msize.textContent = "size — too big for this window";
-      }
     } else {
-      const [rw, rh] = room();
       w = Math.max(16, Math.min(rw, rh * ar));
       h = w / ar;
     }
+    paintModes(sized() && (w > rw || h > rh));
     canvas.style.width = w + "px";
     canvas.style.height = h + "px";
     fitScaling();
@@ -462,13 +466,18 @@
     calnow.textContent = `${(k * 25.4).toFixed(0)} dpi · panel ${(meta.panel_mm * k) | 0}px wide`;
   }
 
-  // Open or close calibrate. The panel is pinned to the bottom of the window,
-  // so the body reserves its height once here — never while dragging, which
-  // is what kept moving the slider.
+  // The calibrate panel is pinned to the bottom of the window, so the body
+  // reserves its height — on open and on resize, where its text can rewrap,
+  // but never while dragging, which is what kept moving the slider.
+  function reserveCal() {
+    document.body.style.paddingBottom = cal.hidden
+      ? ""
+      : cal.offsetHeight + "px";
+  }
+
   function showCal(open) {
     cal.hidden = !open;
-    document.body.style.paddingBottom = open ? cal.offsetHeight + "px" : "";
-    preview = open ? parseFloat(slider.value) : 0;
+    reserveCal();
     applyActualSize();
   }
 
@@ -482,15 +491,15 @@
   // A live preview while dragging: the canvas resizes above the slider, so
   // the viewer sees the panel grow toward its real size rather than having to
   // commit and then judge.
-  slider.oninput = () => {
-    preview = parseFloat(slider.value);
+  function previewSlider() {
     drawCard();
     applyActualSize();
-  };
+  }
+  slider.oninput = previewSlider;
   document.getElementById("calreset").onclick = () => {
     setPxPerMm(0);
     slider.value = NOMINAL_PX_MM;
-    slider.oninput();
+    previewSlider();
   };
   document.getElementById("caldone").onclick = () => {
     setPxPerMm(parseFloat(slider.value));
@@ -514,7 +523,10 @@
     const crisp = ratio >= 1 || Number.isInteger(1 / ratio);
     canvas.style.imageRendering = crisp ? "pixelated" : "auto";
   }
-  addEventListener("resize", applyActualSize);
+  addEventListener("resize", () => {
+    reserveCal();
+    applyActualSize();
+  });
 
   function applyMeta(m) {
     meta = m;

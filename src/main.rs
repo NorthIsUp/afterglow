@@ -97,6 +97,7 @@ mod dvd;
 mod fire;
 mod font;
 mod fractal;
+mod glyph;
 mod grid;
 mod hardrain;
 mod host;
