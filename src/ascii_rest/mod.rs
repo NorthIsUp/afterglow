@@ -58,7 +58,6 @@ macro_rules! each_piece {
             night_coast_wide::NightCoastWide,
             ocean_sunset::OceanSunset,
             ocean_sunset_wide::OceanSunsetWide,
-            plasma::Plasma,
             reaction_diffusion::ReactionDiffusion,
             storm_plains::StormPlains,
             storm_plains_wide::StormPlainsWide,

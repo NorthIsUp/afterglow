@@ -107,6 +107,7 @@ mod marble;
 mod matrix;
 mod mirror;
 mod moire;
+mod plasma;
 mod podracer;
 mod pov;
 mod rain;

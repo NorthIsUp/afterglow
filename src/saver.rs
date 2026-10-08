@@ -19,6 +19,7 @@ use crate::matrix::Matrix;
 use crate::mirror::{self, Mirror};
 use crate::moire::Moire;
 use crate::next_rand;
+use crate::plasma::Plasma;
 use crate::podracer::Podracer;
 use crate::pov::Pov;
 use crate::rain::Rain;
@@ -124,6 +125,7 @@ macro_rules! savers {
         ("xwing", |p, fps| Box::new(XWing::new(p, fps))),
         ("hardrain", |p, fps| Box::new(HardRain::new(p, fps))),
         ("zot", |p, fps| Box::new(Zot::new(p, fps))),
+        ("plasma", |p, fps| Box::new(Plasma::new(p, fps))),
             $((crate::ascii_rest::$m::$t::NAME, Play::<crate::ascii_rest::$m::$t>::build),)*
         ];
     };
