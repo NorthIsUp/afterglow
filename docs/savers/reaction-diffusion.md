@@ -5,3 +5,11 @@ A Gray-Scott reaction whose spots on the left give way to stripes on the right. 
 One of ascii.rest's character pieces, drawn in one ink. No knobs; see [the ascii.rest ports](../ascii-rest.md#character-pieces).
 
 Source: [`src/ascii_rest/reaction_diffusion.rs`](../../src/ascii_rest/reaction_diffusion.rs).
+
+## `reaction-diffusion-wide`
+
+The same reaction in a dish the size of the panel, two cells to a character as upstream's is. Spots at the left edge turn to stripes at the right, and the seeds scale with the dish's area. It steps at upstream's 1,000 a second up to 8,000 cells, pine's dish, and slower above that, so a bigger dish evolves more slowly rather than costing more: 1080p's 14,400 cells take 555 steps a second, and a die-back comes round every 14 seconds instead of 8. Upstream's arithmetic is f64 cell by cell. The twin steps in f32 over whole rows, which the compiler vectorises, so a dish 2.8 times upstream's area on pine costs less than the original does. A grid smaller than upstream's runs upstream's dish and shows the middle of it, because a smaller dish cannot hold a spot.
+
+Knobs: `ASCII_REST_TEXT_CELL_W` / `ASCII_REST_TEXT_CELL_H` and `ASCII_REST_TITLE`; see [full-screen twins](../ascii-rest.md#full-screen-twins).
+
+Source: [`src/ascii_rest/reaction_diffusion.rs`](../../src/ascii_rest/reaction_diffusion.rs), the original's own module.

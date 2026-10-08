@@ -2,9 +2,16 @@
 //! dial clicks over, a test card rolls into place and holds, then is lost.
 //!
 //! Upstream's `set` option is on by default and always on here.
+//!
+//! `tv-static-wide` makes the panel the screen: the tube's rounded corners
+//! meet its edges inside a thin bezel, the snow, hum bar and card fill all
+//! of it, and the channel knob is a dial set into the bezel's foot. A 4:3 set
+//! centred on a 3.2:1 panel would leave as much black beside it as the
+//! original does, and a room around it would shrink the snow to a third of
+//! the glass.
 
 use super::math::{js_round, smooth};
-use super::{hex, text, Piece};
+use super::{hex, text, Canvas, Piece};
 use crate::grid::Cell;
 
 const COLS: usize = 58;
@@ -30,12 +37,45 @@ const BOTTOM: [(f64, i32); 8] = [
 ];
 /// Where the snow steps up a level.
 const SNOW: [f64; 7] = [0.36, 0.48, 0.6, 0.7, 0.8, 0.9, 0.98];
-/// The picture area inside the set.
-const X0: usize = 4;
-const Y0: usize = 7;
-const SW: usize = 39;
-const SH: usize = 15;
 const N: i32 = RAMP.len() as i32 - 1;
+
+/// The picture area inside the set, and where its dial is.
+struct Layout {
+    cols: usize,
+    x0: usize,
+    y0: usize,
+    sw: usize,
+    sh: usize,
+    dial: usize,
+    /// Snow ids a row: wider than a row, so no two cells share one.
+    stride: i32,
+}
+
+const ORIGINAL: Layout = Layout {
+    cols: COLS,
+    x0: 4,
+    y0: 7,
+    sw: 39,
+    sh: 15,
+    dial: 9 * COLS + 49,
+    stride: 97,
+};
+
+impl Layout {
+    /// The whole grid inside a one-cell bezel.
+    fn fit(cols: usize, rows: usize) -> Self {
+        let (sw, sh) = (cols.saturating_sub(2).max(1), rows.saturating_sub(2).max(1));
+        Self {
+            cols,
+            x0: usize::from(cols > 2),
+            y0: usize::from(rows > 2),
+            sw,
+            sh,
+            dial: (rows - 1) * cols + cols.saturating_sub(6),
+            stride: 97.max(sw as i32),
+        }
+    }
+}
 
 /// This piece's own hash: three inputs and murmur-style finalising, unlike
 /// `math::hash`.
@@ -93,6 +133,27 @@ fn draw_set() -> Vec<Vec<char>> {
     g
 }
 
+/// The wide set: a bezel round the panel's edge, the dial in its foot.
+fn draw_bezel(cols: usize, rows: usize) -> Vec<Vec<char>> {
+    let mut g = vec![vec![' '; cols]; rows];
+    if cols < 3 || rows < 3 {
+        return g;
+    }
+    let (r1, c1) = (rows - 1, cols - 1);
+    g[0][1..c1].fill('─');
+    g[r1][1..c1].fill('─');
+    for row in &mut g[1..r1] {
+        row[0] = '│';
+        row[c1] = '│';
+    }
+    (g[0][0], g[0][c1], g[r1][0], g[r1][c1]) = ('╭', '╮', '╰', '╯');
+    if cols >= 10 {
+        g[r1][cols - 7] = '(';
+        g[r1][cols - 5] = ')';
+    }
+    g
+}
+
 #[derive(Clone, Copy)]
 enum Px {
     Level(i32),
@@ -101,12 +162,12 @@ enum Px {
 
 /// The test card: bars over a reversed strip and a bottom strip of hard-edged
 /// blocks, with a circle and a crosshair drawn across the middle.
-fn draw_card() -> Vec<Px> {
-    let mut card: Vec<Px> = (0..SW * SH)
+fn draw_card(sw: usize, sh: usize) -> Vec<Px> {
+    let mut card: Vec<Px> = (0..sw * sh)
         .map(|i| {
-            let (r, c) = (i / SW, i % SW);
-            let u = (c as f64 + 0.5) / SW as f64;
-            let v = (r as f64 + 0.5) / SH as f64;
+            let (r, c) = (i / sw, i % sw);
+            let u = (c as f64 + 0.5) / sw as f64;
+            let v = (r as f64 + 0.5) / sh as f64;
             let bar = ((u * 7.0).floor() as usize).min(6);
             Px::Level(if v < 0.67 {
                 BARS[bar]
@@ -117,12 +178,15 @@ fn draw_card() -> Vec<Px> {
             })
         })
         .collect();
-    let mut set =
-        |r: usize, c: i64, ch: char| card[r * SW + c as usize] = Px::Glyph(text::cell(ch));
+    let mut set = |r: usize, c: i64, ch: char| {
+        if (0..sw as i64).contains(&c) {
+            card[r * sw + c as usize] = Px::Glyph(text::cell(ch));
+        }
+    };
     // The circle, row by row: its span in each row, outlined in box drawing.
-    let rad = (SH as f64 * 0.43).min(SW as f64 * 0.22) * 2.0;
-    let (cx, cy) = (SW as f64 / 2.0, SH as f64 / 2.0);
-    let span: Vec<Option<(i64, i64)>> = (0..SH)
+    let rad = (sh as f64 * 0.43).min(sw as f64 * 0.22) * 2.0;
+    let (cx, cy) = (sw as f64 / 2.0, sh as f64 / 2.0);
+    let span: Vec<Option<(i64, i64)>> = (0..sh)
         .map(|r| {
             let y = (r as f64 + 0.5 - cy) * 2.0;
             let w = rad * rad - y * y;
@@ -134,8 +198,8 @@ fn draw_card() -> Vec<Px> {
             })
         })
         .collect();
-    let (mid, mc) = (SH / 2, (SW / 2) as i64);
-    for r in 0..SH {
+    let (mid, mc) = (sh / 2, (sw / 2) as i64);
+    for r in 0..sh {
         let Some((a, b)) = span[r] else { continue };
         let up = r < mid;
         let near = if up {
@@ -183,40 +247,44 @@ fn draw_card() -> Vec<Px> {
     card
 }
 
-pub struct TvStatic {
+struct Scene {
+    lay: Layout,
     set: Vec<Cell>,
     card: Vec<Px>,
     /// Which picture cells the curved tube leaves in.
     inside: Vec<bool>,
 }
 
-impl Piece for TvStatic {
-    const NAME: &'static str = "tv-static";
-    const COLS: usize = COLS;
-    const ROWS: usize = ROWS;
-    const FPS: u32 = FPS;
-    const CELL: usize = 2;
-    const PALETTE: &'static [u32] = &[hex("#cfe6ff")];
-    const GROUND: u32 = 0;
-
-    fn new() -> Self {
-        let inside = (0..SW * SH)
+impl Scene {
+    fn new(lay: Layout, set: Vec<Vec<char>>) -> Self {
+        let (sw, sh) = (lay.sw, lay.sh);
+        let inside = (0..sw * sh)
             .map(|i| {
-                let (r, c) = ((i / SW) as f64, (i % SW) as f64);
-                let half = (SW as f64 / 2.0, SH as f64 / 2.0);
+                let (r, c) = ((i / sw) as f64, (i % sw) as f64);
+                let half = (sw as f64 / 2.0, sh as f64 / 2.0);
                 let x = (c + 0.5 - half.0) / half.0;
                 let y = (r + 0.5 - half.1) / half.1;
                 x.powi(6) + y.powi(6) <= 1.02
             })
             .collect();
         Self {
-            set: draw_set().into_iter().flatten().map(text::cell).collect(),
-            card: draw_card(),
+            set: set.into_iter().flatten().map(text::cell).collect(),
+            card: draw_card(sw, sh),
             inside,
+            lay,
         }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
+        let Layout {
+            cols,
+            x0,
+            y0,
+            sw,
+            sh,
+            dial: dial_at,
+            stride,
+        } = self.lay;
         let u = ((t % LOOP) + LOOP) % LOOP;
         // The snow is new every frame.
         let k = (t * f64::from(FPS)).floor() as i32;
@@ -229,32 +297,32 @@ impl Piece for TvStatic {
             .clamp(0.0, 3.0);
         let snow = 1.0 - 0.97 * lock;
         // Unlocked, the picture rolls (with its blanking bar) and its lines tear.
-        let roll = (1.0 - lock).powi(2) * (SH + 2) as f64 * 2.5;
+        let roll = (1.0 - lock).powi(2) * (sh + 2) as f64 * 2.5;
         let tear = (1.0 - lock) * 9.0;
         // The hum bar's middle row, once a loop.
-        let hum = ((u / LOOP + 0.45) % 1.0) * (SH + 6) as f64 - 3.0;
+        let hum = ((u / LOOP + 0.45) % 1.0) * (sh + 6) as f64 - 3.0;
         let lock6 = lock.powi(6);
 
         out.copy_from_slice(&self.set);
-        out[9 * COLS + 49] = DIAL[dial as usize];
-        for r in 0..SH {
+        out[dial_at] = DIAL[dial as usize];
+        for r in 0..sh {
             let (ri, rf) = (r as i32, r as f64);
             let dim = 1.0 - 0.45 * (-((rf - hum) / 2.2).powi(2)).exp();
             // Each scan line a little brighter or darker.
             let line = 0.9 + 0.2 * hash(k, ri, 9);
             let shift = js_round(tear * (rf * 0.8 + u * 9.0).sin() * hash(k >> 2, ri, 3)) as i64;
             // The card row shown here.
-            let pr = ((rf + roll) % (SH + 2) as f64).floor() as usize;
+            let pr = ((rf + roll) % (sh + 2) as f64).floor() as usize;
             let mut prev = hash(k, ri, 1);
-            for c in 0..SW {
-                let o = (Y0 + r) * COLS + X0 + c;
-                if !self.inside[r * SW + c] {
+            for c in 0..sw {
+                let o = (y0 + r) * cols + x0 + c;
+                if !self.inside[r * sw + c] {
                     out[o] = RAMP[0];
                     continue;
                 }
                 // Snow is fine grain streaked along the line, as it is on a real
                 // tube, mostly dots with now and then a brighter fleck.
-                let id = ri * 97 + c as i32;
+                let id = ri * stride + c as i32;
                 let n = hash(k, id, 2);
                 prev = 0.6 * n + 0.4 * prev;
                 let noisy = hash(k, id, 5) < snow;
@@ -266,10 +334,10 @@ impl Piece for TvStatic {
                     }
                     RAMP[level]
                 } else {
-                    let sw = SW as i64;
+                    let sw = sw as i64;
                     let pc = (((c as i64 + shift) % sw) + sw) % sw;
-                    let mut x = if pr < SH {
-                        self.card[pr * SW + pc as usize]
+                    let mut x = if pr < sh {
+                        self.card[pr * sw as usize + pc as usize]
                     } else {
                         Px::Level(0)
                     };
@@ -284,5 +352,41 @@ impl Piece for TvStatic {
                 };
             }
         }
+    }
+}
+
+pub struct TvStatic(Scene);
+
+impl Piece for TvStatic {
+    const NAME: &'static str = "tv-static";
+    const COLS: usize = COLS;
+    const ROWS: usize = ROWS;
+    const FPS: u32 = FPS;
+    const CELL: usize = 2;
+    const PALETTE: &'static [u32] = &[hex("#cfe6ff")];
+    const GROUND: u32 = 0;
+
+    fn new() -> Self {
+        Self(Scene::new(ORIGINAL, draw_set()))
+    }
+
+    fn frame(&mut self, t: f64, out: &mut [Cell]) {
+        self.0.frame(t, out);
+    }
+}
+
+pub struct TvStaticWide(Scene);
+
+impl Canvas for TvStaticWide {
+    const NAME: &'static str = "tv-static-wide";
+    const FPS: u32 = FPS;
+    const PALETTE: &'static [u32] = TvStatic::PALETTE;
+
+    fn new(cols: usize, rows: usize) -> Self {
+        Self(Scene::new(Layout::fit(cols, rows), draw_bezel(cols, rows)))
+    }
+
+    fn frame(&mut self, t: f64, out: &mut [Cell]) {
+        self.0.frame(t, out);
     }
 }
