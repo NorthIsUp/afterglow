@@ -32,8 +32,9 @@ const DV: f64 = 0.225;
 /// Reaction steps a second.
 const RATE: f64 = 1000.0;
 /// Cell steps a second a dish may take: a wider dish steps slower rather than
-/// cost more. Pine's twin, 8,000 cells, just fits; 1080p's runs at 55%.
-const BUDGET: f64 = 8.0e6;
+/// cost more. Upstream's 2,880 cells fit; pine's twin, 8,000, runs at 88% and
+/// 1080p's, 14,400, at 49%, which holds it under 1.5x matrix there.
+const BUDGET: f64 = 7.0e6;
 /// Steps from one die back to the next.
 const CYCLE: f64 = 8000.0;
 /// The kill rate's rise over a cycle, and its height.
