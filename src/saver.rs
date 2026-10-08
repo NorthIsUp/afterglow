@@ -87,7 +87,7 @@ type Build = fn(&Panel, u32) -> Box<dyn Saver>;
 // A macro only so the ascii.rest rows come from `ascii_rest::each_piece`, the
 // one list of ports, instead of a second copy here.
 macro_rules! savers {
-    ($($(#[$no:ident])? $m:ident::$t:ident),* $(,)?) => {
+    ($($m:ident::{$($(#[$no:ident])? $t:ident),+}),* $(,)?) => {
         const SAVERS: &[(&str, Build)] = &[
         ("ascii", |p, _| Box::new(Fire::ascii(p))),
         ("blocks", |p, _| Box::new(Fire::blocks(p))),
@@ -119,7 +119,7 @@ macro_rules! savers {
         ("hardrain", |p, fps| Box::new(HardRain::new(p, fps))),
         ("zot", |p, fps| Box::new(Zot::new(p, fps))),
         ("plasma", |p, fps| Box::new(Plasma::new(p, fps))),
-            $((crate::ascii_rest::$m::$t::NAME, Play::<crate::ascii_rest::$m::$t>::build),)*
+            $($((crate::ascii_rest::$m::$t::NAME, Play::<crate::ascii_rest::$m::$t>::build),)+)*
         ];
     };
 }
@@ -168,10 +168,10 @@ const SECTIONS: &[(&str, usize)] = &[
 ];
 
 macro_rules! piece_cells {
-    ($($(#[$no:ident])? $m:ident::$t:ident),* $(,)?) => {
+    ($($m:ident::{$($(#[$no:ident])? $t:ident),+}),* $(,)?) => {
         /// Each port's name and cell shape: 1 is a halftone scene, 2 text.
         const PIECE_CELL: &[(&str, usize)] = &[
-            $((crate::ascii_rest::$m::$t::NAME, crate::ascii_rest::$m::$t::CELL),)*
+            $($((crate::ascii_rest::$m::$t::NAME, crate::ascii_rest::$m::$t::CELL),)+)*
         ];
     };
 }

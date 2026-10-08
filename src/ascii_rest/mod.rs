@@ -41,67 +41,72 @@ pub mod title;
 pub mod tour;
 
 /// The one list of pieces. A port is a row here plus its file: its module, its
-/// `saver::SAVERS` row and its tests all come from this list. `#[no_upstream]`
-/// marks this repo's own pieces (the `-wide` recompositions), which get no
-/// golden test: upstream has no output for them.
+/// `saver::SAVERS` rows and its tests all come from this list. A row names every
+/// piece its module builds, so a `-wide` recomposition sits beside its original.
+/// `#[no_upstream]` marks this repo's own pieces (the `-wide` recompositions),
+/// which get no golden test: upstream has no output for them.
 macro_rules! each_piece {
     ($cb:ident) => {
         $cb! {
-            alpine_dawn::AlpineDawn,
-            #[no_upstream] alpine_dawn_wide::AlpineDawnWide,
-            aurora::Aurora,
-            aurora_fjord::AuroraFjord,
-            #[no_upstream] aurora_fjord_wide::AuroraFjordWide,
-            deep_reef::DeepReef,
-            #[no_upstream] deep_reef_wide::DeepReefWide,
-            desert_night::DesertNight,
-            #[no_upstream] desert_night_wide::DesertNightWide,
-            double_pendulum::DoublePendulum,
-            earthrise::Earthrise,
-            #[no_upstream] earthrise_wide::EarthriseWide,
-            fractal_tree::FractalTree,
-            kyoto_dusk::KyotoDusk,
-            #[no_upstream] kyoto_dusk_wide::KyotoDuskWide,
-            lighthouse::Lighthouse,
-            marine_drive::MarineDrive,
-            #[no_upstream] marine_drive_wide::MarineDriveWide,
-            misty_forest::MistyForest,
-            #[no_upstream] misty_forest_wide::MistyForestWide,
-            night_coast::NightCoast,
-            #[no_upstream] night_coast_wide::NightCoastWide,
-            ocean_sunset::OceanSunset,
-            #[no_upstream] ocean_sunset_wide::OceanSunsetWide,
-            reaction_diffusion::ReactionDiffusion,
-            storm_plains::StormPlains,
-            #[no_upstream] storm_plains_wide::StormPlainsWide,
-            synthwave::Synthwave,
-            taj_dawn::TajDawn,
-            #[no_upstream] taj_dawn_wide::TajDawnWide,
-            tv_static::TvStatic,
-            varanasi_ghats::VaranasiGhats,
-            #[no_upstream] varanasi_ghats_wide::VaranasiGhatsWide,
-            vinyl::Vinyl,
+            alpine_dawn::{AlpineDawn},
+            alpine_dawn_wide::{#[no_upstream] AlpineDawnWide},
+            aurora::{Aurora},
+            aurora_fjord::{AuroraFjord},
+            aurora_fjord_wide::{#[no_upstream] AuroraFjordWide},
+            deep_reef::{DeepReef},
+            deep_reef_wide::{#[no_upstream] DeepReefWide},
+            desert_night::{DesertNight},
+            desert_night_wide::{#[no_upstream] DesertNightWide},
+            double_pendulum::{DoublePendulum},
+            earthrise::{Earthrise},
+            earthrise_wide::{#[no_upstream] EarthriseWide},
+            fractal_tree::{FractalTree},
+            kyoto_dusk::{KyotoDusk},
+            kyoto_dusk_wide::{#[no_upstream] KyotoDuskWide},
+            lighthouse::{Lighthouse},
+            marine_drive::{MarineDrive},
+            marine_drive_wide::{#[no_upstream] MarineDriveWide},
+            misty_forest::{MistyForest, #[no_upstream] MistyForestWide},
+            night_coast::{NightCoast},
+            night_coast_wide::{#[no_upstream] NightCoastWide},
+            ocean_sunset::{OceanSunset},
+            ocean_sunset_wide::{#[no_upstream] OceanSunsetWide},
+            reaction_diffusion::{ReactionDiffusion},
+            storm_plains::{StormPlains},
+            storm_plains_wide::{#[no_upstream] StormPlainsWide},
+            synthwave::{Synthwave},
+            taj_dawn::{TajDawn},
+            taj_dawn_wide::{#[no_upstream] TajDawnWide},
+            tv_static::{TvStatic},
+            varanasi_ghats::{VaranasiGhats},
+            varanasi_ghats_wide::{#[no_upstream] VaranasiGhatsWide},
+            vinyl::{Vinyl},
         }
     };
 }
 pub(crate) use each_piece;
 
 macro_rules! declare {
-    ($($(#[$no:ident])? $m:ident::$t:ident),* $(,)?) => {
+    ($($m:ident::{$($(#[$no:ident])? $t:ident),+}),* $(,)?) => {
         $(pub mod $m;)*
 
         #[cfg(test)]
         mod piece_tests {
             $(
                 mod $m {
-                    use crate::ascii_rest::tests;
+                    $(
+                        #[allow(non_snake_case)]
+                        mod $t {
+                            use crate::ascii_rest::tests;
 
-                    #[test]
-                    fn exercise() {
-                        tests::exercise::<crate::ascii_rest::$m::$t>();
-                    }
+                            #[test]
+                            fn exercise() {
+                                tests::exercise::<crate::ascii_rest::$m::$t>();
+                            }
 
-                    golden!($($no)? $m::$t);
+                            golden!($($no)? $m::$t);
+                        }
+                    )+
                 }
             )*
         }
