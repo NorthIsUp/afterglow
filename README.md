@@ -2,9 +2,10 @@
 
 # afterglow
 
-**HDMI screensavers on whichever Pi5 holds the monitor**
+**Put something fun on your homelab's display.**
 
-64 savers · one ~230 KB static binary · straight to a DRM/KMS dumb buffer
+Fire, rain, flying toasters, a lighthouse, a turntable and 50-odd more ·
+one ~230 KB container · no X, no browser
 
 [![build](https://github.com/NorthIsUp/afterglow/actions/workflows/image.yml/badge.svg)](https://github.com/NorthIsUp/afterglow/actions/workflows/image.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -12,18 +13,29 @@
 
 <img src="docs/media/tour.gif" width="100%" alt="Two seconds of every saver, with a channel change between each">
 
-<sub>Every saver has a clip on its page, rendered as pine's 3.2:1 glass shows it.
-<code>mise run media</code> regenerates them all and the tour
-(<a href="tools/media.py"><code>tools/media.py</code></a>); they are GIFs in Git LFS.</sub>
+<sub>Two seconds of every saver, flipping channels.</sub>
 
 </div>
 
-A deliberately thin workload that paints an animation onto the HDMI display of
-the Talos Pi5 carrying the `hardware.homelab/display: "true"` label. Renderer:
-a static musl Rust binary on a `FROM scratch` image, ~230 KB, which writes
-pixels straight into a DRM/KMS dumb buffer. It grew up inside the author's
-private homelab GitOps repo, which still deploys it; `homelab-gitops#N` in
-older commit messages refers to that repo's PRs.
+Got a Pi with a little screen bolted to the rack, or an old monitor hanging
+off a node, showing a login prompt nobody reads? Give it a screensaver.
+afterglow runs as one small container on whichever machine holds the HDMI
+display and paints straight into the kernel's framebuffer (DRM/KMS), so it needs
+no desktop, sips CPU, and leaves the box to its real job.
+
+- **50-odd savers**: Doom fire, digital rain, flying toasters, DVD bounce, warp,
+  plasma, reaction-diffusion, a double pendulum, a turntable whose arm plays a
+  side, a lighthouse sweeping its beam, and ports of the
+  [ascii.rest](https://ascii.rest) scenes. Each has a clip on
+  [its page](#savers).
+- **A web page to drive it**: a live mirror of the screen, pick a saver, tweak
+  its settings, and rotate through them on a timer.
+- **Try it first in a terminal**: no Pi needed, [below](#run-it-in-your-terminal).
+
+It grew up in the author's own homelab (a Talos Pi 5 cluster, which still
+deploys it; `homelab-gitops#N` in older commit messages refers to that repo).
+The clips are GIFs in Git LFS; `mise run media` regenerates them
+([`tools/media.py`](tools/media.py)).
 
 ## Install
 
