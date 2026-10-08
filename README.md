@@ -62,8 +62,9 @@ falls back to `ascii` — a headless pod must never crash-loop on a typo.
 | `podracer` | First-person Boonta Eve: two podracer engines hang ahead of you on their cables, flaring and yawing independently as you turn, while an ochre canyon rips past on both sides. One ray per cell column finds the wall; the floor and sky fall out of the ground-plane solve. Arches you fly through, rock spires, slot canyons barely wider than the pod, heat shimmer over the rim, and every so often a rival's engine wash crossing the view. Full repaint — it damages most of the panel every frame, because most of the panel is moving. | `PODRACER_CELL` (px, 4..32, default 8), `PODRACER_SPEED` (course m/s, 40..900, default 300), `PODRACER_FOV` (focal as a percent of panel width, 30..200, default 78), `PODRACER_WIDTH` (canyon half-width in metres, 6..90, default 30), `PODRACER_PINCH` (how far a slot closes, percent, 0..90, default 64), `PODRACER_SPREAD` (engine separation, percent of panel width, 10..90, default 46), `PODRACER_ENGINE` (engine radius, percent of panel width, 3..30, default 7, capped at 22% of the aspect-corrected height), `PODRACER_SHIMMER` (0..100, default 70), `PODRACER_FEATURES` (arches and spires alive at once, 0..24, default 7), `PODRACER_WASH_SECS` (mean seconds between a rival's wash, 0 = off..600, default 9), `PODRACER_SEED` (0 = roll one from the clock and pid; any other value reproduces the run exactly) |
 | `speeder` | A first-person speeder-bike chase through the forest moon — enormous redwood trunks rush past at parallax while the bike weaves between them on two incommensurate sines, dappled canopy light streams over the mossy floor, and every so often a fallen trunk sweeps up out of frame to be ducked under or another bike flashes across the view. One spawn in twenty is aimed at where the camera WILL be, so the near misses are deliberate; a trunk moving too fast for the eye to hold an edge on is stippled rather than solid. Its grid is SQUARE, so all of the perspective is in cells and `SAVER_PIXEL_ASPECT` corrects it for free — the opposite choice to `warp`'s. | `SPEEDER_CELL` (px, 4..32, default 8, square), `SPEEDER_SPEED` (metres/sec, 10..300, default 58), `SPEEDER_TRUNKS` (8..400, default 60), `SPEEDER_FOV` (focal as a per-cent of COLUMNS, 20..200, default 62 — smaller is wider and faster-looking), `SPEEDER_HORIZON` (eye line as a per-cent of rows, 10..80, default 44), `SPEEDER_WEAVE` (swing off the path in DECIMETRES, 0..200, default 64; 0 flies straight), `SPEEDER_DAPPLE` (per-cent of the floor in a pool of light, 0..100, default 34), `SPEEDER_LOG_SECS` (mean seconds between fallen trunks, 0..600, default 16; 0 = off), `SPEEDER_RIDER_SECS` (mean seconds between other bikes, 0..600, default 12; 0 = off), `SPEEDER_SEED` (0 = roll one from the clock and pid; any other value reproduces the ride exactly) |
 | `xwing` | The Death Star run from the cockpit, in three acts on a loop: the station swelling out of a starfield, a low pass over its greebled surface, then the trench — walls closing in and the targeting computer swinging down over the view. Green fire comes in and red goes out in every act, TIE fighters cross, chase and pass the canopy, and anything a red bolt reaches explodes. | `XWING_SEED`, `XWING_APPROACH_SECS` / `XWING_SURFACE_SECS` / `XWING_TRENCH_SECS` (1..600, default 11 / 9 / 13), `XWING_SPEED` (world units/sec, 50..20000, default 900), `XWING_GREEBLE` (plating block size, 4..2000, default 60), `XWING_FOV` (focal length in thousandths of the visual panel width, 200..3000, default 800), `XWING_STARS` (0..4000, default 170), `XWING_TOWERS` (0..400, default 16), `XWING_BOLTS` (0..400, default 28), `XWING_TIE_SECS` (mean seconds between TIE sorties, 0..600, default 7; 0 = none), `XWING_TIES` (0..200, default 6), `XWING_BOOM_SECS` (mean seconds between surface explosions, 0..600, default 9; 0 = none), `XWING_BOOMS` (0..200, default 6), `XWING_PITCH_MS` (act 2's nose coming up, 0..10000, default 1600), `XWING_RISE_MS` (act 3's walls rising, 0..10000, default 1400), `XWING_CELL_W` / `XWING_CELL_H` (4..32, default 8 / 8) |
+| `plasma` | The demo-scene plasma, full screen: four sine fields summed into soft blobs of density, drawn with ascii.rest's ramp `.,-~:;=+*#%@` at the panel's own resolution, any size or shape. Colour is a second, slower field sweeping a deep blue → violet → magenta → coral → orange → gold → mint → sky wheel across the panel, so the blobs swim through bands of hue; brightness follows density, so the cores glow. Loops every 30 s. | `PLASMA_CELL_W` / `PLASMA_CELL_H` (glass px, 4..64 / 4..128, default 12 / 24) |
 | `alpine-dawn` `aurora-fjord` `deep-reef` `desert-night` `earthrise` `kyoto-dusk` `marine-drive` `misty-forest` `night-coast` `ocean-sunset` `storm-plains` `taj-dawn` `varanasi-ghats` | ascii.rest's thirteen halftone scenes — landscapes shaded cell by cell and drawn as dots whose size is their brightness. See [ascii.rest ports](#about-the-ascii-rest-ports); the camera slowly tours each one ([the tour](#the-scene-tour)). | `ASCII_REST_TOUR` (0..1, default 1; 0 is the fixed cover view), `ASCII_REST_TOUR_HOLD_SECS` (1..3600, default 14, each hold drawn from 60%..140% of it), `ASCII_REST_TOUR_MAX_ZOOM_PCT` (100..600, default 250, of the cover view's cell), `ASCII_REST_TOUR_SEED` (0 = roll one from the clock and pid; any other value reproduces the tour exactly) |
-| `plasma` `aurora` `synthwave` `tv-static` `vinyl` `lighthouse` `fractal-tree` `reaction-diffusion` `double-pendulum` | ascii.rest's character pieces, one ink each. See [ascii.rest ports](#about-the-ascii-rest-ports). | none |
+| `aurora` `synthwave` `tv-static` `vinyl` `lighthouse` `fractal-tree` `reaction-diffusion` `double-pendulum` | ascii.rest's character pieces, one ink each. See [ascii.rest ports](#about-the-ascii-rest-ports). | none |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
 `SAVER_ROTATE_SECS` (0..86400, default 0 = off), `SAVER_PIXEL_ASPECT` (25..400,
@@ -945,7 +946,7 @@ re-strike reuses the buffers a strike already filled.
 
 ### About the ascii.rest ports
 
-Twenty-two pieces from [ascii.rest](https://ascii.rest) ([source](https://github.com/bas3line/ascii),
+Twenty-one pieces from [ascii.rest](https://ascii.rest) ([source](https://github.com/bas3line/ascii),
 MIT, by @bas3line), ported line for line to `src/ascii_rest/`. Upstream a piece
 is `frame(t) -> string` over a fixed grid; here it writes cells, and one generic
 saver, `Play<P: Piece>`, does the rest — the clock, upstream's own frame rate (a
@@ -968,17 +969,25 @@ ground, since a cropped one loses words.
 
 Every port is checked cell for cell against upstream's own output — glyph and
 palette index, four frames each, stateful pieces stepped through every tick
-between. All 22 match exactly. The math is f64 like JavaScript, `Float32Array`
+between. All 21 match exactly. The math is f64 like JavaScript, `Float32Array`
 storage stays f32, and `math.rs` reproduces JavaScriptCore where it differs from
 libm (`Math.hypot`, `Math.round`, integer `Math.pow`):
 
 ```sh
 git clone https://github.com/bas3line/ascii /tmp/ascii
-bun tools/ascii-rest-golden.ts /tmp/ascii /tmp/golden night-coast plasma   # any slugs
+bun tools/ascii-rest-golden.ts /tmp/ascii /tmp/golden night-coast aurora   # any slugs
 ASCII_REST_GOLDEN=/tmp/golden cargo test --release ascii_rest -- --ignored --nocapture
 ```
 
-Cost: night-coast measures 2.3x matrix per panel frame, plasma 1.0x.
+Cost: night-coast measures 2.3x matrix per panel frame.
+
+`plasma` started as the twenty-second port and is now its own saver in
+`src/plasma.rs`: upstream's fixed 64x22 picture sat small and boxed on pine's
+glass, and a field this simple can be evaluated at any resolution. It keeps
+upstream's ramp, four terms and 30 s loop, scaled so a panel of any shape shows
+as many blobs per unit area as upstream's picture did. It changes ~17% of its
+cells a frame and measures ~1.15x matrix at 1920x1080 and ~0.8x on pine's
+geometry (`SAVER_PIXEL_ASPECT=180`).
 
 #### The scene tour
 

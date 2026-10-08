@@ -48,7 +48,6 @@ macro_rules! each_piece {
             misty_forest::MistyForest,
             night_coast::NightCoast,
             ocean_sunset::OceanSunset,
-            plasma::Plasma,
             reaction_diffusion::ReactionDiffusion,
             storm_plains::StormPlains,
             synthwave::Synthwave,
