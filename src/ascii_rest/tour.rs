@@ -15,6 +15,7 @@
 //! panel does.
 
 use super::halftone::COVER;
+use super::title::Title;
 use super::{fit_w, origin, Camera, Fit, Piece};
 use crate::font;
 use crate::grid::{Cell, Grid};
@@ -95,9 +96,13 @@ impl Touring {
         }
     }
 
-    /// The cover view of `pic`. Only called while someone is watching.
-    pub(super) fn mirror<P: Piece>(&mut self, pic: &[Cell]) -> &Grid {
+    /// The cover view of `pic`, under the title if there is one. Only called
+    /// while someone is watching.
+    pub(super) fn mirror<P: Piece>(&mut self, pic: &[Cell], title: Option<&Title>) -> &Grid {
         self.mirror.draw::<P>(pic);
+        if let Some(t) = title {
+            t.stamp(&mut self.mirror.grid);
+        }
         self.mirror.grid.settle();
         &self.mirror.grid
     }
@@ -762,6 +767,51 @@ mod tests {
                 assert!(m.cells() == o.cells(), "frame {n}: mirror");
             }
             assert!(!held, "the tour never left the cover view");
+        });
+    }
+    /// The caption changes the panel only inside its own corner block, never
+    /// the picture the piece drew, and costs no allocation per frame — on the
+    /// cover view and through every tour step.
+    #[test]
+    fn a_title_touches_only_its_corner() {
+        with_test_aspect(180, || {
+            type P = Play<Probe<200, 100>>;
+            let panel = Panel::new(1920, 1080, 1920);
+            let mut on = P::with_tour(&panel, 30, Some(knobs(11)));
+            let mut off = P::with_tour(&panel, 30, Some(knobs(11)));
+            on.title = Some(Title::new("night-coast", 1, Probe::<200, 100>::PALETTE));
+            let (mut a, mut b) = (vec![0u32; panel.buf_len()], vec![0u32; panel.buf_len()]);
+            let frame = |on: &mut P, off: &mut P, a: &mut [u32], b: &mut [u32]| {
+                on.render(&mut Surface::new(a, &panel));
+                off.render(&mut Surface::new(b, &panel));
+            };
+            frame(&mut on, &mut off, &mut a, &mut b);
+            let n = allocs_during(|| {
+                for _ in 0..600 {
+                    frame(&mut on, &mut off, &mut a, &mut b);
+                }
+            });
+            assert_eq!(n, 0, "the title allocated");
+            for _ in 0..30 {
+                frame(&mut on, &mut off, &mut a, &mut b);
+                assert!(on.pic == off.pic, "the title reached the picture");
+                let g = &on.cam.grid;
+                let (rows, cw, ch) = (g.rows(), g.cell_w(), g.cell_h());
+                let t = on.title.as_ref().unwrap();
+                let corner = |x: usize, y: usize| x < t.w() * cw && y >= (rows - t.h()) * ch;
+                let mut inside = 0;
+                for y in 0..panel.h {
+                    for x in 0..panel.w {
+                        let i = y * panel.w + x;
+                        if corner(x, y) {
+                            inside += usize::from(a[i] != b[i]);
+                        } else {
+                            assert_eq!(a[i], b[i], "pixel {x},{y} outside the title");
+                        }
+                    }
+                }
+                assert!(inside > 0, "no title at cell width {cw}");
+            }
         });
     }
 }

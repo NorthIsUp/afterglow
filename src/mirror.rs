@@ -50,10 +50,11 @@
 use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+use crate::config;
 use crate::font;
 use crate::grid::{Cell, Grid};
 use crate::saver;
@@ -76,6 +77,17 @@ const ROTATE_SECS: u64 = u32::MAX as u64;
 /// Longest interval `POST /rotate` accepts, in minutes — the same day
 /// `SAVER_ROTATE_SECS` tops out at.
 const MAX_ROTATE_MINS: u64 = 86_400 / 60;
+
+/// The saver index in the low half of a selection word; the high half is a
+/// counter bumped on every selection, so re-selecting the saver already
+/// showing still reads as a change. See `Mirror::selection`.
+pub fn sel_index(word: u64) -> usize {
+    (word & u64::from(u32::MAX)) as usize
+}
+
+/// Every group in the rotation pool: the default, and what a deployment that
+/// never touches the pool gets.
+const ALL_GROUPS: u32 = u32::MAX;
 
 /// Seconds out of a rotation control word. The packing is this module's, so the
 /// render loop asks rather than masking a layout it would have to be kept in
@@ -111,14 +123,18 @@ pub struct Mirror {
     /// The configured frame budget, reported by `/stat` so an overrun count
     /// reads as a rate rather than a bare number.
     fps: u32,
-    /// Index into `saver::NAMES` the render loop should be drawing. An atomic
-    /// rather than a lock because the render loop reads it every frame and must
-    /// never wait on a browser; `POST /select` is the only writer.
-    selected: AtomicUsize,
+    /// Index into `saver::NAMES` the render loop should be drawing, in the
+    /// low half, and a change counter in the high half — see `sel_index`. An
+    /// atomic rather than a lock because the render loop reads it every frame
+    /// and must never wait on a browser.
+    selected: AtomicU64,
     /// Seconds between automatic switches in the low 32 bits, a change counter
     /// in the high 32. One word rather than two so the render loop spots a
     /// change with a single relaxed load — see `set_rotate_secs`.
     rotate: AtomicU64,
+    /// Bit per `saver::GROUPS` entry: the sections rotation may pick from.
+    /// Read only when a turn is up, never per frame.
+    pool: AtomicU32,
     frame: Mutex<Frame>,
     ready: Condvar,
     /// `/meta` JSON, rebuilt on modeset, MINUS its closing brace: the rotation
@@ -134,8 +150,9 @@ impl Mirror {
             viewers: AtomicUsize::new(0),
             overruns: AtomicUsize::new(0),
             fps,
-            selected: AtomicUsize::new(0),
+            selected: AtomicU64::new(0),
             rotate: AtomicU64::new(0),
+            pool: AtomicU32::new(ALL_GROUPS),
             frame: Mutex::new(Frame::default()),
             ready: Condvar::new(),
             meta: Mutex::new(String::new()),
@@ -155,6 +172,12 @@ impl Mirror {
 
     /// Index into `saver::NAMES` the render loop should be drawing.
     pub fn selected(&self) -> usize {
+        sel_index(self.selection())
+    }
+
+    /// The selection word, counter included, for the render loop: a change in
+    /// it is a rebuild even when the index is the one already showing.
+    pub fn selection(&self) -> u64 {
         self.selected.load(Ordering::Relaxed)
     }
 
@@ -174,7 +197,33 @@ impl Mirror {
     /// there is nothing to validate. Every other caller must come through
     /// `select`, which is where a user-supplied name is checked.
     pub fn select_at(&self, i: usize) {
-        self.selected.store(i, Ordering::Relaxed);
+        let _ = self
+            .selected
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some(((v >> 32).wrapping_add(1) << 32) | i as u64)
+            });
+    }
+
+    /// Rebuild row `i` if it is still the one selected, so it re-reads its
+    /// knobs. Conditional, because a `/select` racing a `/config` must not be
+    /// undone by it.
+    pub fn reselect(&self, i: usize) -> bool {
+        self.selected
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                (sel_index(v) == i).then(|| ((v >> 32).wrapping_add(1) << 32) | i as u64)
+            })
+            .is_ok()
+    }
+
+    /// Is `saver::GROUPS[g]` in the rotation pool.
+    pub fn pooled(&self, g: usize) -> bool {
+        self.pool.load(Ordering::Relaxed) & (1 << g) != 0
+    }
+
+    /// The rotation pool, a bit per `saver::GROUPS` entry. Validated by the
+    /// route, like `set_rotate_secs`.
+    pub fn set_pool(&self, mask: u32) {
+        self.pool.store(mask, Ordering::Relaxed);
     }
 
     /// The rotation control word, for the render loop: one relaxed load, same
@@ -257,7 +306,9 @@ impl Mirror {
              \"panel_w\":{pw},\"panel_h\":{ph},\"pixel_aspect\":{pa},\"panel_mm\":{pmm},\
              \"cols\":{cols},\"rows\":{rows},\
              \"cell_w\":{cw},\"cell_h\":{ch},\"ground\":{ground},\
-             \"glyph_w\":{gw},\"glyph_h\":{gh},\"palette\":[",
+             \"glyph_w\":{gw},\"glyph_h\":{gh},\"groups\":{groups},\"wide\":{wide},\"palette\":[",
+            groups = groups_json(),
+            wide = wide_json(),
             gw = font::GLYPH_W,
             gh = font::GLYPH_H,
             pw = panel.w,
@@ -318,7 +369,7 @@ pub fn serve(mirror: &Arc<Mirror>, addr: &str) {
 /// Routes that change what the panel does. POST only — a GET must not be able
 /// to, and everything else on any other path is a 405 so `POST /stream` cannot
 /// take a viewer slot and hold a thread.
-const WRITES: &[&str] = &["/select", "/rotate"];
+const WRITES: &[&str] = &["/select", "/rotate", "/pool"];
 
 fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
     s.set_read_timeout(Some(Duration::from_secs(10)))?;
@@ -340,6 +391,11 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
             "text/plain",
             format!("method not allowed: POST {p}\n").as_bytes(),
         ),
+        // Read, set and reset, by method — the one route with all three.
+        (m @ ("GET" | "POST" | "DELETE"), "/config") => {
+            let (status, body) = config_route(mirror, m, &query);
+            send(&mut s, status, "application/json", body.as_bytes())
+        }
         (m, p) if m != "GET" && !WRITES.contains(&p) => send(
             &mut s,
             "405 Method Not Allowed",
@@ -395,6 +451,25 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
                 )
             }
         }
+        // Group names, comma-separated; at least one, every one real. Anything
+        // else changes nothing, as for `/rotate`.
+        ("POST", "/pool") => match param(&query, "groups").and_then(|v| pool_mask(&v)) {
+            Some(mask) => {
+                mirror.set_pool(mask);
+                send(
+                    &mut s,
+                    "200 OK",
+                    "application/json",
+                    format!("{{\"pool\":{}}}", pool_json(mirror)).as_bytes(),
+                )
+            }
+            None => send(
+                &mut s,
+                "400 Bad Request",
+                "application/json",
+                br#"{"error":"pool must name one or more groups"}"#,
+            ),
+        },
         (_, "/") => send(
             &mut s,
             "200 OK",
@@ -412,7 +487,12 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
                 // cached with the rest, because `/rotate` moves it between
                 // modesets and a stale one is a page showing a number that is
                 // not what the panel is doing.
-                let _ = write!(meta, ",\"rotate_secs\":{}}}", mirror.rotate_secs());
+                let _ = write!(
+                    meta,
+                    ",\"rotate_secs\":{},\"pool\":{}}}",
+                    mirror.rotate_secs(),
+                    pool_json(mirror)
+                );
                 send(&mut s, "200 OK", "application/json", meta.as_bytes())
             }
         }
@@ -459,12 +539,198 @@ fn read_request(s: &mut TcpStream) -> std::io::Result<Option<(String, String, St
     Ok(Some((method.into(), path.into(), query.into())))
 }
 
+/// The value of `key`, percent-decoded. A malformed escape is None, the same
+/// as a missing parameter: a route never acts on a value it half-read.
 fn param(query: &str, key: &str) -> Option<String> {
     query.split('&').find_map(|kv| {
         kv.split_once('=')
             .filter(|(k, _)| *k == key)
-            .map(|(_, v)| v.to_string())
+            .and_then(|(_, v)| decode(v))
     })
+}
+
+fn decode(v: &str) -> Option<String> {
+    let b = v.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' => {
+                let hex = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+                out.push(u8::from_str_radix(hex, 16).ok()?);
+                i += 2;
+            }
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8(out).ok()
+}
+
+/// `"a\"b"` as a JSON string literal. String knobs are typed by a person, so
+/// their values are the one thing in these bodies that is not ours.
+fn json_str(v: &str) -> String {
+    let mut out = String::with_capacity(v.len() + 2);
+    out.push('"');
+    for c in v.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The page's list: each group's savers in table order, a `-wide` twin left
+/// out because its scene is listed once — see `wide_json`.
+fn groups_json() -> String {
+    let names: Vec<_> = saver::names().collect();
+    let groups: Vec<String> = saver::GROUPS
+        .iter()
+        .enumerate()
+        .map(|(g, group)| {
+            let members: Vec<String> = names
+                .iter()
+                .enumerate()
+                .filter(|&(i, n)| saver::group_at(i) == g && !is_twin(n))
+                .map(|(_, n)| json_str(n))
+                .collect();
+            format!(
+                "{{\"name\":{},\"savers\":[{}]}}",
+                json_str(group),
+                members.join(",")
+            )
+        })
+        .collect();
+    format!("[{}]", groups.join(","))
+}
+
+fn is_twin(name: &str) -> bool {
+    name.strip_suffix("-wide")
+        .is_some_and(|base| saver::index_of(base).is_some())
+}
+
+/// Scene -> its full-width twin, for the page's `expanded` toggle.
+fn wide_json() -> String {
+    let pairs: Vec<String> = saver::names()
+        .filter_map(|n| saver::wide_of(n).map(|w| format!("{}:{}", json_str(n), json_str(w))))
+        .collect();
+    format!("{{{}}}", pairs.join(","))
+}
+
+fn pool_json(mirror: &Mirror) -> String {
+    let names: Vec<String> = saver::GROUPS
+        .iter()
+        .enumerate()
+        .filter(|&(g, _)| mirror.pooled(g))
+        .map(|(_, n)| json_str(n))
+        .collect();
+    format!("[{}]", names.join(","))
+}
+
+/// `scenes,classics` -> their bits. None for an empty list or a name that is
+/// not a group.
+fn pool_mask(v: &str) -> Option<u32> {
+    v.split(',')
+        .try_fold(0u32, |mask, name| {
+            let g = saver::GROUPS.iter().position(|n| *n == name)?;
+            Some(mask | 1 << g)
+        })
+        .filter(|m| *m != 0)
+}
+
+/// The knobs `name`'s constructor reads, found by building it here with the
+/// recorder on — see `config`. On the HTTP thread, never the render thread,
+/// and at a small panel: which knobs a saver reads does not depend on the
+/// panel, and building at 1080p would only cost time.
+fn knobs_of(i: usize, fps: u32) -> Vec<config::Knob> {
+    let name = saver::name_at(i);
+    config::knobs_of(name, || {
+        saver::make(name, &Panel::new(320, 180, 320), fps);
+    })
+}
+
+fn config_json(knobs: &[config::Knob]) -> String {
+    let rows: Vec<String> = knobs
+        .iter()
+        .map(|k| {
+            let (kind, range, default) = match &k.kind {
+                config::Kind::Num { default, lo, hi } => (
+                    if (*lo, *hi) == (0, 1) { "bool" } else { "num" },
+                    format!(",\"lo\":{lo},\"hi\":{hi}"),
+                    default.to_string(),
+                ),
+                config::Kind::Str { default } => ("str", String::new(), json_str(default)),
+            };
+            let value = config::effective(k);
+            format!(
+                "{{\"key\":{key},\"label\":{label},\"kind\":\"{kind}\",\"default\":{default}{range},\
+                 \"value\":{value},\"overridden\":{over},\"help\":{help}}}",
+                key = json_str(k.key),
+                label = json_str(&config::label(k.key, knobs)),
+                value = match k.kind {
+                    config::Kind::Num { .. } => value,
+                    config::Kind::Str { .. } => json_str(&value),
+                },
+                over = config::is_overridden(k.key),
+                help = config::help(k.key).map_or("null".into(), json_str),
+            )
+        })
+        .collect();
+    format!("[{}]", rows.join(","))
+}
+
+/// `GET` lists `saver`'s knobs; `POST key=K&value=V` overrides one, and
+/// `DELETE key=K` (or an empty value) drops the override; both answer
+/// `{"rebuilt":bool,"knobs":[...]}`. A write rebuilds the
+/// saver on the panel if it reads that key — the saver named, or another that
+/// shares it, as every scene shares the tour's — through the same selection
+/// word a click moves, so the epoch and reconnect story is a switch's.
+fn config_route(mirror: &Mirror, method: &str, query: &str) -> (&'static str, String) {
+    let bad = |msg: &str| {
+        (
+            "400 Bad Request",
+            format!("{{\"error\":{}}}", json_str(msg)),
+        )
+    };
+    let Some((i, name)) = param(query, "saver").and_then(|n| saver::index_of(&n).map(|i| (i, n)))
+    else {
+        return bad("unknown saver");
+    };
+    let knobs = knobs_of(i, mirror.fps);
+    if method == "GET" {
+        return ("200 OK", config_json(&knobs));
+    }
+    let key = param(query, "key").unwrap_or_default();
+    let Some(knob) = knobs.iter().find(|k| k.key == key) else {
+        return bad(&format!("{key:?} is not a knob of {name}"));
+    };
+    match param(query, "value").filter(|v| method == "POST" && !v.is_empty()) {
+        Some(v) => {
+            if let Err(e) = config::set(knob, &v) {
+                return bad(&format!("{key}: {e}"));
+            }
+        }
+        None => config::reset(&key),
+    }
+    let cur = mirror.selected();
+    let rebuilt = knobs_of(cur, mirror.fps).iter().any(|k| k.key == key) && mirror.reselect(cur);
+    // Re-read: a switch like ASCII_REST_TOUR decides which other knobs exist.
+    // `rebuilt` so the page can drop its stream itself, as it does for a
+    // `/select`, rather than be cut off mid-chunk.
+    (
+        "200 OK",
+        format!(
+            "{{\"rebuilt\":{rebuilt},\"knobs\":{}}}",
+            config_json(&knobs_of(i, mirror.fps))
+        ),
+    )
 }
 
 fn stat_json(mirror: &Mirror) -> String {
@@ -556,8 +822,13 @@ fn stream(mirror: &Mirror, mut s: TcpStream, query: &str) -> std::io::Result<()>
             }
             // A modeset invalidates geometry, palette and glyph meaning; the
             // page reconnects and re-reads /meta rather than being patched.
+            // Ended with the zero-length chunk, so the browser reads a clean
+            // end of stream: a socket simply closed mid-body is a network
+            // error (ERR_INCOMPLETE_CHUNKED_ENCODING) on every switch.
             if f.epoch != epoch {
-                return Ok(());
+                drop(f);
+                s.write_all(b"0\r\n\r\n")?;
+                return s.flush();
             }
             last_gen = f.gen;
             cur.clear();
@@ -1124,5 +1395,194 @@ mod tests {
             sc.spawn(|| m.publish(&[Cell::new(1, 2)]));
         });
         assert_eq!(held.gen, gen);
+    }
+    fn serve_test(m: &Arc<Mirror>) -> std::net::SocketAddr {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        let m = Arc::clone(m);
+        std::thread::spawn(move || {
+            for s in l.incoming().flatten() {
+                let m = Arc::clone(&m);
+                std::thread::spawn(move || handle(&m, s));
+            }
+        });
+        addr
+    }
+
+    fn req(addr: std::net::SocketAddr, line: &str) -> String {
+        let mut s = TcpStream::connect(addr).unwrap();
+        s.write_all(format!("{line} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+            .unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        out
+    }
+
+    /// `/config` over the socket: the knob list carries the constructor's own
+    /// range, a write in range takes and rebuilds the saver showing, anything
+    /// else is a 400 that changes nothing, and DELETE puts the default back.
+    /// `TOASTER3_DENSITY` because no other test reads it — the override map is
+    /// process-wide.
+    #[test]
+    fn config_lists_validates_sets_and_resets_a_knob() {
+        let m = Mirror::new(15);
+        let addr = serve_test(&m);
+        assert!(m.select("toasters3"));
+        let word = m.selection();
+
+        let body = req(addr, "GET /config?saver=toasters3");
+        assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+        assert!(
+            body.contains(
+                r#"{"key":"TOASTER3_DENSITY","label":"density","kind":"num","default":2,"lo":1,"hi":60,"value":2,"overridden":false"#
+            ),
+            "{body}"
+        );
+
+        let body = req(
+            addr,
+            "POST /config?saver=toasters3&key=TOASTER3_DENSITY&value=9",
+        );
+        assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+        assert!(body.contains(r#""value":9,"overridden":true"#), "{body}");
+        assert!(body.contains(r#"{"rebuilt":true,"knobs":["#), "{body}");
+        assert_eq!(crate::env_num(&["TOASTER3_DENSITY"], 2, 1, 60), 9);
+        assert_ne!(m.selection(), word, "the saver showing was not rebuilt");
+        assert_eq!(m.selected(), saver::index_of("toasters3").unwrap());
+
+        let word = m.selection();
+        for bad in [
+            "POST /config?saver=toasters3&key=TOASTER3_DENSITY&value=61",
+            "POST /config?saver=toasters3&key=TOASTER3_DENSITY&value=0",
+            "POST /config?saver=toasters3&key=TOASTER3_DENSITY&value=5x",
+            "POST /config?saver=toasters3&key=TOASTER_DENSITY&value=5",
+            "POST /config?saver=toasters3&key=SAVER_FPS&value=5",
+            "POST /config?saver=nope&key=TOASTER3_DENSITY&value=5",
+            "GET /config?saver=nope",
+            "GET /config",
+        ] {
+            let body = req(addr, bad);
+            assert!(body.starts_with("HTTP/1.1 400 "), "{bad}: {body}");
+            assert!(body.contains("\"error\":"), "{bad}: {body}");
+            assert_eq!(crate::env_num(&["TOASTER3_DENSITY"], 2, 1, 60), 9, "{bad}");
+        }
+        assert_eq!(m.selection(), word, "a refused write rebuilt the saver");
+
+        // A write to a saver that is not showing does not touch the panel.
+        assert!(m.select("dvd"));
+        let word = m.selection();
+        let body = req(
+            addr,
+            "POST /config?saver=toasters3&key=TOASTER3_SPEED&value=300",
+        );
+        assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+        assert!(body.contains(r#"{"rebuilt":false,"#), "{body}");
+        assert_eq!(m.selection(), word);
+
+        for reset in [
+            "DELETE /config?saver=toasters3&key=TOASTER3_DENSITY",
+            "POST /config?saver=toasters3&key=TOASTER3_SPEED&value=",
+        ] {
+            let body = req(addr, reset);
+            assert!(body.starts_with("HTTP/1.1 200 "), "{reset}: {body}");
+        }
+        assert_eq!(crate::env_num(&["TOASTER3_DENSITY"], 2, 1, 60), 2);
+        assert!(!config::is_overridden("TOASTER3_SPEED"));
+
+        let body = req(addr, "PUT /config?saver=toasters3");
+        assert!(body.starts_with("HTTP/1.1 405 "), "{body}");
+    }
+
+    /// The tour's switch decides which of its other knobs a scene reads, so
+    /// the list after turning it off has no timings — and a scene not showing
+    /// is rebuilt when it shares the key with the one that is.
+    #[test]
+    fn config_follows_a_switch_that_hides_other_knobs() {
+        let m = Mirror::new(15);
+        let addr = serve_test(&m);
+        assert!(m.select("ocean-sunset"));
+        let word = m.selection();
+        let body = req(addr, "GET /config?saver=storm-plains");
+        assert!(body.contains("ASCII_REST_TOUR_HOLD_SECS"), "{body}");
+        assert!(
+            body.contains(r#""key":"ASCII_REST_TITLE","label":"title","kind":"bool""#),
+            "{body}"
+        );
+
+        let body = req(
+            addr,
+            "POST /config?saver=storm-plains&key=ASCII_REST_TOUR&value=0",
+        );
+        assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+        assert!(!body.contains("ASCII_REST_TOUR_HOLD_SECS"), "{body}");
+        assert_ne!(m.selection(), word, "ocean-sunset reads the tour too");
+
+        req(
+            addr,
+            "DELETE /config?saver=storm-plains&key=ASCII_REST_TOUR",
+        );
+        let body = req(addr, "GET /config?saver=storm-plains");
+        assert!(body.contains("ASCII_REST_TOUR_HOLD_SECS"), "{body}");
+    }
+
+    #[test]
+    fn meta_lists_groups_twins_and_the_pool() {
+        let m = Mirror::new(15);
+        scene(&m, "matrix", 2, 2, 8, 16);
+        let addr = serve_test(&m);
+        let body = req(addr, "GET /meta");
+        let head = body.split(",\"palette\"").next().unwrap();
+        assert!(
+            head.contains(r#"{"name":"scenes","savers":["alpine-dawn","#),
+            "{head}"
+        );
+        assert!(
+            !head.contains(r#""savers":["alpine-dawn","alpine-dawn-wide""#),
+            "{head}"
+        );
+        assert!(
+            head.contains(r#""night-coast":"night-coast-wide""#),
+            "{head}"
+        );
+        assert!(
+            head.contains(r#"{"name":"classics","savers":["ascii","blocks","matrix""#),
+            "{head}"
+        );
+        let tail = body.rsplit_once("]],").unwrap().1;
+        assert!(
+            tail.contains(r#""pool":["scenes","ascii.rest","classics","flights","generative"]"#),
+            "{tail}"
+        );
+
+        let body = req(addr, "POST /pool?groups=scenes,flights");
+        assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+        assert!(body.ends_with(r#"{"pool":["scenes","flights"]}"#), "{body}");
+        assert!(m.pooled(0) && !m.pooled(1) && m.pooled(3));
+        for bad in [
+            "POST /pool?groups=",
+            "POST /pool?groups=scenes,nope",
+            "POST /pool",
+        ] {
+            let body = req(addr, bad);
+            assert!(body.starts_with("HTTP/1.1 400 "), "{bad}: {body}");
+        }
+        let body = req(addr, "GET /pool?groups=scenes");
+        assert!(body.starts_with("HTTP/1.1 405 "), "{body}");
+        let tail = req(addr, "GET /meta");
+        assert!(
+            tail.rsplit_once("]],")
+                .unwrap()
+                .1
+                .contains(r#""pool":["scenes","flights"]"#),
+            "{tail}"
+        );
+    }
+
+    #[test]
+    fn params_are_percent_decoded_and_strings_escaped() {
+        assert_eq!(param("v=a%20b+c%2C", "v").as_deref(), Some("a b c,"));
+        assert_eq!(param("v=%zz", "v"), None);
+        assert_eq!(param("v=%2", "v"), None);
+        assert_eq!(json_str("a\"b\\c\n"), r#""a\"b\\c\u000a""#);
     }
 }

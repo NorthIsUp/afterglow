@@ -37,6 +37,7 @@
 pub mod halftone;
 pub mod math;
 pub mod text;
+pub mod title;
 pub mod tour;
 
 /// The one list of pieces. A port is a row here plus its file: its module, its
@@ -123,6 +124,7 @@ each_piece!(declare);
 use crate::grid::{pixel_aspect, Cell, Grid};
 use crate::saver::Saver;
 use crate::surface::{Panel, Surface};
+use title::Title;
 use tour::{Knobs, Touring, View};
 
 /// One ascii.rest piece. Associated consts rather than `&self` methods, so
@@ -169,6 +171,9 @@ pub struct Play<P: Piece> {
     /// What the panel shows.
     cam: Camera,
     tour: Option<Touring>,
+    /// `ASCII_REST_TITLE`: stamped over the camera's grid after the picture
+    /// is mapped onto it.
+    title: Option<Title>,
     frames: u64,
     fps: u64,
     tick: u64,
@@ -232,7 +237,11 @@ impl<P: Piece> Play<P> {
             Fit::Cover { .. } => Knobs::from_env(),
             Fit::Contain => None,
         };
-        Self::with_tour(panel, fps, knobs)
+        let mut play = Self::with_tour(panel, fps, knobs);
+        if crate::env_num(&["ASCII_REST_TITLE"], 0, 0, 1) == 1 {
+            play.title = Some(Title::new(P::NAME, P::CELL, P::PALETTE));
+        }
+        play
     }
 
     fn with_tour(panel: &Panel, fps: u32, knobs: Option<Knobs>) -> Self {
@@ -259,6 +268,7 @@ impl<P: Piece> Play<P> {
             pic: vec![Cell::CLEAR; P::COLS * P::ROWS],
             cam: Camera::new::<P>(panel, aspect, base, widths),
             tour,
+            title: None,
             frames: 0,
             fps: u64::from(fps),
             tick: u64::MAX,
@@ -347,6 +357,9 @@ impl<P: Piece> Saver for Play<P> {
             t.steer::<P>(&self.pic, &mut self.cam);
         }
         self.cam.draw::<P>(&self.pic);
+        if let Some(title) = &self.title {
+            title.stamp(&mut self.cam.grid);
+        }
         self.cam.grid.flush(s, P::PALETTE);
     }
 
@@ -360,7 +373,7 @@ impl<P: Piece> Saver for Play<P> {
 
     fn mirror(&mut self) -> &Grid {
         match &mut self.tour {
-            Some(t) => t.mirror::<P>(&self.pic),
+            Some(t) => t.mirror::<P>(&self.pic, self.title.as_ref()),
             None => &self.cam.grid,
         }
     }
