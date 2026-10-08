@@ -234,6 +234,11 @@ def _halftone_dot(cover: float) -> list[int]:
 HALFTONE_COVER = (0.3, 0.6, 1.0)
 
 
+def _rust_char(ch: str) -> str:
+    """A Rust char literal. Not `repr`: Python spells the quote "'"."""
+    return "'\\" + ch + "'" if ch in "'\\" else f"'{ch}'"
+
+
 @dataclass(frozen=True)  # no slots=True: README's `python3` is 3.9 on macOS
 class HexFont:
     """A parsed .hex file: codepoint -> its hex digits, unvalidated."""
@@ -290,25 +295,37 @@ def main() -> None:
 
     glyphs: list[list[int]] = []
     notes: list[str] = []
+    chars: list[str] = []
     seen: dict[tuple[int, ...], int] = {}
 
-    def add(rows: list[int], note: str) -> int:
+    def add(rows: list[int], note: str, ch: str, *, named: bool = False) -> int:
         """Intern one bitmap. Identical bitmaps share a slot, which is how the
-        matrix set's two 0 slots and its space collapse into the atlas."""
+        matrix set's two 0 slots and its space collapse into the atlas.
+
+        `ch` is what a terminal prints for the slot, and the first one wins —
+        except that a `named` shape (a block element, a text piece's char)
+        takes a slot braille got to first: a braille pattern that happens to be
+        a half block is drawn as filled quadrants, which is what the block is."""
         key = tuple(rows)
         if key in seen:
-            return seen[key]
+            idx = seen[key]
+            if named:
+                chars[idx] = ch
+            return idx
         idx = len(glyphs)
         seen[key] = idx
         glyphs.append(rows)
         notes.append(note)
+        chars.append(ch)
         return idx
 
-    blank = add([0x00] * 16, "BLANK")
-    solid = add([0xFF] * 16, "SOLID — blocks mode is a glyph grid too")
+    blank = add([0x00] * 16, "BLANK", " ")
+    solid = add([0xFF] * 16, "SOLID — blocks mode is a glyph grid too", "\u2588")
     assert (blank, solid) == (0, 1), "BLANK and SOLID must be slots 0 and 1"
 
-    ramp = [add([b for b in FIRE_8X8[c] for _ in (0, 1)], f"fire ramp {c!r}") for c in RAMP_CHARS]
+    ramp = [
+        add([b for b in FIRE_8X8[c] for _ in (0, 1)], f"fire ramp {c!r}", c) for c in RAMP_CHARS
+    ]
 
     matrix: list[int] = []
     for ch in MATRIX_ORDER:
@@ -319,29 +336,32 @@ def main() -> None:
         mirror = ch in MATRIX_KANA or ch == "z"
         rows, used = font.rows(cp, mirror=mirror)
         note = f"matrix U+{used:04X} {ch!r}" + (" mirrored" if mirror else "")
-        matrix.append(add(rows, note))
+        matrix.append(add(rows, note, chr(used)))
 
     # Printable ASCII, so a saver can write its sprites as string literals
     # instead of a hand-maintained glyph index per character. Interning means
     # the slots the ramp and the matrix set already pulled in cost nothing, and
     # the space collapses onto BLANK.
     ascii_set = [
-        add(font.rows(cp, mirror=False)[0], f"ascii U+{cp:04X} {chr(cp)!r}")
+        add(font.rows(cp, mirror=False)[0], f"ascii U+{cp:04X} {chr(cp)!r}", chr(cp))
         for cp in range(0x20, 0x7F)
     ]
 
     # Already interned by the matrix set; named here because "a lit lamp" is a
     # different intent from "slot 44 of the film's glyph order", and city wants
     # the shape, not the order.
-    block = add(font.rows(0x25AA, mirror=False)[0], "U+25AA small square")
+    block = add(font.rows(0x25AA, mirror=False)[0], "U+25AA small square", "\u25aa")
 
     # U+2800..28FF, indexed by the pattern byte. A saver that wants sub-cell
     # detail packs 2x4 dots into one of these instead of picking a character
     # whose shape happens to be close.
-    braille = [add(braille_rows(n), f"braille U+{0x2800 + n:04X}") for n in range(256)]
+    braille = [
+        add(braille_rows(n), f"braille U+{0x2800 + n:04X}", chr(0x2800 + n)) for n in range(256)
+    ]
 
     block_elements = [
-        (name, ch, add(rows, f"block U+{ord(ch):04X} {ch!r}")) for name, ch, rows in BLOCK_ELEMENTS
+        (name, ch, add(rows, f"block U+{ord(ch):04X} {ch!r}", ch, named=True))
+        for name, ch, rows in BLOCK_ELEMENTS
     ]
 
     by_char = {ch: idx for _, ch, idx in block_elements}
@@ -351,12 +371,20 @@ def main() -> None:
             ch,
             by_char[ch]
             if ch in by_char
-            else add(font.rows(ord(ch), mirror=False)[0], f"text U+{ord(ch):04X} {ch!r}"),
+            else add(
+                font.rows(ord(ch), mirror=False)[0],
+                f"text U+{ord(ch):04X} {ch!r}",
+                ch,
+                named=True,
+            ),
         )
         for ch in TEXT_CHARS
     )
 
-    halftone = [blank] + [add(_halftone_dot(c), f"halftone dot, cover {c}") for c in HALFTONE_COVER]
+    halftone = [blank] + [
+        add(_halftone_dot(c), f"halftone dot, cover {c}", ch)
+        for c, ch in zip(HALFTONE_COVER, "\u00b7\u2022\u25cf")
+    ]
 
     with contextlib.ExitStack() as stack:
         w: TextIO = (
@@ -439,6 +467,13 @@ def main() -> None:
         p("/// `COVER` (0, 0.3, 0.6, 1), indexed by dot step.")
         p("#[rustfmt::skip]")
         p(f"pub const HALFTONE: [u16; {len(halftone)}] = {halftone!r};")
+        p()
+        p("/// The character each glyph stands for, indexed like `GLYPHS`, for a host")
+        p("/// that prints rather than blits. Katakana are their unmirrored halfwidth")
+        p("/// forms: a terminal cannot draw them back to front.")
+        p("#[rustfmt::skip]")
+        body = "".join(f"\n    {_rust_char(ch)}," for ch in chars)
+        p(f"pub const CHARS: [char; {len(chars)}] = [{body}\n];")
 
     print(
         f"{len(glyphs)} glyphs, {len(glyphs) * 16} bytes of table "

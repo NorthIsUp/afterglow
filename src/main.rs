@@ -38,6 +38,7 @@
 //! * `host` — DRM: modeset, mapping, dirty, teardown.
 //! * `dump` — the same frame code rendered to PPM on a machine with no display,
 //!   with the damage self-check that no monitor can perform.
+//! * `term` — the same frame code printed into the terminal it runs in.
 //!
 //! # Environment
 //!
@@ -73,6 +74,9 @@
 //! * `SAVER_DUMP`     — render to PPM files in this directory instead of to a
 //!   display, then exit. Also honours `SAVER_DUMP_FRAMES`, `SAVER_DUMP_EVERY`,
 //!   `SAVER_WIDTH`, `SAVER_HEIGHT`.
+//! * `SAVER_TERM`     — 1 animates the saver in this terminal instead of on a
+//!   display, until Ctrl-C or `q`. Any OS with a truecolor terminal, no card
+//!   needed. See `term.rs`.
 //!
 //! Per-saver knobs are documented in `README.md`, one row
 //! per saver — it is the only complete list, and a second copy here goes stale.
@@ -113,6 +117,7 @@ mod speeder;
 mod strings;
 mod surface;
 mod tactiles;
+mod term;
 #[cfg(test)]
 mod testalloc;
 mod toasters;
@@ -199,6 +204,7 @@ pub struct Config {
     rotate_secs: u64,
     retry: Duration,
     dump: Option<String>,
+    term: bool,
     http: String,
 }
 
@@ -214,6 +220,7 @@ impl Config {
             rotate_secs: env_num(&["SAVER_ROTATE_SECS"], 0, 0, 86_400) as u64,
             retry: Duration::from_secs(env_num(&["RETRY_SECONDS"], 30, 1, 3600) as u64),
             dump: std::env::var("SAVER_DUMP").ok(),
+            term: env_num(&["SAVER_TERM"], 0, 0, 1) == 1,
             // Loopback by default: the only thing that should reach the mirror
             // is the tailscale-auth gate sharing this pod's netns.
             http: env_str(&["SAVER_HTTP"], "127.0.0.1:8080"),
@@ -259,6 +266,13 @@ fn main() {
     // card at all.
     if let Some(dir) = &cfg.dump {
         if let Err(e) = dump::run_dump(dir, &cfg, &mirror) {
+            eprintln!("[screensaver] {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if cfg.term {
+        if let Err(e) = term::run(&cfg, &mirror) {
             eprintln!("[screensaver] {e}");
             std::process::exit(1);
         }
