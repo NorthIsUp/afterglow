@@ -1718,24 +1718,25 @@ mod tests {
         let addr = serve_test(&m);
         {
             let m = Arc::clone(&m);
-            std::thread::spawn(move || {
-                let mut seen = m.selection();
-                loop {
-                    let want = m.selection();
-                    if want != seen {
-                        seen = want;
-                        std::thread::sleep(Duration::from_millis(30));
-                        scene(&m, saver::name_at(sel_index(want)), 3, 3, 8, 16);
-                        m.applied(want);
-                    }
-                    std::thread::sleep(Duration::from_millis(2));
+            // Read before spawning: a /select that beats the thread to its
+            // first read would otherwise look like the starting state, and
+            // nothing would ever apply it.
+            let mut seen = m.selection();
+            std::thread::spawn(move || loop {
+                let want = m.selection();
+                if want != seen {
+                    seen = want;
+                    std::thread::sleep(Duration::from_millis(30));
+                    scene(&m, saver::name_at(sel_index(want)), 3, 3, 8, 16);
+                    m.applied(want);
                 }
+                std::thread::sleep(Duration::from_millis(2));
             });
         }
         let body = req(addr, "POST /select?saver=dvd");
         assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
-        assert!(body.contains(r#"{"saver":"dvd","#), "{}", &body[..300]);
-        assert!(body.contains(r#""epoch":2,"#), "{}", &body[..300]);
+        assert!(body.contains(r#"{"saver":"dvd","#), "{body}");
+        assert!(body.contains(r#""epoch":2,"#), "{body}");
         assert!(body.contains(r#""rotate_secs":0,"excluded":[]}"#));
     }
 
