@@ -14,14 +14,17 @@ from `/meta`, built from one table in `saver.rs`, so the page knows no saver by
 name. Type in the filter box to narrow it; up/down and enter pick from the
 keyboard, escape clears. The saver on the panel is highlighted and scrolled into
 view, including after a rotation. A scene and its full-width `-wide` twin are
-one row, with an `expanded` toggle in the bar that switches between them; picking
-another scene keeps it as it was. Under 720 px wide the list becomes a drawer
+one row, with an `expanded` toggle in the bar that switches between them. Scenes
+start expanded: clicking a scene's row shows its `-wide` until someone unticks
+`expanded` for that scene, and then its original from then on, for every viewer —
+the choice is the server's, per pair, and `/meta` lists the expanded ones as
+`expanded`. The text pieces' twins start off. Under 720 px wide the list becomes a drawer
 behind the button above the canvas.
 
 Each row has a tick box for whether rotation may pick it, and each group heading
 one for the whole group (half-ticked when some are in). A scene's box covers its
 `-wide` twin as well, and the pair takes one turn: rotation shows whichever half
-`expanded` last chose — the original until someone picks the `-wide`. Everything out with the timer on is a pause, and the bar says
+`expanded` is set to. Everything out with the timer on is a pause, and the bar says
 so in red. A saver out of rotation still shows when clicked.
 
 A click is one round trip. The row and the name change at once, the canvas

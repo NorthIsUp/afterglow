@@ -205,6 +205,14 @@ pub fn twin_of(name: &str) -> Option<&'static str> {
     wide_of(name).or_else(|| name.strip_suffix("-wide").and_then(index_of).map(name_at))
 }
 
+/// Whether a pair starts expanded — clicks and rotation show its `-wide`
+/// half until someone picks the original. The halftone scenes do: they were
+/// recomposed full-width for the 3.2:1 panel. The text pieces' twins stretch
+/// rather than recompose, so they start on the original.
+pub fn expanded_by_default(wide: usize) -> bool {
+    group_at(wide) == SCENES
+}
+
 /// How many savers there are, for `Rotate`'s bag. A const because the bag is a
 /// fixed-size array: adding a row to the table above resizes it, and no refill
 /// ever allocates.
@@ -969,14 +977,19 @@ mod tests {
             picked = (0..NSAVERS).filter(|&i| m.pickable(i)).count();
         });
         assert_eq!(n, 0);
-        // Every row but the `-wide` halves, which wait for `expanded`.
-        let wide = names().filter(|n| n.ends_with("-wide")).count();
-        assert_eq!(picked, NSAVERS - wide);
+        // One half of every pair: the scenes' `-wide`, the text pieces'
+        // originals.
+        let pairs = names().filter(|n| n.ends_with("-wide")).count();
+        assert_eq!(picked, NSAVERS - pairs);
+        for (i, n) in names().enumerate().filter(|(_, n)| n.ends_with("-wide")) {
+            assert_eq!(m.pickable(i), group_at(i) == SCENES, "{n}");
+        }
     }
 
     /// A scene's pair takes one turn, and which half is the viewer's
-    /// `expanded` choice: the original until the `-wide` is clicked, then the
-    /// `-wide` until the original is. Rotation moving on does not change it.
+    /// `expanded` choice: the `-wide` by default, the original once it is
+    /// clicked, the `-wide` again once that is. Rotation moving on does not
+    /// change it.
     #[test]
     fn rotation_shows_the_half_of_a_pair_that_expanded_chose() {
         let mirror = Mirror::new(15);
@@ -996,24 +1009,19 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
+        let wide =
+            |shown: &[&str]| shown.contains(&"night-coast-wide") && !shown.contains(&"night-coast");
+        let narrow =
+            |shown: &[&str]| shown.contains(&"night-coast") && !shown.contains(&"night-coast-wide");
         let shown = turns(1);
-        assert!(
-            shown.contains(&"night-coast") && !shown.contains(&"night-coast-wide"),
-            "{shown:?}"
-        );
-
-        assert!(mirror.select("night-coast-wide"));
-        let shown = turns(10);
-        assert!(
-            shown.contains(&"night-coast-wide") && !shown.contains(&"night-coast"),
-            "{shown:?}"
-        );
+        assert!(wide(&shown), "default {shown:?}");
 
         assert!(mirror.select("night-coast"));
+        let shown = turns(10);
+        assert!(narrow(&shown), "after picking the original {shown:?}");
+
+        assert!(mirror.select("night-coast-wide"));
         let shown = turns(20);
-        assert!(
-            shown.contains(&"night-coast") && !shown.contains(&"night-coast-wide"),
-            "{shown:?}"
-        );
+        assert!(wide(&shown), "after picking the wide {shown:?}");
     }
 }

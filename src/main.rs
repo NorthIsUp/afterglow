@@ -294,7 +294,12 @@ fn main() {
     // cfg.saver again. An unrecognised name is refused here and leaves the
     // selection at row 0 — the same fallback `make` has always had, now reached
     // through the one validation point instead of a second path beside it.
-    if !mirror.select(&cfg.saver) {
+    //
+    // By index, not `select`: the startup saver is the deployment's, not a
+    // viewer's pick, so it does not move a scene's `expanded` choice.
+    if let Some(i) = saver::index_of(&cfg.saver) {
+        mirror.select_at(i);
+    } else {
         eprintln!(
             "[screensaver] SAVER={} is not a saver, using {}",
             cfg.saver,

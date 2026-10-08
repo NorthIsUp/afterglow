@@ -497,12 +497,13 @@
     applyFilter();
   }
 
-  // The row a click on `name` asks for: the twin the viewer is already
-  // looking at, so moving between scenes keeps `expanded` as it was.
+  // The row a click on `name` asks for: the half its pair is set to.
   function pick(name) {
     closeDrawer();
+    // The server's choice, not this tab's: a pair starts expanded or not by
+    // the Rust table, and a pick on any browser moves it for all of them.
     const wide = meta.wide[name];
-    select(wide && meta.saver === meta.wide[shown(meta.saver)] ? wide : name);
+    select(wide && meta.expanded.includes(wide) ? wide : name);
   }
 
   function visible() {

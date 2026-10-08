@@ -48,8 +48,11 @@ per group, on its heading), or `POST /rotation?saver=<name>&on=0|1` /
 `POST /rotation?group=<name>&on=0|1` by hand; `/meta` reports the savers out as
 `excluded`. A scene goes in or out with its `-wide` twin, because the page shows
 the pair as one row, and the pair is one turn in the bag: rotation shows the half
-the last click chose (the `expanded` toggle, or clicking either name), the
-original until then. Rotation moving on does not change that choice. `SAVER_ROTATE_EXCLUDE` (comma-separated names, default none)
+its `expanded` choice names: the `-wide` for a halftone scene and the original
+for a text piece, until a click picks the other half (the `expanded` toggle, or
+`/select` of either name), which then sticks. Rotation moving on, and the startup
+`SAVER`, do not change the choice. The default is one function,
+`saver::expanded_by_default`. `SAVER_ROTATE_EXCLUDE` (comma-separated names, default none)
 is the startup set, so a deployment can pin it; like the interval, the page moves
 it live and a restart goes back to the env value. An unknown name there is
 logged and ignored.
