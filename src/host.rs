@@ -32,7 +32,7 @@ impl ControlDevice for Card {}
 /// separate function only because the card-bound render loop around it cannot
 /// be run in CI, and this is the branch that has to be right before anyone
 /// raises `SAVER_FPS` against the pod's 500m CFS quota.
-fn pace(mirror: &Mirror, frame_dur: Duration, t0: Instant) {
+pub fn pace(mirror: &Mirror, frame_dur: Duration, t0: Instant) {
     match frame_dur.checked_sub(t0.elapsed()) {
         Some(rem) => std::thread::sleep(rem),
         // The panel missed its rate. COUNTED, not logged: a log line per frame

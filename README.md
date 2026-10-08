@@ -20,6 +20,22 @@ initContainer that takes the panel from the kernel console, and a display
 `nodeSelector`. Pick a saver with the `SAVER` env var, below. The web mirror on
 `SAVER_HTTP` has no auth of its own; put it behind yours.
 
+## Run it in your terminal
+
+No Pi, no monitor, no Docker — any saver animates in a truecolor terminal
+(Terminal, iTerm2, Ghostty, kitty, most Linux ones):
+
+```sh
+SAVER=night-coast SAVER_TERM=1 cargo run --release
+```
+
+`q` or Ctrl-C quits. The saver is sized as if each character were an 8x16
+glyph cell: glyph-shaped cells print one character each (matrix prints its
+katakana), square ones stack two to a character with `▀`. Resize the window
+and it rebuilds; shrink the font if a scene's edges are cropped. The web
+mirror still runs on `SAVER_HTTP`, so `POST /select` and `SAVER_ROTATE_SECS`
+work here too; stderr is muted while it draws.
+
 ## Savers
 
 Pick one with `SAVER` (older spelling: `FIRE_STYLE`). Anything unrecognised
@@ -1109,6 +1125,8 @@ own 8x8 bitmaps, row-doubled, which is why fire renders pixel-identically to the
 pre-refactor build. `ASCII` indexes U+0020..=U+007E by `c - 0x20`, which is what
 lets a saver write its sprites as plain string literals; identical bitmaps are
 interned, so a character another set already pulled in costs no extra slot.
+`CHARS` maps every slot back to the character it stands for, which is what
+`SAVER_TERM` prints.
 
 ## Building / publishing the image
 
