@@ -48,8 +48,7 @@ pub mod tour;
 macro_rules! each_piece {
     ($cb:ident) => {
         $cb! {
-            alpine_dawn::{AlpineDawn},
-            alpine_dawn_wide::{#[no_upstream] AlpineDawnWide},
+            alpine_dawn::{AlpineDawn, #[no_upstream] AlpineDawnWide},
             aurora::{Aurora},
             aurora_fjord::{AuroraFjord},
             aurora_fjord_wide::{#[no_upstream] AuroraFjordWide},
