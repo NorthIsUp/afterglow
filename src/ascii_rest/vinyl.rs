@@ -139,15 +139,29 @@ const BACK: f64 = 4.0;
 const PARK: f64 = 3.0;
 const OVER: f64 = 3.0;
 const CUE: f64 = 1.5;
+const CHANGEOVER: f64 = LIFT + BACK + PARK + OVER + CUE;
 
 /// Smoothstep, for the arm's swings.
 fn ease(u: f64) -> f64 {
     u * u * (3.0 - 2.0 * u)
 }
 
-/// Where the tonearm is in its cycle at `t`: its angle about the pivot,
-/// whether the cue lever is up, and whether the arm is lifted off the record.
-type Pose = (f64, bool, bool);
+/// Where the tonearm is in its cycle.
+#[derive(Debug, PartialEq)]
+struct Pose {
+    /// About the pivot.
+    angle: f64,
+    lever_up: bool,
+    lifted: bool,
+}
+
+const fn pose(angle: f64, lever_up: bool, lifted: bool) -> Pose {
+    Pose {
+        angle,
+        lever_up,
+        lifted,
+    }
+}
 
 /// The tonearm's cycle: angles about the pivot (y down, x in rows) at its
 /// rest, the lead-in and the run-out groove, and the arm's length in rows.
@@ -164,28 +178,28 @@ struct Swing {
 impl Swing {
     fn pose(&self, t: f64) -> Pose {
         let (rest, a, b) = (self.rest, self.lead_in, self.run_out);
-        let mut u = (t + self.lead).rem_euclid(self.side + LIFT + BACK + PARK + OVER + CUE);
+        let mut u = (t + self.lead).rem_euclid(self.side + CHANGEOVER);
         if u < self.side {
-            return (a + (b - a) * u / self.side, false, false);
+            return pose(a + (b - a) * u / self.side, false, false);
         }
         u -= self.side;
         if u < LIFT {
-            return (b, true, u > LIFT * 0.4);
+            return pose(b, true, u > LIFT * 0.4);
         }
         u -= LIFT;
         if u < BACK {
-            return (b + (rest - b) * ease(u / BACK), true, true);
+            return pose(b + (rest - b) * ease(u / BACK), true, true);
         }
         u -= BACK;
         if u < PARK {
-            return (rest, false, false);
+            return pose(rest, false, false);
         }
         u -= PARK;
         if u < OVER {
-            return (rest + (a - rest) * ease(u / OVER), true, true);
+            return pose(rest + (a - rest) * ease(u / OVER), true, true);
         }
         u -= OVER;
-        (a, u < CUE * 0.6, u < CUE * 0.8)
+        pose(a, u < CUE * 0.6, u < CUE * 0.8)
     }
 }
 
@@ -367,10 +381,9 @@ impl Deck {
             while head(rest, -2.5) < RIM * s + 2.5 && rest > PI / 2.0 {
                 rest -= 0.002;
             }
-            let period = side + LIFT + BACK + PARK + OVER + CUE;
             Swing {
                 side,
-                lead: share * period,
+                lead: share * (side + CHANGEOVER),
                 rest: rest.max(PI / 2.0),
                 lead_in,
                 run_out,
@@ -479,10 +492,14 @@ impl Deck {
         let ((hc, ar), lever, lifted) = match &self.swing {
             None => (self.shell, false, false),
             Some(w) => {
-                let (a, lever, lifted) = w.pose(t);
+                let Pose {
+                    angle: a,
+                    lever_up,
+                    lifted,
+                } = w.pose(t);
                 let x = pc + 0.5 + 2.0 * w.len * a.cos() - 2.5;
                 let y = (pr + 0.5 + w.len * a.sin()).floor().max(pr + 3.0);
-                ((x.round(), y - f64::from(u8::from(lifted))), lever, lifted)
+                ((x.round(), y - f64::from(u8::from(lifted))), lever_up, lifted)
             }
         };
         pen.ink(BRASS);
@@ -509,7 +526,9 @@ impl Deck {
         pen.ink(if lever { CAP } else { BRASS });
         let up = f64::from(u8::from(lever));
         pen.words(pc + 3.0, pr + 4.0 - up, "╭╮");
-        pen.words(pc + 3.0, pr + 5.0 - up, "││");
+        if lever {
+            pen.words(pc + 3.0, pr + 4.0, "││");
+        }
         pen.words(pc + 3.0, pr + 5.0, "││");
         pen.words(pc + 3.0, pr + 6.0, "╰╯");
     }
@@ -810,14 +829,12 @@ mod tests {
             ..ORIGINAL
         });
         let w = deck.swing.as_ref().unwrap();
-        let period = 20.0 + LIFT + BACK + PARK + OVER + CUE;
-        assert_eq!(w.pose(0.0), (w.lead_in, false, false));
+        assert_eq!(w.pose(0.0), pose(w.lead_in, false, false));
         assert!(w.run_out > w.lead_in && w.rest < w.lead_in);
-        let (a, _, lifted) = w.pose(10.0);
-        assert!(a > w.lead_in && a < w.run_out && !lifted);
-        assert_eq!(w.pose(20.0 + LIFT * 0.9), (w.run_out, true, true));
-        assert_eq!(w.pose(20.0 + LIFT + BACK + 1.0), (w.rest, false, false));
-        let (a, ..) = w.pose(period);
-        assert!((a - w.lead_in).abs() < 1e-9);
+        let mid = w.pose(10.0);
+        assert!(mid.angle > w.lead_in && mid.angle < w.run_out && !mid.lifted);
+        assert_eq!(w.pose(20.0 + LIFT * 0.9), pose(w.run_out, true, true));
+        assert_eq!(w.pose(20.0 + LIFT + BACK + 1.0), pose(w.rest, false, false));
+        assert!((w.pose(20.0 + CHANGEOVER).angle - w.lead_in).abs() < 1e-9);
     }
 }

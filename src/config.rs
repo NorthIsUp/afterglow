@@ -238,6 +238,10 @@ pub fn help(key: &str) -> Option<&'static str> {
         "ASCII_REST_TOUR_CUTS" => "cut between framings and drift, instead of one long move",
         "ASCII_REST_TOUR_MAX_ZOOM_PCT" => "closest zoom, per cent of the cover view's cell",
         "ASCII_REST_TITLE" => "the scene's name in a corner",
+        "LIGHTHOUSE_BEAM_FRONT" => {
+            "the beam turns in front of the tower on the near half; off, always behind"
+        }
+        "VINYL_SIDE_SECS" => "seconds a side plays before the tonearm lifts and returns",
         "TV_STATIC_COLOR" => "the set in colour: bars, cabinet and dial; off is upstream's one ink",
         k if k.ends_with("_SEED") => "0 rolls a new one every build; anything else pins it",
         k if k.ends_with("_CELL_W") || k.ends_with("_CELL_H") || k.ends_with("_CELL") => {
