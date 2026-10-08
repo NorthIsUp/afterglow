@@ -8,7 +8,7 @@
 
 use super::halftone::{Dots, BAYER};
 use super::math::{clamp, fbm, hash, js_round, mix, noise, smooth};
-use super::{hex, Piece};
+use super::{Fit, Piece, hex};
 use crate::font;
 use crate::grid::Cell;
 
@@ -272,6 +272,7 @@ impl Piece for KyotoDusk {
     const ROWS: usize = H;
     const FPS: u32 = 15;
     const CELL: usize = 1;
+    const FIT: Fit = Fit::Cover { anchor: 0.25 };
     const GROUND: u32 = hex("#0b0a16");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[
