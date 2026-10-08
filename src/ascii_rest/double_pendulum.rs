@@ -1,15 +1,18 @@
 //! double-pendulum: two equal rods hung end to end from one pivot, stepped
 //! with RK4. Chaotic, so it never repeats; the lower bob leaves a fading trail.
 //!
-//! `double-pendulum-wide` hangs as many pendulums across the panel as fit
-//! side by side, each scaled to the panel's height and let go from a slightly
-//! different angle, so they start nearly together and soon have nothing in
-//! common.
+//! Drawn at the panel's size: the panel is shared out into slots of
+//! upstream's shape, side by side on a wide panel and stacked on a tall one,
+//! a pendulum in each scaled to fill its slot without clipping. Each is let
+//! go from a slightly different angle, so they start nearly together and
+//! soon have nothing in common. `DOUBLE_PENDULUM_COLOR` (on) gives each
+//! trail its own colour family; off, at upstream's 48x25, it is upstream's
+//! picture cell for cell.
 
 use std::collections::VecDeque;
 
 use super::math::js_round;
-use super::{hex, text, Canvas, Piece};
+use super::{hex, text, Canvas};
 use crate::grid::Cell;
 
 const COLS: usize = 48;
@@ -72,14 +75,19 @@ struct Hang {
 }
 
 impl Hang {
-    /// Centred in `cols` columns from `x0` on a grid `rows` tall: both rods
-    /// reach any edge but none clips.
-    fn new(x0: f64, cols: usize, rows: usize) -> Self {
-        let cy = (rows as f64 - 1.0) / 2.0;
-        let sy = (cy - 0.6) / 2.0;
+    /// Centred in the `cols x rows` slot at `(x0, y0)`: both rods reach any
+    /// edge of it but none clips. Scaled to the slot's height unless that is
+    /// strictly too wide, so upstream's own slot, which fits both ways, keeps
+    /// its height-derived scale to the last bit.
+    fn new(x0: f64, y0: f64, cols: usize, rows: usize) -> Self {
+        let half = (rows as f64 - 1.0) / 2.0;
+        let mid = (cols as f64 - 1.0) / 2.0;
+        let tall = (half - 0.6) / 2.0;
+        let wide = (mid - 0.7) / 4.0;
+        let sy = if wide < tall - 1e-9 { wide } else { tall };
         Self {
-            cx: x0 + (cols as f64 - 1.0) / 2.0,
-            cy,
+            cx: x0 + mid,
+            cy: y0 + half,
             sx: sy * 2.0,
             sy,
         }
@@ -173,7 +181,7 @@ fn rod(grid: &mut Grid<'_>, x0: f64, y0: f64, x1: f64, y1: f64) {
     }
 }
 
-/// The twin's colours: each pendulum's trail in its own family, deep and
+/// The colours: each pendulum's trail in its own family, deep and
 /// dim where it is oldest to bright at the bob, the rods pale, the bobs
 /// white and the pivot grey.
 const SHADES: usize = 5;
@@ -182,7 +190,7 @@ const ROD: u16 = 15;
 const BOB: u16 = 16;
 const KNEE: u16 = 17;
 const PIVOT: u16 = 18;
-const WIDE_PALETTE: &[u32] = &[
+const PALETTE: &[u32] = &[
     hex("#1a3a8a"),
     hex("#2a5ad0"),
     hex("#3a8af0"),
@@ -206,7 +214,7 @@ const WIDE_PALETTE: &[u32] = &[
 
 struct Pendulum {
     hang: Hang,
-    /// The twin's colour family for the trail; None upstream, in one ink.
+    /// The trail's colour family; None in upstream's one ink.
     family: Option<u16>,
     start: State,
     s: State,
@@ -351,65 +359,63 @@ impl Scene {
     }
 }
 
-pub struct DoublePendulum(Scene);
+pub struct DoublePendulum {
+    scene: Scene,
+    colour: bool,
+}
 
-impl Piece for DoublePendulum {
+/// Upstream's grid, whose shape is every slot's.
+const ASPECT: f64 = COLS as f64 / ROWS as f64;
+
+impl Canvas for DoublePendulum {
     const NAME: &'static str = "double-pendulum";
+    #[cfg(test)]
     const COLS: usize = COLS;
+    #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = 30;
-    const CELL: usize = 2;
-    const PALETTE: &'static [u32] = &[hex("#6ee7ff")];
-    const GROUND: u32 = 0;
-
-    fn new() -> Self {
-        let hang = Hang::new(0.0, COLS, ROWS);
-        Self(Scene {
-            cols: COLS,
-            rows: ROWS,
-            swing: vec![Pendulum::new(hang, START, None)],
-        })
-    }
-
-    fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        self.0.frame(t, out);
-    }
-}
-
-pub struct DoublePendulumWide(Scene);
-
-impl Canvas for DoublePendulumWide {
-    const NAME: &'static str = "double-pendulum-wide";
-    const FPS: u32 = DoublePendulum::FPS;
     #[cfg(test)]
-    const COLS: usize = <DoublePendulum as super::Piece>::COLS;
-    #[cfg(test)]
-    const ROWS: usize = <DoublePendulum as super::Piece>::ROWS;
-    #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)] = &[];
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("DOUBLE_PENDULUM_COLOR", "0")];
 
-    /// One pendulum a slot as wide as its reach (with a little air), the
-    /// slots sharing out the width; each lets go a little further round.
+    /// Rows of slots by how much taller than upstream the panel is, then
+    /// slots across each row; a slot is added once one fewer would leave
+    /// most of a pendulum's width empty, so a 4:3 panel gets two rather than
+    /// one with wide bare margins.
     fn new(cols: usize, rows: usize) -> Self {
-        let reach = 4.0 * Hang::new(0.0, cols, rows).sx + 6.0;
-        let n = ((cols as f64 / reach).round() as usize).max(1);
+        let colour = crate::env_num(&["DOUBLE_PENDULUM_COLOR"], 1, 0, 1) == 1;
+        let ny = ((rows as f64 * ASPECT / cols as f64).round() as usize).max(1);
+        let nx = ((cols as f64 / (ASPECT * (rows / ny) as f64) + 0.15).round() as usize).max(1);
+        let n = nx * ny;
         let swing = (0..n)
             .map(|i| {
-                let (x0, x1) = (i * cols / n, (i + 1) * cols / n);
+                let (ix, iy) = (i % nx, i / nx);
+                let (x0, x1) = (ix * cols / nx, (ix + 1) * cols / nx);
+                let (y0, y1) = (iy * rows / ny, (iy + 1) * rows / ny);
                 let [a, b, p, q] = START;
                 let k = i as f64 - (n - 1) as f64 / 2.0;
-                let hang = Hang::new(x0 as f64, x1 - x0, rows);
-                let family = (i % FAMILIES) as u16;
-                Pendulum::new(hang, [a + 0.04 * k, b - 0.03 * k, p, q], Some(family))
+                let hang = Hang::new(x0 as f64, y0 as f64, x1 - x0, y1 - y0);
+                let family = colour.then_some((i % FAMILIES) as u16);
+                Pendulum::new(hang, [a + 0.04 * k, b - 0.03 * k, p, q], family)
             })
             .collect();
-        Self(Scene { cols, rows, swing })
+        Self {
+            scene: Scene { cols, rows, swing },
+            colour,
+        }
+    }
+
+    fn palette(&self) -> &'static [u32] {
+        if self.colour {
+            PALETTE
+        } else {
+            &[INK]
+        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        self.0.frame(t, out);
-    }
-    fn palette(&self) -> &'static [u32] {
-        WIDE_PALETTE
+        self.scene.frame(t, out);
     }
 }
+
+/// Upstream's one ink.
+const INK: u32 = hex("#6ee7ff");
