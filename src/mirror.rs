@@ -264,14 +264,14 @@ impl Mirror {
         self.rotation[i / 64].load(Ordering::Relaxed) & (1 << (i % 64)) != 0
     }
 
-    /// May rotation pick row `i` now: in rotation, and for a scene's pair,
-    /// the half its `expanded` choice names — the `-wide` until a viewer
-    /// picks. Allocation-free; called at the rotation boundary.
     /// Is `-wide` row `w` the half its pair shows.
     fn pickable_half(&self, w: usize) -> bool {
         self.expanded[w / 64].load(Ordering::Relaxed) & (1 << (w % 64)) != 0
     }
 
+    /// May rotation pick row `i` now: in rotation, and for a pair, the half
+    /// its `expanded` choice names — the `-wide` until a viewer picks.
+    /// Allocation-free; called at the rotation boundary.
     pub fn pickable(&self, i: usize) -> bool {
         self.in_rotation(i)
             && match self.twins[i] {

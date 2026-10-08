@@ -132,6 +132,11 @@ macro_rules! golden {
         fn golden() {
             tests::golden::<crate::ascii_rest::$m::$t>();
         }
+
+        #[test]
+        fn upstream_knobs_change_the_picture() {
+            tests::upstream_knobs_change_the_picture::<crate::ascii_rest::$m::$t>();
+        }
     };
 }
 each_piece!(declare);
@@ -597,6 +602,7 @@ pub const fn hex(s: &str) -> u32 {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::config;
     use crate::glyph;
     use crate::testalloc::allocs_during;
 
@@ -770,7 +776,6 @@ pub(crate) mod tests {
     /// `P` built with its `UPSTREAM` knobs, each checked against what its
     /// constructor really reads.
     fn upstream<P: Piece>() -> P {
-        use crate::config;
         let _knobs = config::SHARED_KNOBS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -789,20 +794,22 @@ pub(crate) mod tests {
 
     /// The upstream knobs are the port's own picture switched off, so they
     /// must change it: a no-op entry would leave the golden test vacuous.
-    #[test]
-    fn upstream_knobs_change_the_picture() {
+    pub fn upstream_knobs_change_the_picture<P: Piece>() {
+        if P::UPSTREAM.is_empty() {
+            return;
+        }
         fn pic<P: Piece>(mut p: P) -> Vec<Cell> {
             let mut out = vec![Cell::CLEAR; P::COLS * P::ROWS];
             p.frame(4.0, &mut out);
             out
         }
         let ours = {
-            let _knobs = crate::config::SHARED_KNOBS
+            let _knobs = config::SHARED_KNOBS
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            tv_static::TvStatic::new()
+            P::new()
         };
-        assert_ne!(pic(ours), pic(upstream::<tv_static::TvStatic>()));
+        assert_ne!(pic(ours), pic(upstream::<P>()), "{}", P::NAME);
     }
 
     /// Compare the port with upstream's own output, written by

@@ -11,6 +11,7 @@
 //! only ever passes behind).
 
 use std::f64::consts::PI;
+use std::ops::Range;
 
 use super::math::{hash2, js_round, sign_or_one};
 use super::{hex, text, Canvas, Piece};
@@ -183,6 +184,20 @@ const WIDE_PALETTE: &[u32] = &[
     hex("#9098a8"),
 ];
 
+/// The lantern's cells on `rows`: index, upstream's column off the tower, and
+/// the row's weight.
+fn lantern_cells(lay: &Layout, rows: Range<usize>) -> impl Iterator<Item = (usize, i64, f64)> + '_ {
+    let (cols, tc, sc) = (lay.cols, lay.tc, lay.s);
+    let wide = (3.0 * sc).ceil() as i64;
+    rows.flat_map(move |r| {
+        let row = if lay.row(r) == LAMP { 1.0 } else { 0.85 };
+        (-wide..=wide).filter_map(move |dc| {
+            let x = js_round(dc as f64 / sc) as i64;
+            (x.abs() <= 3).then(|| ((r * cols + tc).wrapping_add_signed(dc as isize), x, row))
+        })
+    })
+}
+
 struct Scene {
     lay: Layout,
     /// The lighthouse and its rocks never move: light as 0..1 where they are,
@@ -197,12 +212,14 @@ struct Scene {
     /// Where each breaker strikes: x, y, side, phase.
     surf: [[f64; 4]; 6],
     out: Vec<u8>,
-    /// The beam where it crosses in front of the tower this frame, 0 elsewhere.
-    front: Vec<f32>,
+    /// The cells above the horizon the tower and lantern cover, which the
+    /// beam crosses on the half of its turn that faces us; empty unless
+    /// `lay.round`.
+    cover: Vec<usize>,
     light: Vec<f32>,
     cells: [Cell; 128],
     /// The rows upstream's lantern rows land on, and the lamp's.
-    lantern: std::ops::Range<usize>,
+    lantern: Range<usize>,
     lamp: usize,
 }
 
@@ -331,13 +348,13 @@ impl Scene {
         let first = lit(LAMP - 1).chain(lit(LAMP)).next().unwrap_or(0);
         let last = lit(LAMP).chain(lit(LAMP + 1)).last().unwrap_or(first);
         let lamp = lit(LAMP).next().unwrap_or(first);
-        Self {
+        let mut scene = Self {
             still,
             rock_at,
             stars,
             surf,
             out: vec![b' '; n],
-            front: vec![0.0; n],
+            cover: Vec::new(),
             tone: vec![0; n],
             still_tone,
             light: vec![0.0; cols],
@@ -345,7 +362,17 @@ impl Scene {
             lantern: first..last + 1,
             lamp,
             lay,
+        };
+        if scene.lay.round {
+            let mut over: Vec<bool> = (0..n)
+                .map(|k| scene.still[k] >= 0.0 && scene.lay.row(k / cols) < HORIZON)
+                .collect();
+            for (k, _, _) in lantern_cells(&scene.lay, scene.lantern.clone()) {
+                over[k] = true;
+            }
+            scene.cover = (0..n).filter(|&k| over[k]).collect();
         }
+        scene
     }
 
     fn frame(&mut self, t: f64, cells: &mut [Cell]) {
@@ -354,10 +381,8 @@ impl Scene {
         let th = -0.35 + (2.0 * PI * t) / PERIOD;
         let (c, s) = (th.cos(), th.sin());
         let face = s.max(0.0).powf(10.0); // the lens turned square to us
-        let (out, still, rock_at) = (&mut self.out, &self.still, &self.rock_at);
-        let tone = &mut self.tone;
         let round = self.lay.round;
-        let ahead = round && s > 0.0;
+        let reach = self.lay.reach;
         // Square to us, the cone is seen end on: a round bloom on the lamp
         // rather than a shaft to one side.
         let (bloom, end_on) = if round {
@@ -365,11 +390,20 @@ impl Scene {
         } else {
             (1.2 + 2.2 * face, 1.0)
         };
+        let offset = |r: usize, cc: usize| {
+            let dx = (cc as f64 - tc as f64) / 2.0 / sc;
+            (dx, (r as f64 + 0.5) / sc - (LAMP as f64 + 0.5))
+        };
+        let glare_at =
+            |dx: f64, dy: f64| (-(dx.hypot(dy) / bloom).powf(2.0)).exp() * (0.5 + 1.2 * face);
+        let beam = |dx: f64, dy: f64| beam_at(dx, dy, c, s, reach, round) * end_on + glare_at(dx, dy);
+        let haze = |b: f64, r: usize, cc: usize| {
+            (b * 6.0 + 0.35 * hash2(cc as i64, r as i64)).floor().min(7.0)
+        };
+        let (out, still, rock_at) = (&mut self.out, &self.still, &self.rock_at);
+        let tone = &mut self.tone;
         out.fill(b' ');
         tone.fill(0);
-        if round {
-            self.front.fill(0.0);
-        }
         self.light.fill(0.0);
         let mut hz = rows;
         for r in 0..rows {
@@ -379,23 +413,17 @@ impl Scene {
             }
             for cc in 0..cols {
                 let k = r * cols + cc;
-                let dx = (cc as f64 - tc as f64) / 2.0 / sc;
-                let dy = (r as f64 + 0.5) / sc - (LAMP as f64 + 0.5);
-                let glare = (-(dx.hypot(dy) / bloom).powf(2.0)).exp() * (0.5 + 1.2 * face);
+                let (dx, dy) = offset(r, cc);
+                let glare = glare_at(dx, dy);
                 if ro < HORIZON {
-                    let b = beam_at(dx, dy, c, s, self.lay.reach, round) * end_on + glare;
+                    let b = beam(dx, dy);
                     if r == self.lamp {
                         self.light[cc] = b as f32;
                     }
                     if still[k] >= 0.0 {
-                        if ahead {
-                            self.front[k] = b as f32;
-                        }
                         continue;
                     }
-                    let i = (b * 6.0 + 0.35 * hash2(cc as i64, r as i64))
-                        .floor()
-                        .min(7.0);
+                    let i = haze(b, r, cc);
                     if i > 0.0 {
                         out[k] = BEAM[i as usize];
                         tone[k] = if i > 2.0 { BEAM_INK } else { HAZE };
@@ -454,34 +482,25 @@ impl Scene {
             tone[k] = self.still_tone[k];
         }
         let glow = 0.75 + 0.25 * face;
-        let wide = (3.0 * sc).ceil() as i64;
-        for r in self.lantern.clone() {
-            let row = if self.lay.row(r) == LAMP { 1.0 } else { 0.85 };
-            for dc in -wide..=wide {
-                let x = js_round(dc as f64 / sc) as i64;
-                if x.abs() > 3 {
-                    continue;
-                }
-                let (edge, bar) = (x.abs() == 3, x.abs() == 2);
-                let v = if edge {
-                    0.34
-                } else if bar {
-                    0.2
-                } else {
-                    glow * (1.0 - 0.1 * x.abs() as f64) * row
-                };
-                let i = js_round(v * 9.0).clamp(1.0, 9.0);
-                let k = (r * cols + tc).wrapping_add_signed(dc as isize);
-                out[k] = RAMP[i as usize];
-                tone[k] = if edge || bar { IRON } else { LIGHT };
-            }
+        for (k, x, row) in lantern_cells(&self.lay, self.lantern.clone()) {
+            let (edge, bar) = (x.abs() == 3, x.abs() == 2);
+            let v = if edge {
+                0.34
+            } else if bar {
+                0.2
+            } else {
+                glow * (1.0 - 0.1 * x.abs() as f64) * row
+            };
+            let i = js_round(v * 9.0).clamp(1.0, 9.0);
+            out[k] = RAMP[i as usize];
+            tone[k] = if edge || bar { IRON } else { LIGHT };
         }
         // Swinging toward us, the beam crosses the lantern and the tower top.
-        if ahead {
-            for (k, &b) in self.front.iter().enumerate() {
-                let i = (f64::from(b) * 6.0 + 0.35 * hash2((k % cols) as i64, (k / cols) as i64))
-                    .floor()
-                    .min(7.0);
+        if s > 0.0 {
+            for &k in &self.cover {
+                let (r, cc) = (k / cols, k % cols);
+                let (dx, dy) = offset(r, cc);
+                let i = haze(beam(dx, dy), r, cc);
                 if i >= 3.0 {
                     out[k] = BEAM[i as usize];
                     tone[k] = if i >= 6.0 { LIGHT } else { BEAM_INK };
