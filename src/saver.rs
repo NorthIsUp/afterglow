@@ -205,14 +205,6 @@ pub fn twin_of(name: &str) -> Option<&'static str> {
     wide_of(name).or_else(|| name.strip_suffix("-wide").and_then(index_of).map(name_at))
 }
 
-/// Whether a pair starts expanded — clicks and rotation show its `-wide`
-/// half until someone picks the original. The halftone scenes do: they were
-/// recomposed full-width for the 3.2:1 panel. The text pieces' twins stretch
-/// rather than recompose, so they start on the original.
-pub fn expanded_by_default(wide: usize) -> bool {
-    group_at(wide) == SCENES
-}
-
 /// How many savers there are, for `Rotate`'s bag. A const because the bag is a
 /// fixed-size array: adding a row to the table above resizes it, and no refill
 /// ever allocates.
@@ -977,12 +969,11 @@ mod tests {
             picked = (0..NSAVERS).filter(|&i| m.pickable(i)).count();
         });
         assert_eq!(n, 0);
-        // One half of every pair: the scenes' `-wide`, the text pieces'
-        // originals.
+        // One half of every pair: its `-wide`.
         let pairs = names().filter(|n| n.ends_with("-wide")).count();
         assert_eq!(picked, NSAVERS - pairs);
         for (i, n) in names().enumerate().filter(|(_, n)| n.ends_with("-wide")) {
-            assert_eq!(m.pickable(i), group_at(i) == SCENES, "{n}");
+            assert!(m.pickable(i), "{n}");
         }
     }
 

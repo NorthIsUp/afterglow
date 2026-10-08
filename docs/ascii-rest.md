@@ -42,7 +42,7 @@ ascii.rest's thirteen halftone scenes — landscapes shaded cell by cell and dra
 
 ### Knobs
 
-- `ASCII_REST_TOUR` (0..1, default 1; 0 is the fixed cover view)
+- `ASCII_REST_TOUR` (0..1, default 0, the fixed cover view; 1 is the slow camera)
 - `ASCII_REST_TOUR_SHOT_SECS` (4..600, default 20, each shot drawn from 75%..150% of it; a shot with little to move ends sooner)
 - `ASCII_REST_TOUR_MAX_ZOOM_PCT` (100..600, default 250, of the cover view's cell)
 - `ASCII_REST_TOUR_CUTS` (0..1, default 0; 1 cuts between framings and drifts slowly within each, instead of one continuous move)

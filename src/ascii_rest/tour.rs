@@ -75,7 +75,7 @@ pub struct Knobs {
 impl Knobs {
     /// None when `ASCII_REST_TOUR=0`.
     pub fn from_env() -> Option<Self> {
-        (crate::env_num(&["ASCII_REST_TOUR"], 1, 0, 1) == 1).then(|| Self {
+        (crate::env_num(&["ASCII_REST_TOUR"], 0, 0, 1) == 1).then(|| Self {
             shot_secs: crate::env_num(&["ASCII_REST_TOUR_SHOT_SECS"], 20, 4, 600) as u32,
             max_zoom_pct: crate::env_num(&["ASCII_REST_TOUR_MAX_ZOOM_PCT"], 250, 100, 600) as u32,
             cuts: crate::env_num(&["ASCII_REST_TOUR_CUTS"], 0, 0, 1) == 1,

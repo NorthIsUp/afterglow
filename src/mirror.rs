@@ -172,7 +172,6 @@ impl Mirror {
                         .filter(|&i| {
                             saver::name_at(i).ends_with("-wide")
                                 && saver::twin_of(saver::name_at(i)).is_some()
-                                && saver::expanded_by_default(i)
                         })
                         .fold(0, |bits, i| bits | 1 << (i % 64)),
                 )
@@ -266,8 +265,8 @@ impl Mirror {
     }
 
     /// May rotation pick row `i` now: in rotation, and for a scene's pair,
-    /// the half its `expanded` choice names — `saver::expanded_by_default`
-    /// until a viewer picks. Allocation-free; called at the rotation boundary.
+    /// the half its `expanded` choice names — the `-wide` until a viewer
+    /// picks. Allocation-free; called at the rotation boundary.
     /// Is `-wide` row `w` the half its pair shows.
     fn pickable_half(&self, w: usize) -> bool {
         self.expanded[w / 64].load(Ordering::Relaxed) & (1 << (w % 64)) != 0
@@ -1653,7 +1652,7 @@ mod tests {
         assert!(m.select("ocean-sunset"));
         let word = m.selection();
         let body = req(addr, "GET /config?saver=storm-plains");
-        assert!(body.contains("ASCII_REST_TOUR_SHOT_SECS"), "{body}");
+        assert!(!body.contains("ASCII_REST_TOUR_SHOT_SECS"), "{body}");
         assert!(
             body.contains(r#""key":"ASCII_REST_TITLE","label":"title","kind":"bool""#),
             "{body}"
@@ -1661,10 +1660,10 @@ mod tests {
 
         let body = req(
             addr,
-            "POST /config?saver=storm-plains&key=ASCII_REST_TOUR&value=0",
+            "POST /config?saver=storm-plains&key=ASCII_REST_TOUR&value=1",
         );
         assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
-        assert!(!body.contains("ASCII_REST_TOUR_SHOT_SECS"), "{body}");
+        assert!(body.contains("ASCII_REST_TOUR_SHOT_SECS"), "{body}");
         assert_ne!(m.selection(), word, "ocean-sunset reads the tour too");
 
         req(
@@ -1672,7 +1671,7 @@ mod tests {
             "DELETE /config?saver=storm-plains&key=ASCII_REST_TOUR",
         );
         let body = req(addr, "GET /config?saver=storm-plains");
-        assert!(body.contains("ASCII_REST_TOUR_SHOT_SECS"), "{body}");
+        assert!(!body.contains("ASCII_REST_TOUR_SHOT_SECS"), "{body}");
     }
 
     /// Tour knobs set from the page reach the panel: each write rebuilds the
@@ -1712,6 +1711,8 @@ mod tests {
         let t0 = std::time::Instant::now();
         let cover = d.saver().grid().cell_w();
 
+        set("key=ASCII_REST_TOUR&value=1");
+        assert!(d.switch(t0, &m, place), "the write did not rebuild");
         set("key=ASCII_REST_TOUR_SHOT_SECS&value=4");
         assert!(d.switch(t0, &m, place), "the write did not rebuild");
         let (widest, shifts) = run(&mut d, 30 * 90);
@@ -1745,7 +1746,7 @@ mod tests {
     /// pick of either half sticks. Picking by index — rotation, and the
     /// startup `SAVER` — moves nothing.
     #[test]
-    fn scenes_start_expanded_and_a_pick_sticks() {
+    fn pairs_start_expanded_and_a_pick_sticks() {
         let m = Mirror::new(15);
         scene(&m, "matrix", 2, 2, 8, 16);
         let expanded = || {
@@ -1756,15 +1757,17 @@ mod tests {
         let e = expanded();
         assert!(e.starts_with(r#"["alpine-dawn-wide","#), "{e}");
         assert!(
-            e.contains(r#""night-coast-wide""#) && !e.contains("vinyl"),
+            e.contains(r#""night-coast-wide""#) && e.contains(r#""vinyl-wide""#),
             "{e}"
         );
-        assert_eq!(e.matches("-wide").count(), 13, "{e}");
+        assert_eq!(e.matches("-wide").count(), 21, "{e}");
 
         m.select_at(saver::index_of("night-coast").unwrap());
         assert!(expanded().contains(r#""night-coast-wide""#));
         assert!(m.select("night-coast"));
         assert!(!expanded().contains("night-coast"));
+        assert!(m.select("vinyl"));
+        assert!(!expanded().contains("vinyl"));
         assert!(m.select("vinyl-wide"));
         assert!(expanded().contains(r#""vinyl-wide""#));
         assert!(m.select("night-coast-wide"));
