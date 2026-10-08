@@ -1618,6 +1618,9 @@ mod tests {
     /// is rebuilt when it shares the key with the one that is.
     #[test]
     fn config_follows_a_switch_that_hides_other_knobs() {
+        let _knobs = config::SHARED_KNOBS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let m = Mirror::new(15);
         let addr = serve_test(&m);
         assert!(m.select("ocean-sunset"));
@@ -1643,6 +1646,50 @@ mod tests {
         );
         let body = req(addr, "GET /config?saver=storm-plains");
         assert!(body.contains("ASCII_REST_TOUR_HOLD_SECS"), "{body}");
+    }
+
+    /// A tour knob set from the page reaches the panel: the write rebuilds the
+    /// scene showing, and the rebuilt scene tours on the new timing. The first
+    /// zoom step is the visible move: a one-second hold makes it inside five
+    /// seconds, where the default's fourteen holds at least eight. Then the
+    /// switch off, with the hold still at one: nothing moves.
+    #[test]
+    fn a_tour_knob_from_the_page_rebuilds_the_scene_with_it() {
+        let _knobs = config::SHARED_KNOBS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let m = Mirror::new(15);
+        let addr = serve_test(&m);
+        assert!(m.select("night-coast"));
+        let panel = Panel::new(960, 540, 960);
+        let place = |n: &str| (panel, saver::make(n, &panel, 30));
+        let mut d = saver::Driver::new(&m, 30, place);
+        let mut buf = vec![0u32; panel.buf_len()];
+        let mut first_zoom = |d: &mut saver::Driver, frames: usize| {
+            let w = d.saver().grid().cell_w();
+            (1..=frames).find(|_| {
+                d.frame(&mut buf, &m);
+                d.saver().grid().cell_w() != w
+            })
+        };
+        let set = |kv: &str| {
+            let body = req(addr, &format!("POST /config?saver=night-coast&{kv}"));
+            assert!(body.contains(r#""rebuilt":true"#), "{body}");
+        };
+        let t0 = std::time::Instant::now();
+
+        set("key=ASCII_REST_TOUR_HOLD_SECS&value=1");
+        assert!(d.switch(t0, &m, place), "the write did not rebuild");
+        let n = first_zoom(&mut d, 30 * 20).expect("the tour never moved");
+        assert!((18..=150).contains(&n), "first zoom after {n} frames");
+
+        set("key=ASCII_REST_TOUR&value=0");
+        assert!(d.switch(t0, &m, place), "the write did not rebuild");
+        assert_eq!(first_zoom(&mut d, 30 * 10), None, "the tour is off");
+
+        for k in ["ASCII_REST_TOUR", "ASCII_REST_TOUR_HOLD_SECS"] {
+            req(addr, &format!("DELETE /config?saver=night-coast&key={k}"));
+        }
     }
 
     #[test]

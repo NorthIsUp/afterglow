@@ -63,10 +63,13 @@ impl Knobs {
 /// picture.
 pub(super) struct Touring {
     tour: Tour,
-    /// The plain cover view, whatever the panel shows: a zoom step is a new
-    /// geometry, and re-describing the mirror for each would reconnect every
-    /// viewer a dozen times a glide.
+    /// The cover view's geometry showing what the panel shows: a zoom step is
+    /// a new geometry, and re-describing the mirror for each would reconnect
+    /// every viewer a dozen times a glide. So the cells follow the tour and the
+    /// grid never does.
     mirror: Camera,
+    /// The panel view `mirror`'s maps were last aimed at.
+    followed: Option<View>,
 }
 
 impl Touring {
@@ -80,6 +83,7 @@ impl Touring {
         Self {
             tour: Tour::new::<P>(panel, aspect, base, fps, k),
             mirror: Camera::new::<P>(panel, aspect, base, (base.w, base.w)),
+            followed: None,
         }
     }
 
@@ -96,9 +100,18 @@ impl Touring {
         }
     }
 
-    /// The cover view of `pic`, under the title if there is one. Only called
-    /// while someone is watching.
-    pub(super) fn mirror<P: Piece>(&mut self, pic: &[Cell], title: Option<&Title>) -> &Grid {
+    /// What `cam` shows of `pic`, on the cover view's grid, under the title if
+    /// there is one. Only called while someone is watching.
+    pub(super) fn mirror<P: Piece>(
+        &mut self,
+        pic: &[Cell],
+        cam: &Camera,
+        title: Option<&Title>,
+    ) -> &Grid {
+        if self.followed != Some(cam.view) {
+            self.mirror.follow(cam);
+            self.followed = Some(cam.view);
+        }
         self.mirror.draw::<P>(pic);
         if let Some(t) = title {
             t.stamp(&mut self.mirror.grid);
@@ -735,9 +748,10 @@ mod tests {
         });
     }
 
-    /// The mirror's geometry and cells are the untoured view's on every frame,
-    /// and while the tour holds that view the panel is byte for byte what
-    /// `Play` drew before the tour existed, damage included.
+    /// The mirror's geometry is the untoured view's on every frame, so the tour
+    /// never bumps its epoch, and while the tour holds that view the panel and
+    /// the mirror are byte for byte what `Play` drew before the tour existed,
+    /// damage included.
     #[test]
     fn the_mirror_and_the_first_hold_are_the_untoured_saver() {
         with_test_aspect(180, || {
@@ -760,15 +774,62 @@ mod tests {
                     assert!(a == b, "frame {n}: pixels");
                 }
                 let (m, o) = (on.mirror(), off.mirror());
-                assert_eq!(
-                    (m.cols(), m.rows(), m.cell_w(), m.cell_h()),
-                    (o.cols(), o.rows(), o.cell_w(), o.cell_h())
-                );
-                assert!(m.cells() == o.cells(), "frame {n}: mirror");
+                assert_eq!(m.shape_of(), o.shape_of(), "frame {n}: mirror geometry");
+                if held {
+                    assert!(m.cells() == o.cells(), "frame {n}: mirror");
+                }
             }
             assert!(!held, "the tour never left the cover view");
         });
     }
+
+    /// Each mirror cell is the panel's cell under its centre, through every
+    /// close-up, glide and pull back — the whole picture's bars included.
+    #[test]
+    fn the_mirror_shows_what_the_panel_shows() {
+        with_test_aspect(180, || {
+            let panel = Panel::new(1920, 1080, 1920);
+            let mut play = Play::<Probe<200, 100>>::with_tour(&panel, 30, Some(knobs(11)));
+            let mut buf = vec![0u32; panel.buf_len()];
+            let home = play.tour.as_ref().unwrap().tour.home;
+            let (mut close, mut wide) = (0, 0);
+            for n in 0..3000 {
+                play.render(&mut Surface::new(&mut buf, &panel));
+                let v = play.cam.view;
+                let g = play.grid().shape_of();
+                let shown = play.grid().cells().to_vec();
+                let m = play.mirror();
+                let ms = m.shape_of();
+                for my in 0..ms.rows {
+                    for mx in 0..ms.cols {
+                        let (px, py) = (
+                            mx * ms.cell_w + ms.cell_w / 2,
+                            my * ms.cell_h + ms.cell_h / 2,
+                        );
+                        let (gx, gy) = (px / g.cell_w, py / g.cell_h);
+                        let want = if gx < g.cols && gy < g.rows {
+                            shown[gy * g.cols + gx]
+                        } else {
+                            Cell::CLEAR
+                        };
+                        let got = m.cells()[my * ms.cols + mx];
+                        assert_eq!(got, want, "frame {n} {v:?}: mirror cell {mx},{my}");
+                    }
+                }
+                if v.w > home.w {
+                    close += 1;
+                }
+                let c = m.cells();
+                let bar = (0..ms.rows).all(|y| c[y * ms.cols] == Cell::CLEAR)
+                    || c[..ms.cols].iter().all(|&x| x == Cell::CLEAR);
+                if v.w < home.w && bar {
+                    wide += 1;
+                }
+            }
+            assert!(close > 0 && wide > 0, "close {close} wide {wide}");
+        });
+    }
+
     /// The caption changes the panel only inside its own corner block, never
     /// the picture the piece drew, and costs no allocation per frame — on the
     /// cover view and through every tour step.

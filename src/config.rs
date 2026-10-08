@@ -38,6 +38,11 @@ thread_local! {
     static RECORD: RefCell<Option<Vec<Knob>>> = const { RefCell::new(None) };
 }
 
+/// Held by every test that overrides a knob real savers read, or asserts on
+/// one: the override map is process-wide and cargo runs tests in parallel.
+#[cfg(test)]
+pub static SHARED_KNOBS: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 thread_local! {
     /// Lookups on this thread, for the test that frames make none.
@@ -335,6 +340,9 @@ mod tests {
     /// constructor clamps to.
     #[test]
     fn discovery_finds_a_real_savers_knobs() {
+        let _knobs = SHARED_KNOBS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let panel = crate::surface::Panel::new(128, 128, 128);
         let toaster = discover(|| {
             crate::saver::make("toasters", &panel, 30);

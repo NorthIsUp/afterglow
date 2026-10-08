@@ -73,9 +73,11 @@ A hold costs what the fixed view costs. While the tour holds the cover view it
 draws through the same grid, byte for byte. A glide repaints the whole panel
 at each new cell width, and on pine with 1 s holds (nearly all glide)
 night-coast measures 1.75x matrix against 1.49x untoured. The terminal host
-shows the tour; the web mirror always shows the cover view: each zoom step is a new geometry, and
-re-describing the mirror for each one would reconnect every viewer a dozen
-times per glide.
+and the web mirror show the tour too. The mirror keeps the cover view's grid —
+each zoom step is a new geometry, and re-describing the mirror for each would
+reconnect every viewer a dozen times per glide — and fills it with the panel's
+cell under each of its cells' centres, the whole picture's bars included. The
+mapping is redone only when the view moves, and only while someone watches.
 
 ## `-wide` variants
 
