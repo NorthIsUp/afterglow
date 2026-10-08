@@ -77,7 +77,7 @@ default 100 = off — see [`SAVER_PIXEL_ASPECT`](docs/pixel-aspect.md)), `DRM_DE
 
 All of these are plain deployment env changes — no image rebuild.
 
-`SAVER` is only the startup choice: the mirror page has a button per saver, and
+`SAVER` is only the startup choice: the mirror page lists every saver, and
 `POST /select?saver=<name>` does the same thing by hand. An unknown name is a
 400 that changes nothing. The switch rebuilds the saver on the render thread and
 bumps the mirror's epoch, so viewers reconnect onto the new geometry exactly as
@@ -85,7 +85,8 @@ they do for a modeset — and a restart goes back to whatever `SAVER` says.
 `SAVER_ROTATE_SECS` works the same way: the page can move it live and a restart
 goes back to the env value. See [Rotating on a timer](docs/rotation.md).
 
-Each saver's own knobs are on its page.
+Each saver's own knobs are on its page, and the mirror page can change any of
+them live — see [Live settings](docs/mirror.md#live-settings-config).
 
 ## Savers
 
@@ -160,7 +161,7 @@ One ink each, no knobs.
 ## Docs
 
 - [How it works](docs/how-it-works.md) — DRM, damage rectangles, the source layout.
-- [The web mirror](docs/mirror.md) — what crosses the wire, `/stream`, `/meta`, `/stat`, actual size in the browser.
+- [The web mirror](docs/mirror.md) — the page, what crosses the wire, `/stream`, `/meta`, `/stat`, live settings (`/config`), actual size in the browser.
 - [`SAVER_PIXEL_ASPECT`](docs/pixel-aspect.md) — correcting pine's non-uniformly scaled panel.
 - [Rotating on a timer](docs/rotation.md) — `SAVER_ROTATE_SECS` and the shuffled bag.
 - [The ascii.rest ports](docs/ascii-rest.md) — the shared engine, fit, the scene tour, golden tests.

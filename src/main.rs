@@ -30,6 +30,8 @@
 //!
 //! * `surface` — the mapped frame and the damage contract. Read that first.
 //! * `mirror` — the web mirror: the same cells the panel shows, over HTTP.
+//! * `config` — live knob overrides from the mirror page, in front of the
+//!   environment, and discovery of which knobs a saver reads.
 //! * `grid` / `font` — the character grid and the one glyph blitter.
 //! * `fire` / `matrix` / `toasters` / `toasters3` / `city` — the savers. `saver` is the trait and the name -> saver
 //!   dispatch; adding one is a module plus a row in `saver::SAVERS`.
@@ -92,6 +94,7 @@ mod ascii_rest;
 mod bench;
 mod city;
 mod confetti;
+mod config;
 #[cfg(test)]
 mod docs_check;
 mod doodles;
@@ -140,21 +143,25 @@ use std::time::Duration;
 /// First key PRESENT wins; present-but-unparseable or out-of-range falls back to
 /// `default`. Clamp-or-default rather than fail-fast is the right shape for a
 /// headless pod: a typo in an env var must never crash-loop it.
+///
+/// A live override from the mirror page (`config`) wins over the environment.
+/// Constructors only — see `config` on why nothing may call this per frame.
 #[must_use]
-pub fn env_num(keys: &[&str], default: i64, lo: i64, hi: i64) -> i64 {
-    for key in keys {
-        let Ok(raw) = std::env::var(key) else {
-            continue;
-        };
-        return match raw.parse::<i64>() {
-            Ok(v) if v >= lo && v <= hi => v,
-            _ => {
-                eprintln!("[screensaver] {key}={raw:?} is not {lo}..={hi}; using {default}");
-                default
-            }
-        };
+pub fn env_num(keys: &[&'static str], default: i64, lo: i64, hi: i64) -> i64 {
+    config::record(keys, config::Kind::Num { default, lo, hi });
+    let Some(raw) = config::lookup(keys) else {
+        return default;
+    };
+    match raw.parse::<i64>() {
+        Ok(v) if v >= lo && v <= hi => v,
+        _ => {
+            eprintln!(
+                "[screensaver] {}={raw:?} is not {lo}..={hi}; using {default}",
+                keys[0]
+            );
+            default
+        }
     }
-    default
 }
 
 /// A saver's RNG seed: `<SAVER>_SEED` if set, otherwise one rolled from the
@@ -170,7 +177,7 @@ pub fn env_num(keys: &[&str], default: i64, lo: i64, hi: i64) -> i64 {
 /// the same scene), so the pid mixes in, and the pair is stirred rather than
 /// used raw.
 #[must_use]
-pub fn saver_seed(keys: &[&str], fallback: u32) -> u32 {
+pub fn saver_seed(keys: &[&'static str], fallback: u32) -> u32 {
     let pinned = env_num(keys, 0, 0, u32::MAX as i64) as u32;
     if pinned != 0 {
         return pinned;
@@ -198,10 +205,14 @@ pub fn next_rand(rng: &mut u32) -> u32 {
 
 /// As `env_num`, for the values that are names rather than numbers.
 #[must_use]
-pub fn env_str(keys: &[&str], default: &str) -> String {
-    keys.iter()
-        .find_map(|k| std::env::var(k).ok())
-        .unwrap_or_else(|| default.to_string())
+pub fn env_str(keys: &[&'static str], default: &str) -> String {
+    config::record(
+        keys,
+        config::Kind::Str {
+            default: default.to_string(),
+        },
+    );
+    config::lookup(keys).unwrap_or_else(|| default.to_string())
 }
 
 pub struct Config {

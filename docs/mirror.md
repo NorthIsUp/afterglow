@@ -4,6 +4,24 @@
 live. Identity is the Tailscale-injected `Tailscale-User-Login` header enforced
 by the `tailscale-auth` sidecar — there is no login and there must never be one.
 
+## The page
+
+The saver list is on the left, the panel in the middle, and a bar along the
+bottom with the shown saver's settings, rotation (on/off, interval, pool) and the
+view controls (`actual ratio / size / calibrate`, below). The list is grouped —
+`scenes`, `ascii.rest`, `classics`, `flights`, `generative` — and the groups come
+from `/meta`, built from one table in `saver.rs`, so the page knows no saver by
+name. Type in the filter box to narrow it; up/down and enter pick from the
+keyboard, escape clears. The saver on the panel is highlighted and scrolled into
+view, including after a rotation. A scene and its full-width `-wide` twin are
+one row, with an `expanded` toggle in the bar that switches between them; picking
+another scene keeps it as it was. Under 720 px wide the list becomes a drawer
+behind the button above the canvas.
+
+The list, the bar and the canvas each keep to their own box: the list and the bar
+scroll inside themselves and the page never does, so the canvas sits still while
+either grows.
+
 **What crosses the wire is cells, not pixels.** Every saver paints through
 `Grid`, so the panel's whole state is `cols * rows` of a `Cell` — a glyph index
 and a palette index packed into one `u32` — over a palette and a glyph table
@@ -39,13 +57,54 @@ survive nginx re-chunking them on the way through the gate. `GET /meta` is the
 geometry, palette and glyph table; `GET /` is the page. `SAVER_HTTP=off`
 removes all of it.
 
-`POST /rotate?mins=N` sets the rotation interval; `GET /stat` is the live counters — `{"overruns":N,"viewers":N,"fps":N}`.
+`POST /rotate?mins=N` sets the rotation interval and `POST /pool?groups=a,b`
+the groups it picks from — see [Rotating on a timer](rotation.md). `/meta`
+carries the list's `groups` (`[{"name","savers"}]`, a `-wide` twin left out),
+`wide` (scene → twin), and the live `rotate_secs` and `pool`. `GET /stat` is the live counters — `{"overruns":N,"viewers":N,"fps":N}`.
 `overruns` is frames that ran past the frame budget, which is what a raised
 `SAVER_FPS` against the pod's 500m CFS quota shows up as: the render loop is
 stopped mid-period and runs a burst, and the burst is visible stutter on the
 panel. It is a separate route on purpose — `/meta` is a string cached at
 modeset, so a counter baked in there would report its value as of the last
 modeset forever.
+
+## Live settings: `/config`
+
+Every saver reads its knobs through `env_num` / `env_str` while it is built,
+and never after — the frame loop reads no setting, ever. The mirror changes a
+setting by putting an override in front of the environment (`src/config.rs`) and
+rebuilding the saver, so the knob is read again exactly where it always was.
+
+There is no list of knobs to maintain. The server builds the saver once on the
+HTTP thread, at a small panel, with a recorder on, and every `env_num` /
+`env_str` call reports its key, default and range — the same range the
+clamp-or-default contract uses, so the page validates against exactly what the
+saver accepts. That takes up to ~0.1 s for the heaviest scene here, so the answer
+is remembered until the next write. Process-wide settings (`SAVER_*`) belong to
+the monitor, not the saver, and are never listed.
+
+- `GET /config?saver=<name>` — `[{"key","label","kind","default","lo","hi","value","overridden","help"}]`.
+  `kind` is `num`, `bool` (a `0..=1` range) or `str` (no `lo`/`hi`); `value` is
+  what the saver would get if built now, a bad environment value already
+  replaced by its default; `label` is the key without the saver's own prefix.
+- `POST /config?saver=<name>&key=K&value=V` — store an override and answer
+  `{"rebuilt":bool,"knobs":[…]}`. A value out of range, not a whole number, a
+  string over 64 characters, or a key that saver does not read is a 400 that
+  changes nothing.
+- `DELETE /config?saver=<name>&key=K`, or `POST` with an empty `value` — drop
+  the override, back to the environment or the default.
+
+A write rebuilds the saver on the panel if it reads that key — the one named, or
+another that shares it, as every scene shares the tour's — through the same
+selection word a click moves, so the epoch bump and reconnect are a switch's.
+Overrides are per key, so `ASCII_REST_TOUR=0` set from one scene applies to all
+of them, as it would in the deployment. Which knobs a saver reads can depend on
+another: with the tour off a scene never reads its timings, so they drop out of
+the list until it is back on.
+
+Overrides live in memory: a pod restart goes back to the deployment's env.
+Keeping them would mean writing them somewhere the pod can read on start (a
+ConfigMap or the PVC); it is not built.
 
 ## Actual size in the browser
 

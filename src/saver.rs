@@ -125,6 +125,80 @@ macro_rules! savers {
 }
 crate::ascii_rest::each_piece!(savers);
 
+/// The mirror page's list sections, in the order it shows them; also the
+/// units the rotation pool is chosen in. A saver's section is `group_at`.
+pub const GROUPS: &[&str] = &["scenes", "ascii.rest", "classics", "flights", "generative"];
+const SCENES: usize = 0;
+const ASCII_REST: usize = 1;
+
+/// The section of every saver that is not an ascii.rest port. Ports sort
+/// themselves by kind — see `PIECE_CELL` — so a new port needs no row here,
+/// and a new saver missing from here fails `every_saver_is_in_one_group`.
+const SECTIONS: &[(&str, usize)] = &[
+    ("ascii", 2),
+    ("blocks", 2),
+    ("matrix", 2),
+    ("toasters", 2),
+    ("toasters2", 2),
+    ("toasters3", 2),
+    ("dvd", 2),
+    ("rain", 2),
+    ("hardrain", 2),
+    ("life", 2),
+    ("warp", 3),
+    ("pov", 3),
+    ("podracer", 3),
+    ("speeder", 3),
+    ("xwing", 3),
+    ("hypercube", 3),
+    ("marble", 3),
+    ("lissajous", 4),
+    ("satori", 4),
+    ("sakura", 4),
+    ("fractal", 4),
+    ("moire", 4),
+    ("worms", 4),
+    ("confetti", 4),
+    ("city", 4),
+    ("doodles", 4),
+    ("strings", 4),
+    ("tactiles", 4),
+    ("zot", 4),
+    ("plasma", 4),
+];
+
+macro_rules! piece_cells {
+    ($($(#[$no:ident])? $m:ident::$t:ident),* $(,)?) => {
+        /// Each port's name and cell shape: 1 is a halftone scene, 2 text.
+        const PIECE_CELL: &[(&str, usize)] = &[
+            $((crate::ascii_rest::$m::$t::NAME, crate::ascii_rest::$m::$t::CELL),)*
+        ];
+    };
+}
+crate::ascii_rest::each_piece!(piece_cells);
+
+/// Index into `GROUPS` of a row. A table walk, so for the HTTP thread and the
+/// rotation boundary only — never per frame.
+pub fn group_at(i: usize) -> usize {
+    let name = SAVERS[i].0;
+    if let Some((_, cell)) = PIECE_CELL.iter().find(|(n, _)| *n == name) {
+        return if *cell == 1 { SCENES } else { ASCII_REST };
+    }
+    SECTIONS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map_or(GROUPS.len() - 1, |(_, g)| *g)
+}
+
+/// The full-width twin of a scene, if it has one: `night-coast` ->
+/// `night-coast-wide`. The page lists the pair once, with an `expanded`
+/// toggle between them; both stay rows here so rotation and `SAVER` keep
+/// reaching either.
+pub fn wide_of(name: &str) -> Option<&'static str> {
+    let wide = format!("{name}-wide");
+    index_of(&wide).map(name_at)
+}
+
 /// How many savers there are, for `Rotate`'s bag. A const because the bag is a
 /// fixed-size array: adding a row to the table above resizes it, and no refill
 /// ever allocates.
@@ -227,7 +301,13 @@ impl Rotate {
     /// rotation word, both handed down rather than taken here: with rotation
     /// off this is two compares per frame and no clock read at all, and with it
     /// on it is no more than that. See CLAUDE.md on the frame loop.
-    fn due(&mut self, now: Instant, cur: usize, ctl: u64) -> Option<usize> {
+    fn due(
+        &mut self,
+        now: Instant,
+        cur: usize,
+        ctl: u64,
+        pooled: impl Fn(usize) -> bool,
+    ) -> Option<usize> {
         // Someone moved the interval since the last frame. Adopt it and give
         // what is on screen a full turn at the NEW length — the same restart a
         // click gets, and for the same reason: five minutes asked for at 4:59
@@ -242,11 +322,21 @@ impl Rotate {
             return None;
         }
         self.restart(now);
-        if self.left == 0 {
+        // Rows out of the pool are skipped, not removed: the bag still covers
+        // every pooled row once per cycle, and a pool change takes effect on
+        // the next draw. Two passes because the first can empty the bag
+        // without a hit; a pool with nothing in it but `cur` stays put.
+        for _ in 0..2 {
+            while self.left > 0 {
+                self.left -= 1;
+                let i = self.bag[self.left];
+                if i != cur && pooled(i) {
+                    return Some(i);
+                }
+            }
             self.refill(cur)?;
         }
-        self.left -= 1;
-        Some(self.bag[self.left])
+        None
     }
 
     /// Every row, shuffled, none of them repeated until the bag empties.
@@ -292,7 +382,9 @@ impl Rotate {
 pub struct Driver {
     saver: Box<dyn Saver>,
     panel: Panel,
-    selected: usize,
+    /// The mirror's selection word — index and change counter — this saver
+    /// was built for. See `Mirror::selection`.
+    selected: u64,
     rot: Rotate,
     frame_dur: Duration,
 }
@@ -305,8 +397,8 @@ impl Driver {
     /// current saver a full turn — and picks up whatever `/rotate` has been set
     /// to since.
     pub fn new(mirror: &Mirror, fps: u32, place: impl Fn(&str) -> (Panel, Box<dyn Saver>)) -> Self {
-        let selected = mirror.selected();
-        let (panel, saver) = place(name_at(selected));
+        let selected = mirror.selection();
+        let (panel, saver) = place(name_at(mirror::sel_index(selected)));
         let mut d = Self {
             saver,
             panel,
@@ -330,7 +422,7 @@ impl Driver {
 
     /// Build the selected saver again, for a host whose panel changed under it.
     pub fn rebuild(&mut self, mirror: &Mirror, place: impl Fn(&str) -> (Panel, Box<dyn Saver>)) {
-        (self.panel, self.saver) = place(name_at(self.selected));
+        (self.panel, self.saver) = place(name_at(mirror::sel_index(self.selected)));
         // The new grid geometry and palette differ, so this bumps the mirror's
         // epoch and every viewer reconnects onto the new /meta.
         announce(mirror, self.saver.as_mut(), &self.panel);
@@ -353,17 +445,25 @@ impl Driver {
         place: impl Fn(&str) -> (Panel, Box<dyn Saver>),
     ) -> bool {
         // Two relaxed loads per frame now — the rotation word and the
-        // selection — off the same cache line, for the reason below.
-        if let Some(i) = self.rot.due(now, self.selected, mirror.rotate_ctl()) {
+        // selection — off the same cache line, for the reason below. The pool
+        // is read only when a turn is up.
+        let cur = mirror::sel_index(self.selected);
+        if let Some(i) = self.rot.due(now, cur, mirror.rotate_ctl(), |i| {
+            mirror.pooled(group_at(i))
+        }) {
             mirror.select_at(i);
         }
         // One relaxed load per frame, same as the mirror's viewer count, and
         // free for the same reason: adjacent field, already-hot cache line, a
         // plain load with no barrier. Relaxed is right because the atomic
         // publishes no data — it indexes a const table that has existed since
-        // program start. Everything a viewer observes travels through the meta
-        // and frame mutexes.
-        let want = mirror.selected();
+        // program start, plus a counter. Everything a viewer observes travels
+        // through the meta and frame mutexes.
+        //
+        // The whole word, counter included: a config change re-selects the
+        // saver already showing, and that must rebuild it as a click on
+        // another would.
+        let want = mirror.selection();
         if want == self.selected {
             return false;
         }
@@ -434,6 +534,10 @@ pub fn frame(saver: &mut dyn Saver, buf: &mut [u32], panel: &Panel) -> Damage {
 mod tests {
     use super::*;
 
+    fn all(_: usize) -> bool {
+        true
+    }
+
     /// A control word for `secs`, built the way the HTTP thread builds it —
     /// the packing is the mirror's and no test gets to hand-roll it.
     fn ctl(secs: u64) -> u64 {
@@ -468,12 +572,12 @@ mod tests {
         let t0 = Instant::now();
         let c = ctl(30);
         let mut r = Rotate::seeded(t0, 1);
-        assert_eq!(r.due(t0, 0, c), None);
-        assert_eq!(r.due(t0 + Duration::from_millis(29_999), 0, c), None);
-        assert!(r.due(t0 + Duration::from_secs(30), 0, c).is_some());
+        assert_eq!(r.due(t0, 0, c, all), None);
+        assert_eq!(r.due(t0 + Duration::from_millis(29_999), 0, c, all), None);
+        assert!(r.due(t0 + Duration::from_secs(30), 0, c, all).is_some());
         // And the next turn is a full interval from THERE, not from t0.
-        assert_eq!(r.due(t0 + Duration::from_secs(59), 0, c), None);
-        assert!(r.due(t0 + Duration::from_secs(60), 0, c).is_some());
+        assert_eq!(r.due(t0 + Duration::from_secs(59), 0, c, all), None);
+        assert!(r.due(t0 + Duration::from_secs(60), 0, c, all).is_some());
     }
 
     /// Zero is the default and must be genuinely off — not a very short
@@ -485,7 +589,11 @@ mod tests {
         let c = ctl(0);
         let mut r = Rotate::seeded(t0, 1);
         for s in [0, 1, 30, 3600, 86_400, 172_800] {
-            assert_eq!(r.due(t0 + Duration::from_secs(s), 3, c), None, "at {s}s");
+            assert_eq!(
+                r.due(t0 + Duration::from_secs(s), 3, c, all),
+                None,
+                "at {s}s"
+            );
         }
     }
 
@@ -501,26 +609,26 @@ mod tests {
         m.set_rotate_secs(30);
         let mut r = Rotate::seeded(t0, 3);
         let at = |s: u64| t0 + Duration::from_secs(s);
-        assert_eq!(r.due(t0, 0, m.rotate_ctl()), None);
+        assert_eq!(r.due(t0, 0, m.rotate_ctl(), all), None);
 
         // 29s into a 30s turn, someone asks for 10s. Nothing at 30 — where the
         // old interval would have fired — and the new turn ends at 39.
         m.set_rotate_secs(10);
-        assert_eq!(r.due(at(29), 0, m.rotate_ctl()), None);
-        assert_eq!(r.due(at(30), 0, m.rotate_ctl()), None);
-        assert_eq!(r.due(at(38), 0, m.rotate_ctl()), None);
-        assert!(r.due(at(39), 0, m.rotate_ctl()).is_some());
+        assert_eq!(r.due(at(29), 0, m.rotate_ctl(), all), None);
+        assert_eq!(r.due(at(30), 0, m.rotate_ctl(), all), None);
+        assert_eq!(r.due(at(38), 0, m.rotate_ctl(), all), None);
+        assert!(r.due(at(39), 0, m.rotate_ctl(), all).is_some());
 
         // Asking for ten again at 48 is still a restart: 58, not the 49 the
         // turn that started at 39 was heading for.
         m.set_rotate_secs(10);
-        assert_eq!(r.due(at(48), 0, m.rotate_ctl()), None);
-        assert_eq!(r.due(at(49), 0, m.rotate_ctl()), None);
-        assert!(r.due(at(58), 0, m.rotate_ctl()).is_some());
+        assert_eq!(r.due(at(48), 0, m.rotate_ctl(), all), None);
+        assert_eq!(r.due(at(49), 0, m.rotate_ctl(), all), None);
+        assert!(r.due(at(58), 0, m.rotate_ctl(), all).is_some());
 
         // And off is off from the next frame, not at the end of this turn.
         m.set_rotate_secs(0);
-        assert_eq!(r.due(at(3600), 0, m.rotate_ctl()), None);
+        assert_eq!(r.due(at(3600), 0, m.rotate_ctl(), all), None);
     }
 
     /// The bag's coverage rule, which is the whole reason it is a bag: exactly
@@ -534,14 +642,14 @@ mod tests {
         let t0 = Instant::now();
         let c = ctl(1);
         let mut r = Rotate::seeded(t0, 0x0BA6_5EED);
-        assert_eq!(r.due(t0, 0, c), None);
+        assert_eq!(r.due(t0, 0, c, all), None);
         let mut cur = 0;
         let mut t = 0u64;
         for cycle in 0..4 {
             let mut shown = Vec::new();
             for _ in 0..SAVERS.len() {
                 t += 1;
-                let next = r.due(t0 + Duration::from_secs(t), cur, c).unwrap();
+                let next = r.due(t0 + Duration::from_secs(t), cur, c, all).unwrap();
                 assert_ne!(next, cur, "{} twice in a row, cycle {cycle}", name_at(cur));
                 shown.push(next);
                 cur = next;
@@ -571,11 +679,13 @@ mod tests {
         let mut r = Rotate::seeded(t0, 0xC0FF_EE01);
         // The first frame is where the interval is adopted and the clock
         // starts; the rolls under test are the ones after it.
-        assert_eq!(r.due(t0, 0, c), None);
+        assert_eq!(r.due(t0, 0, c, all), None);
         let mut steps = vec![false; SAVERS.len()];
         let mut cur = 0;
         for i in 1..=2000u32 {
-            let next = r.due(t0 + Duration::from_secs(i.into()), cur, c).unwrap();
+            let next = r
+                .due(t0 + Duration::from_secs(i.into()), cur, c, all)
+                .unwrap();
             assert_ne!(next, cur, "repeated {} at roll {i}", name_at(cur));
             assert!(next < SAVERS.len());
             steps[(next + SAVERS.len() - cur) % SAVERS.len()] = true;
@@ -644,7 +754,7 @@ mod tests {
         assert!(d.switch(t0 + Duration::from_secs(5), &mirror, place));
         assert_ne!(d.saver().name(), first);
         assert_eq!(name_at(mirror.selected()), d.saver().name());
-        assert_eq!(d.selected, mirror.selected());
+        assert_eq!(d.selected, mirror.selection());
     }
 
     /// A switch builds the saver once, for the panel `place` names. The
@@ -697,5 +807,81 @@ mod tests {
             "did not sleep: {:?}",
             t0.elapsed()
         );
+    }
+    /// The groups table is a second list beside `SAVERS`, so it is checked
+    /// against it: every saver lands in a real group, and no row there names a
+    /// saver that does not exist or is a port (ports sort themselves).
+    #[test]
+    fn every_saver_is_in_one_group() {
+        for (i, name) in names().enumerate() {
+            let in_table = SECTIONS.iter().filter(|(n, _)| *n == name).count();
+            let is_port = PIECE_CELL.iter().any(|(n, _)| *n == name);
+            assert_eq!(
+                in_table + usize::from(is_port),
+                1,
+                "{name} is in {in_table} SECTIONS rows, port {is_port}"
+            );
+            assert!(group_at(i) < GROUPS.len());
+        }
+        for (n, g) in SECTIONS {
+            assert!(index_of(n).is_some(), "SECTIONS names {n}, not a saver");
+            assert!(*g >= 2 && *g < GROUPS.len(), "{n} in a port group");
+        }
+        assert_eq!(group_at(index_of("night-coast").unwrap()), SCENES);
+        assert_eq!(group_at(index_of("night-coast-wide").unwrap()), SCENES);
+        assert_eq!(group_at(index_of("vinyl").unwrap()), ASCII_REST);
+        assert_eq!(wide_of("night-coast"), Some("night-coast-wide"));
+        assert_eq!(wide_of("vinyl"), None);
+    }
+
+    /// The pool narrows rotation without breaking its rules: only pooled rows,
+    /// never the one showing, and every pooled row once per cycle.
+    #[test]
+    fn rotation_stays_in_the_pool() {
+        let t0 = Instant::now();
+        let c = ctl(1);
+        let mut r = Rotate::seeded(t0, 0x5C0_9E5);
+        let scene = |i: usize| group_at(i) == SCENES;
+        let n = (0..NSAVERS).filter(|&i| scene(i)).count();
+        assert_eq!(r.due(t0, 0, c, scene), None);
+        let mut cur = 0;
+        let mut shown = Vec::new();
+        for t in 1..=(n as u64 * 3) {
+            let next = r.due(t0 + Duration::from_secs(t), cur, c, scene).unwrap();
+            assert!(scene(next), "{} is not a scene", name_at(next));
+            assert_ne!(next, cur);
+            shown.push(next);
+            cur = next;
+        }
+        shown.sort_unstable();
+        shown.dedup();
+        assert_eq!(shown.len(), n, "not every scene came round");
+
+        // A pool of only what is showing has nowhere to go.
+        let only = |i: usize| i == cur;
+        assert_eq!(r.due(t0 + Duration::from_secs(10_000), cur, c, only), None);
+    }
+
+    /// A config write re-selects the saver already showing; `switch` must
+    /// rebuild it, so it re-reads its knobs, and a re-select that lost a race
+    /// with a click must not drag the panel back.
+    #[test]
+    fn reselecting_the_current_saver_rebuilds_it() {
+        let mirror = Mirror::new(15);
+        let t0 = Instant::now();
+        assert!(mirror.select("dvd"));
+        let (mut d, panel) = driver(&mirror, t0, 9);
+        let place = |n: &str| (panel, make(n, &panel, 30));
+        assert!(!d.switch(t0, &mirror, place));
+        let dvd = index_of("dvd").unwrap();
+        assert!(mirror.reselect(dvd));
+        assert!(d.switch(t0, &mirror, place), "no rebuild");
+        assert_eq!(d.saver().name(), "dvd");
+        assert!(!d.switch(t0, &mirror, place), "rebuilt twice");
+
+        assert!(mirror.select("matrix"));
+        assert!(!mirror.reselect(dvd), "re-selected over a click");
+        assert!(d.switch(t0, &mirror, place));
+        assert_eq!(d.saver().name(), "matrix");
     }
 }

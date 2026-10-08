@@ -43,6 +43,16 @@ allocates. Every saver gets the
 same length turn; there is no per-saver table of seconds, because the expensive
 ones hold the target fps on this panel and so there is nothing to compensate for.
 
+**The pool** narrows it to some of the mirror list's groups — `scenes`,
+`ascii.rest`, `classics`, `flights`, `generative` — ticked under `rotate` on the
+page or set with `POST /pool?groups=scenes,flights`. At least one group, every
+name real, or a 400 that changes nothing; `/meta` reports it live as `pool`. A
+row outside the pool is skipped when it comes out of the bag rather than taken
+out of it, so a pool change applies from the next turn and the bag still covers
+every pooled saver once per cycle. The pool is read only when a turn is up,
+never per frame. Like the interval it is in memory: a restart rotates through
+everything again.
+
 Clicking a saver on the mirror page **restarts the interval**, so a manual pick
 always gets a whole turn rather than the two seconds that happened to be left.
 It does not pause rotation: a pause needs a resume, which is a second knob plus

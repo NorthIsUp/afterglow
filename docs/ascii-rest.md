@@ -46,6 +46,15 @@ ascii.rest's thirteen halftone scenes — landscapes shaded cell by cell and dra
 - `ASCII_REST_TOUR_HOLD_SECS` (1..3600, default 14, each hold drawn from 60%..140% of it)
 - `ASCII_REST_TOUR_MAX_ZOOM_PCT` (100..600, default 250, of the cover view's cell)
 - `ASCII_REST_TOUR_SEED` (0 = roll one from the clock and pid; any other value reproduces the tour exactly)
+- `ASCII_REST_TITLE` (0..1, default 0) — the scene's name (`night coast`) in the
+  panel's bottom-left corner, on a band of ground. Every ascii.rest piece reads it.
+
+The title is stamped onto the grid after the picture is mapped, so a piece's
+`frame` — and the golden test — never sees it; off, it costs one `Option` check
+a frame. A scene's cell is a few pixels wide, so its title is the font's glyphs
+drawn in dots, rows paired and blank columns trimmed. A tour close-up's cells
+are several times wider, so once the dots would take more than half the width
+the title switches to one glyph per cell, as a character piece's always is.
 
 ## The scene tour
 
@@ -71,6 +80,7 @@ times per glide.
 ## `-wide` variants
 
 The same thirteen scenes recomposed at 320x100 (3.2:1), so they fill pine's glass uncropped. Knobs: as the scenes.
+The mirror page lists each scene once, with an `expanded` toggle between the two.
 
 **`-wide` variants** are this repo's own: a scene recomposed on a 320x100 grid
 so it fills pine's 3.2:1 glass with nothing cropped, rather than stretched. The

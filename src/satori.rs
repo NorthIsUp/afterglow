@@ -178,7 +178,7 @@ impl Satori {
         let mut rng = seed;
         // Everything below is expressed in seconds and converted here, so a
         // 15 fps panel and a 30 fps dump move at the same speed.
-        let per = |k: &str, def: i64, hi: i64| {
+        let per = |k: &'static str, def: i64, hi: i64| {
             (env_num(&[k], def, 1, hi) as u32)
                 .saturating_mul(fps)
                 .max(1)

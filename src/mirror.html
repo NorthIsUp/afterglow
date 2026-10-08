@@ -2,9 +2,15 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>screensaver mirror</title>
+<link rel="icon" href="data:," />
 <style>
   :root {
     color-scheme: dark;
+    --ink: #4b8b4b;
+    --hot: #7cf65d;
+    --rule: #132;
+    --edge: #3a6;
+    --bad: #f66;
   }
   html,
   body {
@@ -14,17 +20,118 @@
   }
   body {
     box-sizing: border-box;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.6rem;
+    /* Three regions and no page scroll: the list and the bar scroll inside
+       themselves, so the canvas never moves when either grows. */
+    display: grid;
+    grid-template-columns: 15rem minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "side stage"
+      "side bar";
     font:
       12px ui-monospace,
       SFMono-Regular,
       Menlo,
       monospace;
-    color: #4b8b4b;
+    color: var(--ink);
+  }
+  /* The rows set `display`, which beats the attribute's own display: none. */
+  [hidden] {
+    display: none !important;
+  }
+  button,
+  input,
+  select {
+    font: inherit;
+    letter-spacing: 0.04em;
+    color: var(--ink);
+    background: #000;
+    border: 1px solid var(--rule);
+    padding: 0.2rem 0.45rem;
+  }
+  button {
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button[aria-pressed="true"] {
+    color: var(--hot);
+    border-color: var(--edge);
+  }
+  input[type="checkbox"],
+  input[type="range"] {
+    accent-color: var(--edge);
+  }
+  input:disabled {
+    opacity: 0.4;
+  }
+
+  /* ── saver list ─────────────────────────────── */
+  #side {
+    grid-area: side;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid var(--rule);
+  }
+  #filter {
+    margin: 0.5rem;
+  }
+  #list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 0 1rem;
+    outline: none;
+  }
+  #list h2 {
+    position: sticky;
+    top: 0;
+    margin: 0;
+    padding: 0.45rem 0.6rem 0.25rem;
+    font: inherit;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    opacity: 0.6;
+    background: #000;
+  }
+  #list button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    border-left: 2px solid transparent;
+    padding: 0.22rem 0.6rem 0.22rem 0.9rem;
+  }
+  #list button:hover,
+  #list button.cursor {
+    background: #071207;
+  }
+  #list button[aria-current="true"] {
+    color: var(--hot);
+    border-left-color: var(--edge);
+  }
+  #side .none {
+    padding: 0.6rem;
+    opacity: 0.6;
+  }
+  #drawer {
+    display: none;
+  }
+
+  /* ── the panel ──────────────────────────────── */
+  #stage {
+    grid-area: stage;
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    /* `size` can be bigger than the room on purpose; it scrolls rather than
+       shrinking, because shrinking is what `ratio` is for. Centred by the
+       canvas's auto margins, not place-items: those collapse to 0 when it
+       overflows, where centring would push its left edge out of reach. */
+    overflow: auto;
+  }
+  #stage canvas {
+    margin: auto;
   }
   canvas {
     /* Width and height are set from JS in both modes — see applyActualSize().
@@ -35,68 +142,92 @@
        canvas is shown at or above its own size, and WRONG below it: nearest
        neighbour at a fractional downscale drops whole rows and columns of
        pixels, which is the line striping the mirror was showing. */
-    border: 1px solid #132;
+    border: 1px solid var(--rule);
     background: #000;
   }
-  #status {
-    letter-spacing: 0.08em;
-    opacity: 0.75;
+
+  /* ── bottom bar ─────────────────────────────── */
+  #bar {
+    grid-area: bar;
+    max-height: 40vh;
+    overflow-y: auto;
+    border-top: 1px solid var(--rule);
+    padding: 0.5rem 0.75rem 0.4rem;
+    display: grid;
+    gap: 0.5rem;
   }
-  #status b {
-    color: #7cf65d;
-    font-weight: 500;
-  }
-  #pick {
+  #bar section {
     display: flex;
-    /* Eighteen savers do not fit on one line, and a picker that runs off the
-       edge hides the savers at the end of the list entirely. Wrap and centre,
-       so the row grows downward instead of sideways. */
     flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.4rem;
-    max-width: 100%;
+    align-items: center;
+    gap: 0.35rem 0.9rem;
   }
-  #pick button {
+  #bar h3 {
+    margin: 0;
     font: inherit;
-    letter-spacing: 0.08em;
-    color: #4b8b4b;
-    background: #000;
-    border: 1px solid #132;
-    /* Tighter than before: the horizontal padding was set when there were
-       three savers and is what pushes the row past the edge at eighteen. */
-    padding: 0.25rem 0.55rem;
-    cursor: pointer;
-    white-space: nowrap;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    opacity: 0.6;
+    min-width: 4.5rem;
   }
-  #modes {
+  #cfgname {
+    color: var(--hot);
+  }
+  #knobs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.9rem;
+  }
+  .knob {
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.35rem;
   }
-  #modes button {
-    margin-left: 0.2rem;
+  .knob input[type="number"] {
+    width: 5.5rem;
   }
-  #life {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.5rem;
+  .knob input[type="text"] {
+    width: 6rem;
   }
-  /* Pinned: the live preview resizes the canvas above it on every input
-     event, and in the flow that moved the slider out from under the pointer
-     mid-drag. Its height is reserved as body padding while open. */
+  .knob.set > span {
+    color: var(--hot);
+  }
+  .knob button {
+    padding: 0 0.3rem;
+    border-color: transparent;
+  }
+  .knob .err {
+    color: var(--bad);
+  }
+  #rotmins {
+    width: 4rem;
+  }
+  #pool label {
+    margin-right: 0.4rem;
+  }
+  #status {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    opacity: 0.6;
+  }
+  #status b {
+    color: var(--hot);
+    font-weight: 500;
+  }
+
+  /* In the bar, not over it. The slider must not move while it is dragged,
+     and the live preview resizes the canvas on every input event — but the
+     canvas is in the stage, whose size the bar sets and the canvas never
+     does, so the strip stays put. Opening it grows the bar once, which is
+     the stage giving up the strip's height, the same as a reserved strip. */
   #cal:not([hidden]) {
-    position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.6rem 1rem;
-    background: #000;
-    border-top: 1px solid #132;
+    padding: 0.6rem 0 0.2rem;
+    border-top: 1px solid var(--rule);
   }
   #cal p {
     max-width: 34rem;
@@ -106,13 +237,12 @@
   }
   #card {
     height: 1.6rem;
-    border: 1px solid #3a6;
+    border: 1px solid var(--edge);
     border-radius: 3px;
     background: repeating-linear-gradient(90deg, #132 0 8px, #0a1a0a 8px 16px);
   }
   #slider {
-    width: 20rem;
-    accent-color: #3a6;
+    width: min(20rem, 90vw);
   }
   #calrow {
     display: flex;
@@ -122,45 +252,65 @@
   #calnow {
     opacity: 0.7;
   }
-  #rot {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-  }
-  #rot input[type="number"] {
-    font: inherit;
-    width: 4rem;
-    color: #4b8b4b;
-    background: #000;
-    border: 1px solid #132;
-    padding: 0.2rem 0.3rem;
-  }
-  #rot input:disabled {
-    opacity: 0.4;
-  }
-  #rot input[type="checkbox"] {
-    accent-color: #3a6;
-  }
-  #pick button[aria-pressed="true"] {
-    color: #7cf65d;
-    border-color: #3a6;
+
+  /* Phone: the list is a drawer over the page, opened from a button above
+     the canvas, so the canvas gets the whole width. */
+  @media (max-width: 720px) {
+    body {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      grid-template-areas: "top" "stage" "bar";
+    }
+    #drawer {
+      display: block;
+      grid-area: top;
+      margin: 0.5rem 0.75rem 0;
+      text-align: left;
+    }
+    #side {
+      position: fixed;
+      inset: 0 25% 0 0;
+      z-index: 3;
+      background: #000;
+      transform: translateX(-102%);
+      transition: transform 0.15s;
+    }
+    body.drawer #side {
+      transform: none;
+      box-shadow: 0 0 0 100vmax #000a;
+    }
+    #bar {
+      max-height: 45vh;
+    }
   }
 </style>
-<canvas id="screen" width="16" height="16"></canvas>
-<div id="pick"></div>
-<div id="rot">
-  <label><input id="roton" type="checkbox" /> auto-rotate</label>
-  <label
-    >every
-    <input id="rotmins" type="number" min="1" max="1440" step="1" /> min</label
-  >
-</div>
-<div id="status">connecting…</div>
-<div id="life">
-  <span id="modes" hidden
-    >actual <button id="mratio">ratio</button><button id="msize">size</button
-    ><button id="calopen">calibrate</button></span
-  >
+<aside id="side">
+  <input id="filter" type="search" placeholder="filter savers" autocomplete="off" />
+  <div id="list" tabindex="0" role="listbox" aria-label="savers"></div>
+</aside>
+<button id="drawer" aria-expanded="false">☰ <span id="drawername">savers</span></button>
+<main id="stage"><canvas id="screen" width="16" height="16"></canvas></main>
+<footer id="bar">
+  <section id="cfg">
+    <h3>saver</h3>
+    <span id="cfgname"></span>
+    <label id="wide" hidden><input id="wideon" type="checkbox" /> expanded</label>
+    <div id="knobs"></div>
+  </section>
+  <section>
+    <h3>rotate</h3>
+    <label><input id="roton" type="checkbox" /> auto-rotate</label>
+    <label>every <input id="rotmins" type="number" min="1" max="1440" step="1" /> min</label>
+    <span id="pool"></span>
+  </section>
+  <section>
+    <h3>view</h3>
+    <span id="modes" hidden
+      >actual <button id="mratio">ratio</button> <button id="msize">size</button>
+      <button id="calopen">calibrate</button></span
+    >
+    <span id="status">connecting…</span>
+  </section>
   <div id="cal" hidden>
     <p>
       Hold a credit card against the screen and drag until the bar matches its
@@ -174,11 +324,11 @@
       <span id="calnow"></span>
     </div>
   </div>
-</div>
+</footer>
 <script>
   const canvas = document.getElementById("screen");
+  const stage = document.getElementById("stage");
   const status = document.getElementById("status");
-  const pick = document.getElementById("pick");
   const ctx = canvas.getContext("2d", { alpha: false });
 
   let meta = null,
@@ -189,6 +339,11 @@
     cells = 0;
 
   const hex = (v) => "#" + v.toString(16).padStart(6, "0");
+  const el = (tag, props = {}, ...kids) => {
+    const e = Object.assign(document.createElement(tag), props);
+    e.append(...kids);
+    return e;
+  };
 
   // One atlas per palette colour: every glyph drawn in that colour, once. A cell
   // is then a fillRect plus one drawImage, with no per-pixel work in JS.
@@ -242,9 +397,231 @@
     // response closed mid-read REJECTS reader.read() (Safari: "Load failed")
     // rather than resolving done, so letting the server do it turned every
     // successful switch into a two-second error banner.
-    status.textContent = "switching to " + name + "\u2026";
+    status.textContent = "switching to " + name + "…";
     switching = true;
     abort();
+  }
+
+  // ── SAVER LIST ───────────────────────────────────────────────────────
+  //
+  // Sections and the scene/-wide pairing come from /meta, not from here: the
+  // table lives beside the savers in Rust, so a new saver shows up in the
+  // right place without touching this page. A scene with a full-width twin is
+  // listed once; `expanded` in the bar picks which of the two draws.
+  const list = document.getElementById("list");
+  const filter = document.getElementById("filter");
+  let items = []; // [{name, button}] in list order
+  let cursor = -1; // index into the VISIBLE items, for the arrow keys
+  let base = {}; // "night-coast-wide" -> "night-coast"
+
+  const shown = (n) => base[n] || n;
+  const label = (n) => n.replace(/-/g, " ");
+
+  function buildList(m) {
+    base = Object.fromEntries(Object.entries(m.wide).map(([b, w]) => [w, b]));
+    items = [];
+    list.replaceChildren(
+      ...m.groups.flatMap((g) => {
+        if (!g.savers.length) return [];
+        const buttons = g.savers.map((name) => {
+          const b = el("button", { textContent: label(name), role: "option" });
+          b.dataset.name = name;
+          b.onclick = () => pick(name);
+          items.push({ name, button: b, group: g.name });
+          return b;
+        });
+        return [el("h2", { textContent: g.name }), ...buttons];
+      }),
+    );
+    applyFilter();
+  }
+
+  // The row a click on `name` asks for: the twin the viewer is already
+  // looking at, so moving between scenes keeps `expanded` as it was.
+  function pick(name) {
+    closeDrawer();
+    const wide = meta.wide[name];
+    select(wide && meta.saver === meta.wide[shown(meta.saver)] ? wide : name);
+  }
+
+  function visible() {
+    return items.filter((it) => !it.button.hidden);
+  }
+
+  function applyFilter() {
+    const q = filter.value.trim().toLowerCase();
+    for (const it of items)
+      it.button.hidden = !!q && !(label(it.name) + " " + it.group).includes(q);
+    for (const h of list.querySelectorAll("h2")) {
+      let n = h.nextElementSibling,
+        any = false;
+      for (; n && n.tagName === "BUTTON"; n = n.nextElementSibling)
+        any ||= !n.hidden;
+      h.hidden = !any;
+    }
+    list.querySelector(".none")?.remove();
+    if (!visible().length) list.append(el("div", { className: "none", textContent: "no saver matches" }));
+    moveCursor(0, true);
+  }
+
+  // `d` steps through the visible rows; `reset` lands on the current saver,
+  // or the first match while filtering.
+  function moveCursor(d, reset) {
+    const v = visible();
+    for (const it of items) it.button.classList.remove("cursor");
+    if (!v.length) return (cursor = -1);
+    if (reset) {
+      const cur = v.findIndex((it) => meta && it.name === shown(meta.saver));
+      cursor = filter.value.trim() || cur < 0 ? 0 : cur;
+      if (!filter.value.trim()) return;
+    } else cursor = Math.max(0, Math.min(v.length - 1, cursor + d));
+    v[cursor].button.classList.add("cursor");
+    v[cursor].button.scrollIntoView({ block: "nearest" });
+  }
+
+  function onListKey(e) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      moveCursor(e.key === "ArrowDown" ? 1 : -1, cursor < 0);
+    } else if (e.key === "Enter") {
+      const v = visible();
+      if (cursor < 0 && v.length) cursor = 0;
+      if (v[cursor]) pick(v[cursor].name);
+    } else if (e.key === "Escape") {
+      filter.value = "";
+      applyFilter();
+      closeDrawer();
+    }
+  }
+  filter.oninput = applyFilter;
+  filter.onkeydown = onListKey;
+  list.onkeydown = onListKey;
+
+  function markCurrent() {
+    for (const it of items) {
+      const on = it.name === shown(meta.saver);
+      it.button.setAttribute("aria-current", String(on));
+      if (on) it.button.scrollIntoView({ block: "nearest" });
+    }
+    document.getElementById("drawername").textContent = label(shown(meta.saver));
+  }
+
+  const drawer = document.getElementById("drawer");
+  function closeDrawer() {
+    document.body.classList.remove("drawer");
+    drawer.setAttribute("aria-expanded", "false");
+  }
+  drawer.onclick = () => {
+    const open = !document.body.classList.contains("drawer");
+    document.body.classList.toggle("drawer", open);
+    drawer.setAttribute("aria-expanded", String(open));
+    if (open) {
+      markCurrent();
+      filter.focus();
+    }
+  };
+  // A tap on the dimmed page beside the open drawer closes it.
+  document.addEventListener("pointerdown", (e) => {
+    if (document.body.classList.contains("drawer") && !e.target.closest("#side, #drawer"))
+      closeDrawer();
+  });
+
+  // ── PER-SAVER CONFIG ─────────────────────────────────────────────────
+  //
+  // Whatever knobs the saver's constructor reads, as /config reports them —
+  // the page knows no saver's knobs. A change is posted at once; the server
+  // validates against the constructor's own range, and rebuilds the saver
+  // when it reads that key, which ends this stream like any switch.
+  const knobs = document.getElementById("knobs");
+  const wideBox = document.getElementById("wide");
+  const wideOn = document.getElementById("wideon");
+  let cfgFor = null; // the epoch the knobs were fetched for
+
+  wideOn.onchange = () => {
+    const b = shown(meta.saver);
+    select(wideOn.checked ? meta.wide[b] : b);
+  };
+
+  async function loadConfig(force) {
+    if (!force && cfgFor === meta.epoch) return;
+    cfgFor = meta.epoch;
+    const name = meta.saver;
+    document.getElementById("cfgname").textContent = label(shown(name));
+    const pair = meta.wide[shown(name)];
+    wideBox.hidden = !pair;
+    wideOn.checked = !!pair && name === pair;
+    const res = await fetch("/config?saver=" + encodeURIComponent(name), { cache: "no-store" });
+    if (!res.ok || name !== meta.saver) return;
+    showKnobs(name, await res.json());
+  }
+
+  // What the rows were built from. The reconnect after a write fetches the
+  // same list the write already returned; rebuilding the rows for it would
+  // throw away whatever the viewer has started typing in the next box.
+  let knobsShown = "";
+
+  function showKnobs(name, list) {
+    const json = name + JSON.stringify(list);
+    if (json === knobsShown) return;
+    knobsShown = json;
+    knobs.replaceChildren(
+      ...list.map((k) => knobRow(name, k)),
+      ...(list.length ? [] : [el("span", { textContent: "no settings" })]),
+    );
+  }
+
+  function knobRow(name, k) {
+    const row = el("label", { className: "knob" + (k.overridden ? " set" : ""), title: [k.key, k.help].filter(Boolean).join(" — ") });
+    const err = el("span", { className: "err" });
+    let input;
+    if (k.kind === "bool") {
+      input = el("input", { type: "checkbox", checked: k.value === 1 });
+      row.append(input, el("span", { textContent: k.label }));
+    } else {
+      input =
+        k.kind === "num"
+          ? el("input", { type: "number", min: k.lo, max: k.hi, step: 1, value: k.value })
+          : el("input", { type: "text", value: k.value, maxLength: 64 });
+      row.append(el("span", { textContent: k.label }), input);
+    }
+    input.onchange = async () => {
+      const v = k.kind === "bool" ? (input.checked ? 1 : 0) : input.value;
+      const r = await send(name, "POST", k.key, v);
+      if (r.error) {
+        err.textContent = r.error.replace(k.key + ": ", "");
+        // Back to what the saver is really using: a refused value changes
+        // nothing on the panel, so it must not stay in the box either.
+        if (k.kind === "bool") input.checked = k.value === 1;
+        else input.value = k.value;
+      }
+    };
+    if (k.overridden) {
+      const reset = el("button", { textContent: "↺", title: "back to " + k.default });
+      reset.onclick = (e) => {
+        e.preventDefault();
+        send(name, "DELETE", k.key);
+      };
+      row.append(reset);
+    }
+    row.append(err);
+    return row;
+  }
+
+  async function send(name, method, key, value) {
+    let q = "/config?saver=" + encodeURIComponent(name) + "&key=" + encodeURIComponent(key);
+    if (value !== undefined) q += "&value=" + encodeURIComponent(value);
+    const res = await fetch(q, { method, cache: "no-store" });
+    const body = await res.json();
+    if (!res.ok) return body;
+    // The new list now, before the rebuild's reconnect re-fetches it: a knob
+    // that shows or hides others (the tour's switch) should look instant.
+    if (name === meta.saver) showKnobs(name, body.knobs);
+    // A rebuild ends the stream; drop it ourselves, as `select` does.
+    if (body.rebuilt) {
+      switching = true;
+      abort();
+    }
+    return {};
   }
 
   // Rotation. The interval is the pod's, not this tab's — /meta carries it, so
@@ -284,24 +661,39 @@
     setRotate(roton.checked ? rotlast : 0);
   };
 
-  function buildPicker(m) {
-    pick.replaceChildren(
-      ...(m.savers || []).map((name) => {
-        const b = document.createElement("button");
-        b.textContent = name;
-        b.setAttribute("aria-pressed", name === m.saver);
-        b.onclick = () => select(name);
-        return b;
-      }),
-    );
+  // The sections rotation may pick from. At least one stays ticked: an empty
+  // pool is refused by the server, and unticking the last box says so here.
+  const pool = document.getElementById("pool");
+  function showPool(m) {
+    if (!pool.childElementCount)
+      pool.replaceChildren(
+        "from ",
+        ...m.groups.map((g) => {
+          const box = el("input", { type: "checkbox" });
+          box.dataset.group = g.name;
+          box.onchange = setPool;
+          return el("label", {}, box, " " + g.name);
+        }),
+      );
+    for (const box of pool.querySelectorAll("input"))
+      box.checked = m.pool.includes(box.dataset.group);
   }
 
-  // A 1920-wide canvas in a smaller window is a fractional downscale, and
-  // nearest-neighbour picks one source pixel per destination pixel, so entire
-  // scanlines vanish — a one-cell-tall streak or a one-pixel grid line can
-  // disappear completely. Smoothing averages instead of dropping, which is the
-  // honest rendering when the mirror cannot show every pixel. Above 1:1 we want
-  // hard edges back, because that is what the panel itself looks like.
+  async function setPool() {
+    const on = [...pool.querySelectorAll("input:checked")].map((b) => b.dataset.group);
+    const res = await fetch("/pool?groups=" + encodeURIComponent(on.join(",")), {
+      method: "POST",
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      status.textContent = "rotation needs at least one group";
+      showPool(meta);
+      return;
+    }
+    meta.pool = (await res.json()).pool;
+    showPool(meta);
+  }
+
   // ACTUAL SIZE
   //
   // CSS cannot know how big the viewer's monitor is. `width: 200mm` is 200mm
@@ -337,7 +729,6 @@
   // Storage only seeds it, and a private window that cannot store still keeps
   // its calibration for as long as the tab is open.
   let pxmm = calibrated();
-
   // While calibrate is open the slider IS the size being previewed, so it
   // survives a switch just as the committed one does.
   function pxPerMm() {
@@ -406,21 +797,15 @@
   const aspect = () =>
     (meta.panel_w * meta.pixel_aspect) / (meta.panel_h * 100);
 
-  // Keeps the canvas off the window's edge.
+  // Keeps the canvas off the stage's edge.
   const MARGIN = 8;
 
-  // The box the canvas's content must fit in, in both modes: the window, less
-  // everything else on the page, the pinned calibrate panel's reserved strip,
-  // and the canvas's own border, which sits outside the width set from JS.
+  // The box the canvas's content must fit in, in both modes: the stage, which
+  // the grid has already sized to whatever the list and the bar leave, less
+  // the canvas's own border, which sits outside the width set from JS.
   function room() {
-    const st = getComputedStyle(document.body);
-    let h = innerHeight - parseFloat(st.paddingBottom);
-    for (const el of document.body.children) {
-      if (el === canvas || !el.offsetHeight) continue;
-      h -= el.offsetHeight + parseFloat(st.rowGap);
-    }
     const border = canvas.offsetWidth - canvas.clientWidth;
-    return [innerWidth - border - MARGIN, h - border - MARGIN];
+    return [stage.clientWidth - border - MARGIN, stage.clientHeight - border - MARGIN];
   }
 
   function paintModes(tooBig) {
@@ -466,18 +851,10 @@
     calnow.textContent = `${(k * 25.4).toFixed(0)} dpi · panel ${(meta.panel_mm * k) | 0}px wide`;
   }
 
-  // The calibrate panel is pinned to the bottom of the window, so the body
-  // reserves its height — on open and on resize, where its text can rewrap,
-  // but never while dragging, which is what kept moving the slider.
-  function reserveCal() {
-    document.body.style.paddingBottom = cal.hidden
-      ? ""
-      : cal.offsetHeight + "px";
-  }
-
+  // The stage shrinks when the strip opens; the ResizeObserver on it re-fits
+  // the canvas, so there is no separate resize path here.
   function showCal(open) {
     cal.hidden = !open;
-    reserveCal();
     applyActualSize();
   }
 
@@ -516,6 +893,12 @@
     return String(v).padStart(padTo, "0");
   }
 
+  // A 1920-wide canvas in a smaller window is a fractional downscale, and
+  // nearest-neighbour picks one source pixel per destination pixel, so entire
+  // scanlines vanish — a one-cell-tall streak or a one-pixel grid line can
+  // disappear completely. Smoothing averages instead of dropping, which is the
+  // honest rendering when the mirror cannot show every pixel. Above 1:1 we want
+  // hard edges back, because that is what the panel itself looks like.
   function fitScaling() {
     const shown = canvas.clientWidth;
     if (!shown) return;
@@ -523,15 +906,18 @@
     const crisp = ratio >= 1 || Number.isInteger(1 / ratio);
     canvas.style.imageRendering = crisp ? "pixelated" : "auto";
   }
-  addEventListener("resize", () => {
-    reserveCal();
-    applyActualSize();
-  });
+  // The stage, not the window: the bar grows when a saver has more knobs, and
+  // that shrinks the room `ratio` fits into without any window resize.
+  new ResizeObserver(applyActualSize).observe(stage);
 
   function applyMeta(m) {
+    const first = !meta;
     meta = m;
-    buildPicker(m);
+    if (first) buildList(m);
+    markCurrent();
     showRotate(m.rotate_secs);
+    showPool(m);
+    loadConfig(false);
     // The PANEL, not the cell grid — see Grid::new on why they differ.
     //
     // No fallback for a /meta missing these: this page is include_str!'d into
