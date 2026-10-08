@@ -315,6 +315,8 @@ pub struct Play<P: Piece> {
 struct Camera {
     grid: Grid,
     view: View,
+    /// A grid with bleed, for a view that pans by the pixel.
+    bleed: bool,
     /// Grid column/row -> picture column/row, `u32::MAX` off the picture.
     xmap: Vec<u32>,
     ymap: Vec<u32>,
@@ -323,27 +325,43 @@ struct Camera {
 impl Camera {
     /// Looking through `v`, with buffers for every view from cell width `lo`
     /// to `hi` so that aiming between them allocates nothing.
-    fn new<P: Piece>(panel: &Panel, aspect: usize, v: View, (lo, hi): (usize, usize)) -> Self {
+    fn new<P: Piece>(
+        panel: &Panel,
+        aspect: usize,
+        v: View,
+        (lo, hi): (usize, usize),
+        bleed: bool,
+    ) -> Self {
         // Widest cell first for the longest glyph LUTs, then the narrowest for
         // the most cells.
         let mut grid = Grid::with_aspect(panel, hi, hi * P::CELL, aspect).with_ground(P::GROUND);
-        grid.reshape(panel, lo, lo * P::CELL, aspect);
+        if bleed {
+            grid.reshape_bleed(panel, lo, lo * P::CELL, aspect);
+        } else {
+            grid.reshape(panel, lo, lo * P::CELL, aspect);
+        }
         let mut cam = Self {
             xmap: Vec::with_capacity(grid.cols()),
             ymap: Vec::with_capacity(grid.rows()),
             grid,
             view: View { w: lo, ..v },
+            bleed,
         };
         cam.aim::<P>(panel, aspect, v);
         cam
     }
 
-    /// Look through `v`. A new cell width reshapes the grid, which repaints
-    /// the whole panel; a pan is an ordinary change-detected frame.
+    /// Look through `v`. A new cell width or pixel shift repaints the whole
+    /// panel; a pan by whole cells alone is an ordinary change-detected frame.
     fn aim<P: Piece>(&mut self, panel: &Panel, aspect: usize, v: View) {
         if v.w != self.view.w {
-            self.grid.reshape(panel, v.w, v.w * P::CELL, aspect);
+            if self.bleed {
+                self.grid.reshape_bleed(panel, v.w, v.w * P::CELL, aspect);
+            } else {
+                self.grid.reshape(panel, v.w, v.w * P::CELL, aspect);
+            }
         }
+        self.grid.shift(v.dx, v.dy);
         self.view = v;
         map_into(&mut self.xmap, self.grid.cols(), P::COLS, v.x0);
         map_into(&mut self.ymap, self.grid.rows(), P::ROWS, v.y0);
@@ -354,8 +372,21 @@ impl Camera {
     /// is `cam`'s margin or off the picture. Allocates nothing.
     fn follow(&mut self, cam: &Camera) {
         let (me, it) = (self.grid.shape_of(), cam.grid.shape_of());
-        follow_into(&mut self.xmap, me.cols, me.cell_w, it.cell_w, &cam.xmap);
-        follow_into(&mut self.ymap, me.rows, me.cell_h, it.cell_h, &cam.ymap);
+        let (dx, dy) = cam.grid.shift_of();
+        follow_into(
+            &mut self.xmap,
+            me.cols,
+            me.cell_w,
+            (it.cell_w, dx),
+            &cam.xmap,
+        );
+        follow_into(
+            &mut self.ymap,
+            me.rows,
+            me.cell_h,
+            (it.cell_h, dy),
+            &cam.ymap,
+        );
     }
 
     #[inline]
@@ -400,13 +431,15 @@ impl<P: Piece> Play<P> {
             w,
             x0: origin(P::COLS, s.cols, spare(P::COLS, s.cols) * 0.5),
             y0: origin(P::ROWS, s.rows, spare(P::ROWS, s.rows) * anchor),
+            dx: 0,
+            dy: 0,
         };
         let tour = knobs.map(|k| Touring::new::<P>(panel, aspect, base, fps.max(1), k));
         let widths = tour.as_ref().map_or((w, w), Touring::widths);
         Self {
             piece: P::new(),
             pic: vec![Cell::CLEAR; P::COLS * P::ROWS],
-            cam: Camera::new::<P>(panel, aspect, base, widths),
+            cam: Camera::new::<P>(panel, aspect, base, widths, tour.is_some()),
             tour,
             title: None,
             clock: Clock::new(fps),
@@ -482,13 +515,19 @@ fn map_into(out: &mut Vec<u32>, n: usize, len: usize, x0: isize) {
     }));
 }
 
-/// `n` slots of `size` pixels, each mapped as the slot of `map`'s `of`-pixel
-/// grid under its centre maps. Both grids start at the panel's edge, so equal
-/// sizes copy `map`.
-fn follow_into(out: &mut Vec<u32>, n: usize, size: usize, of: usize, map: &[u32]) {
+/// `n` slots of `size` pixels, each mapped as the slot of `map`'s grid under
+/// its centre maps: `of`-pixel slots drawn `shift` pixels before the panel's
+/// edge. Equal sizes, unshifted, copy `map`.
+fn follow_into(
+    out: &mut Vec<u32>,
+    n: usize,
+    size: usize,
+    (of, shift): (usize, usize),
+    map: &[u32],
+) {
     out.clear();
     out.extend((0..n).map(|i| {
-        map.get((2 * i + 1) * size / (2 * of))
+        map.get(((2 * i + 1) * size / 2 + shift) / of)
             .copied()
             .unwrap_or(u32::MAX)
     }));
@@ -496,11 +535,13 @@ fn follow_into(out: &mut Vec<u32>, n: usize, size: usize, of: usize, map: &[u32]
 
 impl<P: Piece> Saver for Play<P> {
     fn render(&mut self, s: &mut Surface<'_>) {
-        if let Some(t) = self.clock.next(P::FPS) {
+        let next = self.clock.next(P::FPS);
+        let ticked = next.is_some();
+        if let Some(t) = next {
             self.piece.frame(t, &mut self.pic);
         }
         if let Some(t) = &mut self.tour {
-            t.steer::<P>(&self.pic, &mut self.cam);
+            t.steer::<P>(&self.pic, &mut self.cam, ticked);
         }
         self.cam.draw::<P>(&self.pic);
         if let Some(title) = &self.title {

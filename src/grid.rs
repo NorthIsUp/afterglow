@@ -137,6 +137,14 @@ pub struct Grid {
     /// What unlit glyph pixels and the margins paint. `BG` unless a saver
     /// draws over a coloured ground.
     ground: u32,
+    /// Pixels the cells are drawn left and up of the panel's corner, for a
+    /// camera that pans by the pixel rather than the cell. Only a `bleed`
+    /// grid shifts: it has a column and a row past the panel's edge to slide
+    /// in, so no shift opens a margin.
+    shift: (usize, usize),
+    bleed: bool,
+    /// The panel's size, for which cells `inside` it.
+    panel: (usize, usize),
 }
 
 impl Grid {
@@ -172,6 +180,9 @@ impl Grid {
             mask: Vec::new(),
             first: true,
             ground: BG,
+            shift: (0, 0),
+            bleed: false,
+            panel: (0, 0),
         };
         g.reshape(panel, cell_w, cell_h, aspect);
         g
@@ -198,12 +209,38 @@ impl Grid {
     /// Allocates nothing once the buffers have held a geometry at least this
     /// large in each of cell count, cell width and cell height.
     pub fn reshape(&mut self, panel: &Panel, cell_w: usize, cell_h: usize, aspect: usize) {
+        self.reshape_to(panel, Self::shape(panel, cell_w, cell_h, aspect), false);
+    }
+
+    /// `shape`, plus whatever it takes for a [`shift`](Self::shift) of up to a
+    /// cell less a pixel to leave no panel pixel uncovered: the cells that
+    /// reach past the right and bottom edges, and one more of each.
+    pub fn shape_bleed(panel: &Panel, cell_w: usize, cell_h: usize, aspect: usize) -> Shape {
+        let s = Self::shape(panel, cell_w, cell_h, aspect);
+        Shape {
+            cols: panel.w.div_ceil(s.cell_w) + 1,
+            rows: panel.h.div_ceil(s.cell_h) + 1,
+            ..s
+        }
+    }
+
+    /// `reshape` to [`shape_bleed`](Self::shape_bleed), unshifted.
+    pub fn reshape_bleed(&mut self, panel: &Panel, cell_w: usize, cell_h: usize, aspect: usize) {
+        self.reshape_to(
+            panel,
+            Self::shape_bleed(panel, cell_w, cell_h, aspect),
+            true,
+        );
+    }
+
+    fn reshape_to(&mut self, panel: &Panel, shape: Shape, bleed: bool) {
         let Shape {
             cols,
             rows,
             cell_w,
             cell_h,
-        } = Self::shape(panel, cell_w, cell_h, aspect);
+        } = shape;
+        (self.bleed, self.shift, self.panel) = (bleed, (0, 0), (panel.w, panel.h));
         (self.cols, self.rows, self.cell_w, self.cell_h) = (cols, rows, cell_w, cell_h);
         for v in [&mut self.cur, &mut self.prev] {
             v.clear();
@@ -227,6 +264,43 @@ impl Grid {
     pub fn with_ground(mut self, ground: u32) -> Self {
         self.ground = ground;
         self
+    }
+
+    /// Draw every cell `dx` pixels left and `dy` up of where it sits, each
+    /// under a cell. A new shift moves every cell, so the next flush repaints
+    /// them all, as frame 0 does.
+    pub fn shift(&mut self, dx: usize, dy: usize) {
+        debug_assert!(
+            self.bleed || (dx, dy) == (0, 0),
+            "shifting a grid with no bleed"
+        );
+        debug_assert!(dx < self.cell_w && dy < self.cell_h);
+        if (dx, dy) != self.shift {
+            self.shift = (dx, dy);
+            self.first = true;
+        }
+    }
+
+    #[inline]
+    pub fn shift_of(&self) -> (usize, usize) {
+        self.shift
+    }
+
+    /// The columns and rows wholly on the panel.
+    pub fn inside(&self) -> (std::ops::Range<usize>, std::ops::Range<usize>) {
+        let span = |n: usize, cell: usize, shift: usize, len: usize| {
+            let first = usize::from(shift > 0);
+            let last = ((len + shift) / cell).min(n);
+            first..last.max(first)
+        };
+        if !self.bleed {
+            return (0..self.cols, 0..self.rows);
+        }
+        let (dx, dy) = self.shift;
+        (
+            span(self.cols, self.cell_w, dx, self.panel.0),
+            span(self.rows, self.cell_h, dy, self.panel.1),
+        )
     }
 
     #[inline]
@@ -311,13 +385,19 @@ impl Grid {
         let fg = pal[c.colour()];
         let bg = self.ground;
         let (cx, cy) = (i % self.cols, i / self.cols);
+        // A shifted grid's first column and row hang off the panel's corner:
+        // start them that far into the cell.
+        let at = |p: usize, shift: usize| p.checked_sub(shift).map_or((0, shift - p), |q| (q, 0));
+        let (x, sx) = at(cx * self.cell_w, self.shift.0);
+        let (y, sy) = at(cy * self.cell_h, self.shift.1);
+        let mask = &self.mask[sx..];
         for (row, &sr) in s
-            .cell_rows(cx * self.cell_w, cy * self.cell_h, self.cell_w, self.cell_h)
-            .zip(self.rowmap.iter())
+            .cell_rows(x, y, self.cell_w - sx, self.cell_h - sy)
+            .zip(self.rowmap[sy..].iter())
         {
             // & 15 is free and lets the bounds check fold away.
             let line = bits[(sr & (font::GLYPH_H as u8 - 1)) as usize];
-            for (out, &m) in row.iter_mut().zip(self.mask.iter()) {
+            for (out, &m) in row.iter_mut().zip(mask.iter()) {
                 *out = if line & m != 0 { fg } else { bg };
             }
         }
@@ -332,8 +412,8 @@ impl Grid {
     #[inline]
     fn paint_margins(&self, s: &mut Surface<'_>) {
         s.fill_outside(
-            self.cols * self.cell_w,
-            self.rows * self.cell_h,
+            self.cols * self.cell_w - self.shift.0,
+            self.rows * self.cell_h - self.shift.1,
             self.ground,
         );
     }
@@ -364,6 +444,7 @@ impl Grid {
     /// `cur` between frames, and a swap would hand the saver back the frame
     /// before last. Duplicate indices are allowed and merely blit twice.
     pub fn flush_sparse(&mut self, s: &mut Surface<'_>, pal: &[u32], dirty: &[u32]) {
+        debug_assert!(!self.bleed, "flush_sparse cannot follow a shift");
         if self.first {
             for i in 0..self.cur.len() {
                 self.blit(s, pal, i);
@@ -536,6 +617,53 @@ mod tests {
         g.flush_sparse(&mut s, &[0x11], &[]);
         assert_eq!(s.finish().runs(), [Run::new(0, 0, 1920, 1080)]);
         assert!(!buf.contains(&JUNK));
+    }
+
+    /// A shifted grid: every pixel is the cell under it, `shift` pixels in;
+    /// a new shift repaints and reports the whole panel, and an unshifted,
+    /// unchanged frame still reports nothing. Junk in the "hardware" copy, so
+    /// a pixel written but not reported shows.
+    #[test]
+    fn a_shift_moves_every_cell_and_reports_it() {
+        const JUNK: u32 = 0xDEAD_BEEF;
+        for (w, h, cw, ch) in [(1920, 1080, 10, 18), (37, 23, 5, 7), (40, 40, 8, 8)] {
+            let panel = Panel::new(w, h, w);
+            let mut g = Grid::with_aspect(&panel, cw, ch, 100);
+            g.reshape_bleed(&panel, cw, ch, 100);
+            let (cols, rows) = (g.cols(), g.rows());
+            assert!(cols * cw >= w + cw - 1 && rows * ch >= h + ch - 1);
+            let mut buf = vec![JUNK; panel.buf_len()];
+            let mut hw = buf.clone();
+            let pal = [0x11, 0x22, 0x33];
+            let cell = |cx: usize, cy: usize| Cell::new(font::SOLID, ((cx + 2 * cy) % 3) as u16);
+            for (n, (dx, dy)) in [(0, 0), (3, 1), (3, 1), (cw - 1, ch - 1), (1, 0), (0, 0)]
+                .into_iter()
+                .enumerate()
+            {
+                g.shift(dx, dy);
+                g.fill(cell);
+                let mut s = Surface::new(&mut buf, &panel);
+                g.flush(&mut s, &pal);
+                let d = s.finish();
+                for r in d.runs() {
+                    for y in usize::from(r.y0)..usize::from(r.y1) {
+                        let row = y * w + usize::from(r.x0)..y * w + usize::from(r.x1);
+                        hw[row.clone()].copy_from_slice(&buf[row]);
+                    }
+                }
+                let case = format!("{w}x{h} cell {cw}x{ch} step {n} shift {dx},{dy}");
+                assert!(hw == buf, "{case}: drawn but never reported");
+                for y in 0..h {
+                    for x in 0..w {
+                        let c = cell((x + dx) / cw, (y + dy) / ch);
+                        assert_eq!(buf[y * w + x], pal[c.colour()], "{case}: pixel {x},{y}");
+                    }
+                }
+                if n == 2 {
+                    assert!(d.is_empty(), "{case}: an unmoved frame dirtied rows");
+                }
+            }
+        }
     }
 
     #[test]

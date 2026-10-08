@@ -43,8 +43,9 @@ ascii.rest's thirteen halftone scenes — landscapes shaded cell by cell and dra
 ### Knobs
 
 - `ASCII_REST_TOUR` (0..1, default 1; 0 is the fixed cover view)
-- `ASCII_REST_TOUR_HOLD_SECS` (1..3600, default 14, each hold drawn from 60%..140% of it)
+- `ASCII_REST_TOUR_SHOT_SECS` (4..600, default 20, each shot drawn from 75%..150% of it; a shot with little to move ends sooner)
 - `ASCII_REST_TOUR_MAX_ZOOM_PCT` (100..600, default 250, of the cover view's cell)
+- `ASCII_REST_TOUR_CUTS` (0..1, default 0; 1 cuts between framings and drifts slowly within each, instead of one continuous move)
 - `ASCII_REST_TOUR_SEED` (0 = roll one from the clock and pid; any other value reproduces the tour exactly)
 - `ASCII_REST_TITLE` (0..1, default 0) — the scene's name (`night coast`) in the
   panel's bottom-left corner, on a band of ground. Every ascii.rest piece reads it.
@@ -58,25 +59,37 @@ the title switches to one glyph per cell, as a character piece's always is.
 
 ## The scene tour
 
-For the halftone scenes the camera moves: it holds a view for 8-20 seconds,
-glides to the next over 3-6, and every third to fifth move pulls back to the
-cover view or briefly to the whole picture, ground-colour bars and all. Zoom is
-cell size, so every picture cell is still one grid cell and the dots just get
-bigger: up to 2.5x the cover cell, stepping through each integer width on the
-way. Close-ups go where the picture has something in it. Each move scores the
-frame on screen in 4x4-cell blocks (the dither's period) by contrast with
-their neighbours and by brightness. It frames a block drawn by that score
-(the moon, the lamp, the dome), or a corner or edge weighted the same way,
-and plays down anything the last three close-ups showed.
+For the halftone scenes the camera moves Ken Burns style. Each shot is a slow
+push in or pull out with a gentle pan, 15-30 seconds at the default, eased at
+both ends with a half-second settle, and the next shot carries on from where
+it ended. Every third to fifth shot pulls back to the cover view or to the
+whole picture, ground-colour bars and all. A pan covers at most half the
+panel. Close-ups go where the picture has something in it: each shot scores
+the frame on screen in 4x4-cell blocks (the dither's period) by contrast with
+their neighbours and by brightness, aims at a block drawn by that score (the
+moon, the lamp, the dome), and plays down anything the last three close-ups
+showed.
 
-A hold costs what the fixed view costs. While the tour holds the cover view it
-draws through the same grid, byte for byte. A glide repaints the whole panel
-at each new cell width, and on pine with 1 s holds (nearly all glide)
-night-coast measures 1.75x matrix against 1.49x untoured. The terminal host
-and the web mirror show the tour too. The mirror keeps the cover view's grid —
-each zoom step is a new geometry, and re-describing the mirror for each would
-reconnect every viewer a dozen times per glide — and fills it with the panel's
-cell under each of its cells' centres, the whole picture's bars included. The
+Zoom is cell size, so every picture cell is still one grid cell and the dots
+just get bigger: up to 2.5x the cover cell. The cell width steps a pixel at a
+time, evenly through the shot, and each step re-places the picture so the
+shot's focus stays put. The pan is pixel-precise: the grid is drawn shifted
+by the part of a cell the camera has passed, with the partial cells at the
+edges clipped, and a column and row of bleed past the panel's edge to slide
+in. A shot with few zoom steps and little pan is cut short so it never sits
+still for long. Near the whole picture only zoom can move, and its steps are
+a fifth of the picture each, so that is where the camera pauses longest,
+about three seconds.
+
+Every move repaints the whole panel, so the camera moves only on frames the
+piece draws (15 a second for the scenes): between them nothing else changes,
+and moving there too would double the cost. Over 100 s on pine's geometry
+night-coast measures 1.56x matrix, against 1.23x untoured and 1.43x with
+`ASCII_REST_TOUR_CUTS=1`. The terminal host and the web mirror show the tour
+too. The mirror keeps the cover view's grid — each zoom step is a new
+geometry, and re-describing the mirror for each would reconnect every viewer
+a dozen times a shot — and fills it with the panel's cell under each of its
+cells' centres, pixel shift included, the whole picture's bars too. The
 mapping is redone only when the view moves, and only while someone watches.
 
 ## `-wide` variants

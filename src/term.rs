@@ -102,11 +102,12 @@ pub struct Screen {
 }
 
 /// The grid cell under the centre of slot `t` of `n` spread across `len`
-/// panel pixels, for cells `cell` pixels wide of which there are `count`;
-/// `u32::MAX` in the margin past the last.
+/// panel pixels, for cells `cell` pixels wide, drawn `shift` pixels before
+/// the panel's edge, of which there are `count`; `u32::MAX` in the margin past
+/// the last.
 #[inline]
-fn sample(t: usize, n: usize, len: usize, cell: usize, count: usize) -> u32 {
-    let g = (2 * t + 1) * len / (2 * n) / cell;
+fn sample(t: usize, n: usize, len: usize, (cell, shift): (usize, usize), count: usize) -> u32 {
+    let g = ((2 * t + 1) * len / (2 * n) + shift) / cell;
     if g < count {
         g as u32
     } else {
@@ -140,13 +141,14 @@ impl Screen {
     /// A close-up's cells span several characters and a wide view's are
     /// sampled, so a zoom reads as a zoom here as on the glass.
     pub fn compose(&mut self, g: &Grid, panel: &Panel, pal: &[u32]) {
-        self.compose_cells(g.cells(), g.shape_of(), (panel.w, panel.h), g.ground(), pal);
+        let shape = (g.shape_of(), g.shift_of());
+        self.compose_cells(g.cells(), shape, (panel.w, panel.h), g.ground(), pal);
     }
 
     fn compose_cells(
         &mut self,
         cells: &[Cell],
-        g: Shape,
+        (g, (dx, dy)): (Shape, (usize, usize)),
         (pw, ph): (usize, usize),
         ground: u32,
         pal: &[u32],
@@ -163,10 +165,10 @@ impl Screen {
         let (cols, rows) = (self.cols, self.rows);
         self.xs.clear();
         self.xs
-            .extend((0..cols).map(|x| sample(x, cols, pw, g.cell_w, g.cols)));
+            .extend((0..cols).map(|x| sample(x, cols, pw, (g.cell_w, dx), g.cols)));
         self.ys.clear();
         self.ys
-            .extend((0..vrows).map(|y| sample(y, vrows, ph, g.cell_h, g.rows)));
+            .extend((0..vrows).map(|y| sample(y, vrows, ph, (g.cell_h, dy), g.rows)));
         let at = |gx: u32, gy: u32| cells[gy as usize * g.cols + gx as usize];
         let off = |v: u32| v == u32::MAX;
         for y in 0..rows {
@@ -441,7 +443,13 @@ mod tests {
         let cells = [Cell::new(ascii(b'A'), 1), Cell::new(ascii(b'B'), 2)];
         // Two cells on a panel four characters wide: the rest is margin.
         let (g, _) = fitted(2, 1, CHAR_W, CHAR_H);
-        s.compose_cells(&cells, g, (4 * CHAR_W, 3 * CHAR_H), 0x111111, &PAL);
+        s.compose_cells(
+            &cells,
+            (g, (0, 0)),
+            (4 * CHAR_W, 3 * CHAR_H),
+            0x111111,
+            &PAL,
+        );
         let row: Vec<char> = s.cur[0..4].iter().map(|t| t.ch).collect();
         assert_eq!(row, ['A', 'B', ' ', ' ']);
         assert_eq!(s.cur[0].fg, 0xFF0000);
@@ -464,7 +472,13 @@ mod tests {
             Cell::new(font::SOLID, 1),
         ];
         let (g, _) = fitted(2, 3, CHAR_W, CHAR_H / 2);
-        s.compose_cells(&cells, g, (2 * CHAR_W, 2 * CHAR_H), 0x111111, &PAL);
+        s.compose_cells(
+            &cells,
+            (g, (0, 0)),
+            (2 * CHAR_W, 2 * CHAR_H),
+            0x111111,
+            &PAL,
+        );
         let t = |i: usize| (s.cur[i].ch, s.cur[i].fg, s.cur[i].bg);
         assert_eq!(t(0), ('▀', 0xFF0000, 0x111111));
         // A blank glyph is ground whatever its colour; any lit one is its colour.
@@ -486,7 +500,7 @@ mod tests {
 
         let close: Vec<Cell> = b"WX".iter().map(|&c| Cell::new(ascii(c), 1)).collect();
         let (g, _) = fitted(2, 1, 2 * CHAR_W, 2 * CHAR_H);
-        s.compose_cells(&close, g, panel, 0, &PAL);
+        s.compose_cells(&close, (g, (0, 0)), panel, 0, &PAL);
         assert_eq!(row(&s), "WWXX");
 
         let wide: Vec<Cell> = b"ABCDEFGH"
@@ -494,7 +508,7 @@ mod tests {
             .map(|&c| Cell::new(ascii(c), 1))
             .collect();
         let (g, _) = fitted(8, 1, CHAR_W / 2, CHAR_H);
-        s.compose_cells(&wide, g, panel, 0, &PAL);
+        s.compose_cells(&wide, (g, (0, 0)), panel, 0, &PAL);
         assert_eq!(row(&s), "BDFH");
     }
 
@@ -503,15 +517,15 @@ mod tests {
         let mut s = Screen::new(3, 2);
         let cells = [Cell::new(ascii(b'A'), 1); 6];
         let (g, p) = fitted(3, 2, CHAR_W, CHAR_H);
-        s.compose_cells(&cells, g, p, 0, &PAL);
+        s.compose_cells(&cells, (g, (0, 0)), p, 0, &PAL);
         let first = s.emit().len();
         assert!(first > 0);
-        s.compose_cells(&cells, g, p, 0, &PAL);
+        s.compose_cells(&cells, (g, (0, 0)), p, 0, &PAL);
         assert_eq!(s.emit(), []);
 
         let mut moved = cells;
         moved[4] = Cell::new(ascii(b'B'), 1);
-        s.compose_cells(&moved, g, p, 0, &PAL);
+        s.compose_cells(&moved, (g, (0, 0)), p, 0, &PAL);
         // A cursor move and the colours, which are re-sent once per frame.
         let out = String::from_utf8(s.emit().to_vec()).unwrap();
         assert!(out.starts_with("\x1b[2;2H"), "{out:?}");
@@ -524,7 +538,7 @@ mod tests {
         let mut s = Screen::new(2, 2);
         let cells = [Cell::new(ascii(b'A'), 1); 4];
         let (g, p) = fitted(2, 2, CHAR_W, CHAR_H);
-        s.compose_cells(&cells, g, p, 0, &PAL);
+        s.compose_cells(&cells, (g, (0, 0)), p, 0, &PAL);
         let out = String::from_utf8(s.emit().to_vec()).unwrap();
         assert_eq!(out.matches('H').count(), 2, "{out:?}");
     }
@@ -534,13 +548,13 @@ mod tests {
         let mut s = Screen::new(40, 10);
         let mut cells = vec![Cell::new(ascii(b'A'), 1); 400];
         let (g, p) = fitted(40, 10, CHAR_W, CHAR_H);
-        s.compose_cells(&cells, g, p, 0, &PAL);
+        s.compose_cells(&cells, (g, (0, 0)), p, 0, &PAL);
         s.emit();
         for (i, c) in cells.iter_mut().enumerate() {
             *c = Cell::new(ascii(b'B'), (i % 3) as u16);
         }
         let n = allocs_during(|| {
-            s.compose_cells(&cells, g, p, 0x123456, &PAL);
+            s.compose_cells(&cells, (g, (0, 0)), p, 0x123456, &PAL);
             std::hint::black_box(s.emit());
         });
         assert_eq!(n, 0);
