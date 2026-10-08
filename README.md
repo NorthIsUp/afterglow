@@ -64,6 +64,7 @@ falls back to `ascii` — a headless pod must never crash-loop on a typo.
 | `xwing` | The Death Star run from the cockpit, in three acts on a loop: the station swelling out of a starfield, a low pass over its greebled surface, then the trench — walls closing in and the targeting computer swinging down over the view. Green fire comes in and red goes out in every act, TIE fighters cross, chase and pass the canopy, and anything a red bolt reaches explodes. | `XWING_SEED`, `XWING_APPROACH_SECS` / `XWING_SURFACE_SECS` / `XWING_TRENCH_SECS` (1..600, default 11 / 9 / 13), `XWING_SPEED` (world units/sec, 50..20000, default 900), `XWING_GREEBLE` (plating block size, 4..2000, default 60), `XWING_FOV` (focal length in thousandths of the visual panel width, 200..3000, default 800), `XWING_STARS` (0..4000, default 170), `XWING_TOWERS` (0..400, default 16), `XWING_BOLTS` (0..400, default 28), `XWING_TIE_SECS` (mean seconds between TIE sorties, 0..600, default 7; 0 = none), `XWING_TIES` (0..200, default 6), `XWING_BOOM_SECS` (mean seconds between surface explosions, 0..600, default 9; 0 = none), `XWING_BOOMS` (0..200, default 6), `XWING_PITCH_MS` (act 2's nose coming up, 0..10000, default 1600), `XWING_RISE_MS` (act 3's walls rising, 0..10000, default 1400), `XWING_CELL_W` / `XWING_CELL_H` (4..32, default 8 / 8) |
 | `plasma` | The demo-scene plasma, full screen: four sine fields summed into soft blobs of density, drawn with ascii.rest's ramp `.,-~:;=+*#%@` at the panel's own resolution, any size or shape. Colour is a second, slower field sweeping a deep blue → violet → magenta → coral → orange → gold → mint → sky wheel across the panel, so the blobs swim through bands of hue; brightness follows density, so the cores glow. Loops every 30 s. | `PLASMA_CELL_W` / `PLASMA_CELL_H` (glass px, 4..64 / 4..128, default 12 / 24) |
 | `alpine-dawn` `aurora-fjord` `deep-reef` `desert-night` `earthrise` `kyoto-dusk` `marine-drive` `misty-forest` `night-coast` `ocean-sunset` `storm-plains` `taj-dawn` `varanasi-ghats` | ascii.rest's thirteen halftone scenes — landscapes shaded cell by cell and drawn as dots whose size is their brightness. See [ascii.rest ports](#about-the-ascii-rest-ports); the camera slowly tours each one ([the tour](#the-scene-tour)). | `ASCII_REST_TOUR` (0..1, default 1; 0 is the fixed cover view), `ASCII_REST_TOUR_HOLD_SECS` (1..3600, default 14, each hold drawn from 60%..140% of it), `ASCII_REST_TOUR_MAX_ZOOM_PCT` (100..600, default 250, of the cover view's cell), `ASCII_REST_TOUR_SEED` (0 = roll one from the clock and pid; any other value reproduces the tour exactly) |
+| `alpine-dawn-wide` `aurora-fjord-wide` `deep-reef-wide` `desert-night-wide` `earthrise-wide` `kyoto-dusk-wide` `marine-drive-wide` `misty-forest-wide` `night-coast-wide` `ocean-sunset-wide` `storm-plains-wide` `taj-dawn-wide` `varanasi-ghats-wide` | The same thirteen scenes recomposed at 320x100 (3.2:1), so they fill pine's glass uncropped. See [ascii.rest ports](#about-the-ascii-rest-ports). | as the scenes |
 | `aurora` `synthwave` `tv-static` `vinyl` `lighthouse` `fractal-tree` `reaction-diffusion` `double-pendulum` | ascii.rest's character pieces, one ink each. See [ascii.rest ports](#about-the-ascii-rest-ports). | none |
 
 Common: `SAVER_FPS` (1..120, default 30; older spelling `FIRE_FPS`),
@@ -1009,6 +1010,25 @@ night-coast measures 1.75x matrix against 1.49x untoured. The terminal host
 shows the tour; the web mirror always shows the cover view: each zoom step is a new geometry, and
 re-describing the mirror for each one would reconnect every viewer a dozen
 times per glide.
+
+**`-wide` variants** are this repo's own: a scene recomposed on a 320x100 grid
+so it fills pine's 3.2:1 glass with nothing cropped, rather than stretched. The
+original stays untouched and golden-exact; a wide one sets `UPSTREAM = false`,
+so its `golden` test skips — there is no upstream output to compare against.
+
+- `alpine-dawn-wide` — a wider camera on the same range, three more peaks at the flanks.
+- `aurora-fjord-wide` — fjord and cabin kept off-centre, two more peaks on each range.
+- `deep-reef-wide` — broader reefs and sand, two more bommies, a hazy third kelp.
+- `desert-night-wide` — a wider dune field; the milky way's arch spans the whole sky.
+- `earthrise-wide` — more highlands and ground, two more bright stars, a longer galaxy band.
+- `kyoto-dusk-wide` — a temple hall beside the pagoda, hills rising further east.
+- `marine-drive-wide` — a longer necklace and skyline, a liner and a fishing boat past the point.
+- `misty-forest-wide` — the ridges and fog run on west; a young pine between the two framing giants.
+- `night-coast-wide` — a wider sea out to a low far shore with two hummocks; the beam reaches further.
+- `ocean-sunset-wide` — a larger headland, a wider sea and a far island beyond the sun.
+- `storm-plains-wide` — the storm stands further east, its anvil streaming on across the extra sky.
+- `taj-dawn-wide` — the whole garden front, the jawab answering the mosque across the canal.
+- `varanasi-ghats-wide` — longer ghats with more spires and priests, and a broad reach past the glow.
 
 ## Gotchas
 
