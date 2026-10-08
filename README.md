@@ -152,7 +152,7 @@ One ink each. Every piece also has a `-wide` twin drawn at the panel's own size,
 | --------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | [`aurora`](docs/savers/aurora.md)                         | [`aurora-wide`](docs/savers/aurora.md#aurora-wide)          | A curtain of light over a spruce treeline at night.                             |
 | [`synthwave`](docs/savers/synthwave.md)                   | [`synthwave-wide`](docs/savers/synthwave.md#synthwave-wide) | The eighties horizon.                                                           |
-| [`tv-static`](docs/savers/tv-static.md)                   |                                                             | An old set showing snow, with a hum bar rolling through it.                     |
+| [`tv-static`](docs/savers/tv-static.md)                   | [`tv-static-wide`](docs/savers/tv-static.md#tv-static-wide) | An old set showing snow, with a hum bar rolling through it.                     |
 | [`vinyl`](docs/savers/vinyl.md)                           |                                                             | A record turning on a turntable, seen from above.                               |
 | [`lighthouse`](docs/savers/lighthouse.md)                 |                                                             | A banded lighthouse on a heap of rocks at night.                                |
 | [`fractal-tree`](docs/savers/fractal-tree.md)             |                                                             | A trunk that forks seven times over into lobes of leaves, bending in the wind.  |
