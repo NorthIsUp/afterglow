@@ -1,11 +1,20 @@
 //! vinyl: a record turning on a turntable, seen from above. The label and a
 //! few specks of dust turn at 33 1/3 rpm, the sheen on the grooves stays put,
 //! and a J-shaped tonearm rests in the outer grooves.
+//!
+//! `vinyl-wide` is a DJ's console across the panel: two decks, the right one
+//! pitched a little up so the pair drift in and out of phase, either side of
+//! a mixer whose meters jump to the beat, whose EQ knobs and faders get
+//! nudged, and whose crossfader sweeps slowly from deck to deck. A single
+//! turntable stretched to 3.2:1 would be a record and a lot of plinth; two
+//! decks and a mixer is the shape that object really has at that width. The
+//! decks are upstream's turntable at upstream's size on pine, scaled to the
+//! panel's height (and whatever width two of them leave) elsewhere.
 
 use std::f64::consts::PI;
 
-use super::math::js_round;
-use super::{hex, text, Piece};
+use super::math::{hash2, js_round};
+use super::{hex, text, Canvas, Piece};
 use crate::grid::Cell;
 
 const COLS: usize = 64;
@@ -22,9 +31,14 @@ const LABEL: f64 = 4.0;
 const GAPS: [f64; 2] = [6.2, 7.5];
 /// Radius, angle.
 const DUST: [(f64, f64); 3] = [(6.8, 0.4), (8.2, 2.9), (5.4, 4.4)];
-/// The spindle, in cells.
+/// The spindle, in cells from the deck's left edge; it sits half way down.
 const CX: f64 = 22.5;
-const CY: f64 = 12.5;
+/// Columns a deck takes beyond its record's reach: the tonearm, the pitch
+/// slider and the plinth's edge.
+const ARM: f64 = 22.5;
+/// The mixer's beat, a second.
+const BEAT: f64 = 124.0 / 60.0;
+const DIAL: [char; 4] = ['╱', '─', '╲', '│'];
 
 /// The label's print, in its own frame (rows, x across): a title band above
 /// the spindle and a round mark off to one side below it.
@@ -52,7 +66,36 @@ struct Disc {
 /// Rim tally: samples, summed height in the cell, summed |cos|, falling count.
 type Tally = [f64; 4];
 
-pub struct Vinyl {
+/// Where one turntable sits on the grid and how its record turns.
+struct Spec {
+    /// The deck's left edge, in columns.
+    ox: f64,
+    /// Upstream's sizes to this deck's.
+    s: f64,
+    /// Turns a second, as a share of 33 1/3 rpm.
+    rate: f64,
+    /// Added to every speck of dust's angle.
+    dust: f64,
+    /// Rows the pitch slider's cap sits below its middle.
+    pitch: i64,
+}
+
+const ORIGINAL: Spec = Spec {
+    ox: 0.0,
+    s: 1.0,
+    rate: 1.0,
+    dust: 0.0,
+    pitch: 0,
+};
+
+/// One turntable: its record, traced once, and where its furniture goes.
+struct Deck {
+    cx: f64,
+    cy: f64,
+    s: f64,
+    rate: f64,
+    dust: f64,
+    pitch: i64,
     cells: Vec<Disc>,
     subs: Vec<(f64, f64)>,
     edge: Vec<(usize, Cell)>,
@@ -62,46 +105,41 @@ fn phi_of(&[n, _, c, _]: &Tally) -> f64 {
     (c / n).atan2((1.0 - (c / n).powi(2)).max(0.0).sqrt()) * 180.0 / PI
 }
 
-impl Piece for Vinyl {
-    const NAME: &'static str = "vinyl";
-    const COLS: usize = COLS;
-    const ROWS: usize = ROWS;
-    const FPS: u32 = 24;
-    const CELL: usize = 2;
-    const PALETTE: &'static [u32] = &[hex("#ffb347")];
-    const GROUND: u32 = 0;
-
-    fn new() -> Self {
+impl Deck {
+    fn new(cols: usize, rows: usize, spec: &Spec) -> Self {
+        let s = spec.s;
+        let (cx, cy) = (spec.ox + CX * s, rows as f64 / 2.0);
+        let (r_, rim) = (R * s, RIM * s);
         // Per cell: radius in rows, angle, and the cell's radial depth, so a ring
         // drawn within half of it is one cell thick all the way round. Label cells
         // keep sixteen sample points so the print keeps its shape as it turns.
         let mut cells = Vec::new();
         let mut subs = Vec::new();
-        for r in 0..ROWS {
-            for c in 0..COLS {
-                let dx = (c as f64 + 0.5 - CX) / 2.0;
-                let dy = r as f64 + 0.5 - CY;
+        for r in 0..rows {
+            for c in 0..cols {
+                let dx = (c as f64 + 0.5 - cx) / 2.0;
+                let dy = r as f64 + 0.5 - cy;
                 let d = dx.hypot(dy);
-                if d > R + 0.1 {
+                if d > r_ + 0.1 * s {
                     continue;
                 }
                 let th = dy.atan2(dx);
                 let h = 0.5 * th.cos().abs() + th.sin().abs();
                 let start = subs.len();
-                if d < LABEL {
+                if d < LABEL * s {
                     for j in 0..4 {
                         for i in 0..4 {
                             subs.push((
-                                dx + (f64::from(i) - 1.5) / 8.0,
-                                dy + (f64::from(j) - 1.5) / 4.0,
+                                (dx + (f64::from(i) - 1.5) / 8.0) / s,
+                                (dy + (f64::from(j) - 1.5) / 4.0) / s,
                             ));
                         }
                     }
                 }
                 cells.push(Disc {
-                    k: r * COLS + c,
-                    d,
-                    h,
+                    k: r * cols + c,
+                    d: d / s,
+                    h: h / s,
                     s: sheen(th),
                     sub: start..subs.len(),
                 });
@@ -112,51 +150,55 @@ impl Piece for Vinyl {
         // glyph for the slope and height of the curve inside it. Its upright
         // sides take one cell a row, and so does each slant. A Vec keeps the
         // insertion order upstream's Map iterates in, which breaks `most` ties.
-        let mut rim: Vec<(i64, Tally)> = Vec::new();
-        let cols = COLS as i64;
-        let side = RIM * 0.3;
-        let mut r = (CY - side - 0.5).ceil();
-        while r + 0.5 < CY + side {
-            let w = 2.0 * (RIM * RIM - (r + 0.5 - CY).powi(2)).sqrt();
-            for c in [CX - w, CX + w] {
-                let k = r as i64 * cols + c.floor() as i64;
-                match rim.iter_mut().find(|e| e.0 == k) {
+        let mut rim_at: Vec<(i64, Tally)> = Vec::new();
+        let (icols, irows) = (cols as i64, rows as i64);
+        let on = |r: f64, c: f64| r >= 0.0 && (r as i64) < irows && c >= 0.0 && (c as i64) < icols;
+        let side = rim * 0.3;
+        let mut r = (cy - side - 0.5).ceil();
+        while r + 0.5 < cy + side {
+            let w = 2.0 * (rim * rim - (r + 0.5 - cy).powi(2)).sqrt();
+            for c in [cx - w, cx + w] {
+                if !on(r, c.floor()) {
+                    continue;
+                }
+                let k = r as i64 * icols + c.floor() as i64;
+                match rim_at.iter_mut().find(|e| e.0 == k) {
                     Some(e) => e.1 = [1.0, 0.5, 1.0, 0.0],
-                    None => rim.push((k, [1.0, 0.5, 1.0, 0.0])),
+                    None => rim_at.push((k, [1.0, 0.5, 1.0, 0.0])),
                 }
             }
             r += 1.0;
         }
         for i in 0..2000 {
             let p = (f64::from(i) / 2000.0) * 2.0 * PI;
-            let x = CX + 2.0 * RIM * p.cos();
-            let y = CY + RIM * p.sin();
-            if (y.floor() + 0.5 - CY).abs() < side {
+            let x = cx + 2.0 * rim * p.cos();
+            let y = cy + rim * p.sin();
+            if (y.floor() + 0.5 - cy).abs() < side || !on(y.floor(), x.floor()) {
                 continue;
             }
-            let k = y.floor() as i64 * cols + x.floor() as i64;
-            let at = match rim.iter().position(|e| e.0 == k) {
+            let k = y.floor() as i64 * icols + x.floor() as i64;
+            let at = match rim_at.iter().position(|e| e.0 == k) {
                 Some(at) => at,
                 None => {
-                    rim.push((k, [0.0; 4]));
-                    rim.len() - 1
+                    rim_at.push((k, [0.0; 4]));
+                    rim_at.len() - 1
                 }
             };
-            let e = &mut rim[at].1;
+            let e = &mut rim_at[at].1;
             e[0] += 1.0;
             e[1] += y - y.floor();
             e[2] += p.cos().abs();
             e[3] += if p.sin() * p.cos() < 0.0 { 1.0 } else { 0.0 };
         }
-        let id = |k: i64| (k / cols) * 2 + i64::from((k % cols) as f64 >= CX);
+        let id = |k: i64| (k / icols) * 2 + i64::from((k % icols) as f64 >= cx);
         // The fullest slanted cell on each row and side.
         let mut most: Vec<(i64, i64)> = Vec::new();
-        for &(k, e) in &rim {
+        for &(k, e) in &rim_at {
             let phi = phi_of(&e);
             let best = most
                 .iter()
                 .find(|m| m.0 == id(k))
-                .and_then(|m| rim.iter().find(|r| r.0 == m.1))
+                .and_then(|m| rim_at.iter().find(|r| r.0 == m.1))
                 .map_or(0.0, |r| r.1[0]);
             if phi > 50.0 && phi <= 72.0 && e[0] > best {
                 match most.iter_mut().find(|m| m.0 == id(k)) {
@@ -165,7 +207,7 @@ impl Piece for Vinyl {
                 }
             }
         }
-        let edge = rim
+        let edge = rim_at
             .iter()
             .map(|&(k, e)| {
                 let [n, fy, _, fall] = e;
@@ -195,32 +237,24 @@ impl Piece for Vinyl {
             .collect();
 
         Self {
+            cx,
+            cy,
+            s,
+            rate: spec.rate,
+            dust: spec.dust,
+            pitch: spec.pitch,
             cells,
             subs,
             edge,
         }
     }
 
-    fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        let put = |out: &mut [Cell], c: f64, r: f64, g: char| {
-            let (c, r) = (c.floor(), r.floor());
-            if c >= 0.0 && c < COLS as f64 && r >= 0.0 && r < ROWS as f64 {
-                out[r as usize * COLS + c as usize] = text::cell(g);
-            }
-        };
-        let words = |out: &mut [Cell], c: usize, r: usize, s: &str| {
-            for (i, g) in s.chars().enumerate() {
-                if g != ' ' {
-                    put(out, (c + i) as f64, r as f64, g);
-                }
-            }
-        };
-
-        let a = SPIN * t;
+    /// The record turning, its spindle and its dust.
+    fn record(&self, t: f64, pen: &mut Pen<'_>) {
+        let a = SPIN * t * self.rate;
         let (ca, sa) = (a.cos(), a.sin());
-        out.fill(RAMP[0]);
         for &(k, g) in &self.edge {
-            out[k] = g;
+            pen.out[k] = g;
         }
         for cell in &self.cells {
             let r = cell.d;
@@ -250,54 +284,300 @@ impl Piece for Vinyl {
             } else {
                 3 + js_round(4.0 * s) as usize
             };
-            out[cell.k] = RAMP[b];
+            pen.out[cell.k] = RAMP[b];
         }
-        put(out, CX, CY, 'o');
+        pen.put(self.cx, self.cy, 'o');
         // Dust riding round with the record.
         for (r, p) in DUST {
-            put(
-                out,
-                CX + 2.0 * r * (p + a).cos(),
-                CY + r * (p + a).sin(),
+            let r = r * self.s;
+            pen.put(
+                self.cx + 2.0 * r * (p + self.dust + a).cos(),
+                self.cy + r * (p + self.dust + a).sin(),
                 '°',
             );
         }
+    }
 
-        // The plinth, its start and speed buttons, and the pitch slider.
-        for c in 1..COLS - 1 {
-            put(out, c as f64, 0.0, '─');
-            put(out, c as f64, (ROWS - 1) as f64, '─');
-        }
-        for r in 1..ROWS - 1 {
-            put(out, 0.0, r as f64, '│');
-            put(out, (COLS - 1) as f64, r as f64, '│');
-        }
-        put(out, 0.0, 0.0, '╭');
-        put(out, (COLS - 1) as f64, 0.0, '╮');
-        put(out, 0.0, (ROWS - 1) as f64, '╰');
-        put(out, (COLS - 1) as f64, (ROWS - 1) as f64, '╯');
-        words(out, 2, 21, "┌──┐");
-        words(out, 2, 22, "└──┘");
-        words(out, 47, 21, "┌┐┌┐");
-        words(out, 47, 22, "└┘└┘");
-        for r in 12..=22 {
-            put(out, 59.0, r as f64, if r == 17 { '═' } else { '┊' });
+    /// The start and speed buttons, the pitch slider and the tonearm. The
+    /// buttons and the slider's foot keep to the record, not to a taller
+    /// panel's bottom edge.
+    fn furniture(&self, ox: f64, pen: &mut Pen<'_>) {
+        let s = self.s;
+        let bottom = (self.cy + 11.5 * s).round().min((pen.rows - 1) as f64);
+        let pc = (self.cx + 2.0 * R * s + 10.5).round();
+        let pr = (self.cy - R * s + 1.5).round();
+        let ar = (self.cy + 3.5 * s).round();
+        let hc = (self.cx + 13.5 * s).round();
+        pen.words(ox + 2.0, bottom - 3.0, "┌──┐");
+        pen.words(ox + 2.0, bottom - 2.0, "└──┘");
+        pen.words(pc - 4.0, bottom - 3.0, "┌┐┌┐");
+        pen.words(pc - 4.0, bottom - 2.0, "└┘└┘");
+        let top = (self.cy - 0.5).round();
+        let cap = ((top + bottom - 2.0) / 2.0).floor() + self.pitch as f64;
+        let mut r = top;
+        while r <= bottom - 2.0 {
+            pen.put(pc + 8.0, r, if r == cap { '═' } else { '┊' });
+            r += 1.0;
         }
 
         // The tonearm: counterweight behind the pivot, the pivot in its ring,
         // a tube down and round to the headshell, and the cue lever beside it.
-        words(out, 49, 2, "▗▄▄▄▖");
-        words(out, 49, 3, "▝▀█▀▘");
-        words(out, 48, 4, "╭──╨──╮");
-        words(out, 48, 5, "│  O  │");
-        words(out, 48, 6, "╰──╥──╯");
-        for r in 7..16 {
-            put(out, 51.0, r as f64, '║');
+        pen.words(pc - 2.0, pr - 3.0, "▗▄▄▄▖");
+        pen.words(pc - 2.0, pr - 2.0, "▝▀█▀▘");
+        pen.words(pc - 3.0, pr - 1.0, "╭──╨──╮");
+        pen.words(pc - 3.0, pr, "│  O  │");
+        pen.words(pc - 3.0, pr + 1.0, "╰──╥──╯");
+        let mut r = pr + 2.0;
+        while r < ar {
+            pen.put(pc, r, '║');
+            r += 1.0;
         }
-        words(out, 41, 16, "══════════╝");
-        words(out, 36, 16, "▐███▌");
-        words(out, 54, 9, "╭╮");
-        words(out, 54, 10, "││");
-        words(out, 54, 11, "╰╯");
+        let mut c = hc + 5.0;
+        while c < pc {
+            pen.put(c, ar, '═');
+            c += 1.0;
+        }
+        pen.put(pc, ar, '╝');
+        pen.words(hc, ar, "▐███▌");
+        pen.words(pc + 3.0, pr + 4.0, "╭╮");
+        pen.words(pc + 3.0, pr + 5.0, "││");
+        pen.words(pc + 3.0, pr + 6.0, "╰╯");
+    }
+}
+
+/// Writes clipped to the grid.
+struct Pen<'a> {
+    out: &'a mut [Cell],
+    cols: usize,
+    rows: usize,
+}
+
+impl Pen<'_> {
+    fn put(&mut self, c: f64, r: f64, g: char) {
+        let (c, r) = (c.floor(), r.floor());
+        if c >= 0.0 && c < self.cols as f64 && r >= 0.0 && r < self.rows as f64 {
+            self.out[r as usize * self.cols + c as usize] = text::cell(g);
+        }
+    }
+
+    fn words(&mut self, c: f64, r: f64, s: &str) {
+        for (i, g) in s.chars().enumerate() {
+            if g != ' ' {
+                self.put(c + i as f64, r, g);
+            }
+        }
+    }
+
+    /// The plinth's edge round the whole grid.
+    fn plinth(&mut self) {
+        let (w, h) = ((self.cols - 1) as f64, (self.rows - 1) as f64);
+        for c in 1..self.cols - 1 {
+            self.put(c as f64, 0.0, '─');
+            self.put(c as f64, h, '─');
+        }
+        for r in 1..self.rows - 1 {
+            self.put(0.0, r as f64, '│');
+            self.put(w, r as f64, '│');
+        }
+        self.put(0.0, 0.0, '╭');
+        self.put(w, 0.0, '╮');
+        self.put(0.0, h, '╰');
+        self.put(w, h, '╯');
+    }
+}
+
+/// The mixer between the decks: a box spanning columns `x0..=x1`, two
+/// channel strips of EQ knobs and a fader, level meters between them, and
+/// the crossfader along the foot.
+struct Mixer {
+    x0: f64,
+    x1: f64,
+    y1: f64,
+}
+
+impl Mixer {
+    fn draw(&self, t: f64, pen: &mut Pen<'_>) {
+        let (x0, x1, y0, y1) = (self.x0, self.x1, 1.0, self.y1);
+        pen.words(x0, y0, "┌");
+        pen.words(x1, y0, "┐");
+        pen.words(x0, y1, "└");
+        pen.words(x1, y1, "┘");
+        let mut c = x0 + 1.0;
+        while c < x1 {
+            pen.put(c, y0, '─');
+            pen.put(c, y1, '─');
+            c += 1.0;
+        }
+        let mut r = y0 + 1.0;
+        while r < y1 {
+            pen.put(x0, r, '│');
+            pen.put(x1, r, '│');
+            r += 1.0;
+        }
+        let quarter = ((x1 - x0) / 4.0).floor();
+        let (a, b, m) = (x0 + quarter, x1 - quarter, ((x0 + x1) / 2.0).floor());
+        pen.put(a, y0 + 1.0, 'A');
+        pen.put(b, y0 + 1.0, 'B');
+        // Hi, mid and low on each channel, each turned now and then.
+        for (ch, x) in [a, b].into_iter().enumerate() {
+            for k in 0..3 {
+                let ph = (ch * 3 + k) as f64;
+                let turn = 1.5 + 1.2 * (t * (0.07 + 0.03 * ph) + ph * 1.7).sin();
+                let g = DIAL[(turn.rem_euclid(4.0)) as usize % 4];
+                let r = y0 + 3.0 + 2.0 * k as f64;
+                pen.put(x - 1.0, r, '(');
+                pen.put(x, r, g);
+                pen.put(x + 1.0, r, ')');
+            }
+        }
+        // The channel faders: near the top, eased down and back up now and then.
+        let (f0, f1) = (y0 + 9.0, y1 - 4.0);
+        for (ch, x) in [a, b].into_iter().enumerate() {
+            let dip = (t * 0.11 + ch as f64 * 2.4).sin().max(0.0).powi(4);
+            let cap = (f0 + (f1 - f0) * (0.12 + 0.6 * dip)).round();
+            let mut r = f0;
+            while r <= f1 {
+                pen.put(x, r, '┊');
+                r += 1.0;
+            }
+            pen.words(x - 1.0, cap, "═══");
+        }
+        // The meters, one a channel, kicking on the beat.
+        let beat = t * BEAT;
+        let (n, f) = (beat.floor(), beat - beat.floor());
+        let (m0, m1) = (y0 + 3.0, f1);
+        let span = m1 - m0 + 1.0;
+        for (ch, x) in [m - 1.0, m + 1.0].into_iter().enumerate() {
+            let jitter = hash2(n as i64, ch as i64);
+            let shimmer = hash2((t * 24.0) as i64, ch as i64 + 7);
+            let level = (0.55 + 0.35 * jitter) * (-3.0 * f).exp() + 0.12 + 0.1 * shimmer;
+            let lit = level * span * 2.0;
+            let mut r = m1;
+            let mut i = 0.0;
+            while r >= m0 {
+                let g = if lit >= 2.0 * i + 2.0 {
+                    '█'
+                } else if lit >= 2.0 * i + 1.0 {
+                    '▄'
+                } else {
+                    '·'
+                };
+                pen.put(x, r, g);
+                r -= 1.0;
+                i += 1.0;
+            }
+        }
+        // The crossfader, swept from deck to deck.
+        let cr = y1 - 2.0;
+        let mut c = a;
+        while c <= b {
+            pen.put(c, cr, '─');
+            c += 1.0;
+        }
+        let at = (a + (b - a) * (0.5 + 0.45 * (t * TAU_XF).sin())).round();
+        pen.words(at - 1.0, cr, "▐█▌");
+    }
+}
+
+/// Radians a second of the crossfader's sweep: once across and back in 24 s.
+const TAU_XF: f64 = 2.0 * PI / 24.0;
+
+struct Scene {
+    cols: usize,
+    rows: usize,
+    decks: Vec<(f64, Deck)>,
+    mixer: Option<Mixer>,
+}
+
+impl Scene {
+    fn frame(&self, t: f64, out: &mut [Cell]) {
+        out.fill(RAMP[0]);
+        let mut pen = Pen {
+            out,
+            cols: self.cols,
+            rows: self.rows,
+        };
+        for (_, deck) in &self.decks {
+            deck.record(t, &mut pen);
+        }
+
+        // The plinth, its start and speed buttons, and the pitch slider.
+        pen.plinth();
+        for (ox, deck) in &self.decks {
+            deck.furniture(*ox, &mut pen);
+        }
+        if let Some(m) = &self.mixer {
+            m.draw(t, &mut pen);
+        }
+    }
+}
+
+pub struct Vinyl(Scene);
+
+impl Piece for Vinyl {
+    const NAME: &'static str = "vinyl";
+    const COLS: usize = COLS;
+    const ROWS: usize = ROWS;
+    const FPS: u32 = 24;
+    const CELL: usize = 2;
+    const PALETTE: &'static [u32] = &[hex("#ffb347")];
+    const GROUND: u32 = 0;
+
+    fn new() -> Self {
+        Self(Scene {
+            cols: COLS,
+            rows: ROWS,
+            decks: vec![(0.0, Deck::new(COLS, ROWS, &ORIGINAL))],
+            mixer: None,
+        })
+    }
+
+    fn frame(&mut self, t: f64, out: &mut [Cell]) {
+        self.0.frame(t, out);
+    }
+}
+
+pub struct VinylWide(Scene);
+
+impl Canvas for VinylWide {
+    const NAME: &'static str = "vinyl-wide";
+    const FPS: u32 = Vinyl::FPS;
+    const PALETTE: &'static [u32] = Vinyl::PALETTE;
+
+    /// Two decks as tall as the panel allows, so long as two of them and a
+    /// mixer at least `MIX` wide still fit across it.
+    fn new(cols: usize, rows: usize) -> Self {
+        const MIX: f64 = 22.0;
+        let (w, h) = (cols as f64, rows as f64);
+        let s = (h / ROWS as f64)
+            .min((w - MIX - 2.0 * (ARM + 1.0)) / (2.0 * (CX + 2.0 * R)))
+            .max(0.25);
+        let dw = (CX + 2.0 * R) * s + ARM + 1.0;
+        let right = (w - dw).floor();
+        let deck = |ox: f64, rate: f64, dust: f64, pitch: i64| {
+            let spec = Spec {
+                ox,
+                s,
+                rate,
+                dust,
+                pitch,
+            };
+            (ox, Deck::new(cols, rows, &spec))
+        };
+        let (x0, x1) = (dw.floor(), right - 1.0);
+        Self(Scene {
+            cols,
+            rows,
+            decks: vec![deck(0.0, 1.0, 0.0, 0), deck(right, 1.02, PI, 1)],
+            mixer: (x1 - x0 >= 10.0 && rows >= 16).then_some(Mixer {
+                x0,
+                x1,
+                y1: h - 2.0,
+            }),
+        })
+    }
+
+    fn frame(&mut self, t: f64, out: &mut [Cell]) {
+        self.0.frame(t, out);
     }
 }

@@ -74,7 +74,7 @@ macro_rules! each_piece {
             taj_dawn::{TajDawn, #[no_upstream] TajDawnWide},
             tv_static::{TvStatic, #[fill] TvStaticWide},
             varanasi_ghats::{VaranasiGhats, #[no_upstream] VaranasiGhatsWide},
-            vinyl::{Vinyl},
+            vinyl::{Vinyl, #[fill] VinylWide},
         }
     };
 }
