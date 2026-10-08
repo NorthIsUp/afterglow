@@ -1,6 +1,6 @@
 # `speeder`
 
-A first-person speeder-bike chase through the forest moon — enormous redwood trunks rush past at parallax while the bike weaves between them on two incommensurate sines, dappled canopy light streams over the mossy floor, and every so often a fallen trunk sweeps up out of frame to be ducked under or another bike flashes across the view. One spawn in twenty is aimed at where the camera WILL be, so the near misses are deliberate; a trunk moving too fast for the eye to hold an edge on is stippled rather than solid. Its grid is SQUARE, so all of the perspective is in cells and `SAVER_PIXEL_ASPECT` corrects it for free — the opposite choice to `warp`'s.
+A first-person speeder-bike chase through the forest moon — enormous redwood trunks rush past at parallax while the bike weaves between them on two incommensurate sines, dappled canopy light streams over the mossy floor, and every so often a fallen trunk sweeps up out of frame to be ducked under or another bike flashes across the view. One spawn in twenty is aimed at where the camera WILL be, so the near misses are deliberate; a trunk moving too fast for the eye to hold an edge on is stippled rather than solid. Bark grain is painted in the trunk's own metres, so it slides and swells with its trunk; a trunk too far off to resolve the grain is drawn plain rather than shimmering. Its grid is SQUARE, so all of the perspective is in cells and `SAVER_PIXEL_ASPECT` corrects it for free — the opposite choice to `warp`'s.
 
 Source: [`src/speeder.rs`](../../src/speeder.rs).
 

@@ -11,7 +11,9 @@
 //! do graze the frame rather than happening to. A trunk whose screen position
 //! moved more than `blur_cols` in a frame is stamped in `SHADE` rather than
 //! `SOLID`, which is the stipple that reads as motion blur at the edges, where
-//! the parallax is fastest.
+//! the parallax is fastest. That stipple is the one screen-space texture here:
+//! bark grain, floor and canopy are all sampled in the world, so they move
+//! with what they are painted on.
 //!
 //! # Geometry lives in CELLS, which is the aspect correction
 //!
@@ -159,6 +161,10 @@ const TILE_M: f32 = TILE as f32 / TILE_PER_M;
 /// Frequency multiplier for the floor's undergrowth sample. Not an integer, so
 /// the fern texture never lines up with the pool of light lying over it.
 const DETAIL: f32 = 6.3;
+
+/// Bark: furrow strips across a trunk's diameter, and metres per fibre.
+const BARK_STRIPS: f32 = 24.0;
+const BARK_SEG: f32 = 0.9;
 
 /// Rows either side of the eye line that are pure mist. Two of them on the real
 /// panel: a row next to the horizon is hundreds of metres of forest, and there
@@ -565,7 +571,15 @@ impl Speeder {
             .clamp(1.0, self.rows as f32 * 0.14)
             .min((base - top) * 0.35);
         let seed = self.tseed[i];
+        // Bark lives on the trunk: columns are metres across it, rows metres up
+        // it, so the grain slides and swells with the trunk. Strips are a
+        // fixed share of the diameter; once one is narrower than a cell and a
+        // half it would alias into shimmer, so a distant trunk goes plain.
+        let m_per_cell = z / self.focal;
+        let per_strip = m_per_cell * BARK_STRIPS / (2.0 * self.tr[i]);
+        let textured = 2.0 * half / BARK_STRIPS >= 1.5;
         for r in r0..r1 {
+            let seg = (CAM_H + (self.horizon - r as f32 - 0.5) * m_per_cell) / BARK_SEG;
             let up = base - r as f32;
             let hw = if up < flare {
                 half * (1.0 + 0.45 * (1.0 - up / flare))
@@ -586,8 +600,7 @@ impl Speeder {
                 };
                 // Bark grain: without it a near trunk is a flat bar the width
                 // of the panel.
-                let mut h = seed ^ (r as u32).wrapping_mul(0x9E37_79B9) ^ (c as u32);
-                let grain = next_rand(&mut h) & 7 == 0;
+                let grain = textured && Self::grain(seed, (c as f32 + 0.5 - sx) * per_strip, seg);
                 let glyph = if blur || grain {
                     font::SHADE
                 } else {
@@ -597,6 +610,17 @@ impl Speeder {
                     .set(r * self.cols + c, Cell::new(glyph, ramp + shade));
             }
         }
+    }
+
+    /// Whether the bark at `u` strips across and `seg` segments up is a
+    /// furrow. Segments are staggered per strip so the grain runs in vertical
+    /// fibres rather than a brick wall.
+    #[inline]
+    fn grain(seed: u32, u: f32, seg: f32) -> bool {
+        let h = seed ^ (u.floor() as i32 as u32).wrapping_mul(0x9E37_79B9);
+        let stagger = (h >> 8 & 0xFF) as f32 / 256.0;
+        let mut h = h ^ ((seg + stagger).floor() as i32 as u32).wrapping_mul(0x85EB_CA6B);
+        next_rand(&mut h) & 3 == 0
     }
 
     fn paint_log(&mut self) {
@@ -875,8 +899,8 @@ mod tests {
             "nothing was ever aimed at the camera's path (closest {closest:.2} m)"
         );
         assert!(blurred > 500, "trunks never blurred past ({blurred})");
-        // And the blur has to reach the PANEL. Bark grain stipples about an
-        // eighth of a trunk's cells; a frame where most of the bark on screen
+        // And the blur has to reach the PANEL. Bark grain stipples about a
+        // quarter of a near trunk's cells; a frame where most of the bark on screen
         // is stipple is a trunk being smeared by its own parallax, and nothing
         // else in this saver can produce one.
         assert!(
@@ -1034,6 +1058,51 @@ mod tests {
         assert!(
             moved > 10 * s.cols,
             "the light barely moved over the floor ({moved})"
+        );
+    }
+
+    /// The bark belongs to the trunk. Slide the camera so one trunk moves an
+    /// exact number of columns and its grain has to come along cell for cell;
+    /// grain hashed from screen cells stays where it was, and matches the moved
+    /// trunk only by chance, three cells in four.
+    #[test]
+    fn the_bark_travels_with_its_trunk() {
+        let mut s = speeder(100);
+        let k = 7;
+        // Every other trunk out of frame, so only trunk 0 is painted.
+        s.tx.iter_mut().for_each(|x| *x = 1e4);
+        (s.tx[0], s.tz[0], s.tr[0]) = (0.0, 6.0, 2.0);
+        let paint = |s: &mut Speeder, cam_x: f32| {
+            s.cam_x = cam_x;
+            s.prev_sx[0] = f32::NAN;
+            s.paint_background();
+            s.paint_trunk(0);
+            s.grid.settle();
+            s.grid.cells().to_vec()
+        };
+        let a = paint(&mut s, 0.0);
+        let shift = k as f32 * s.tz[0] / s.focal;
+        let b = paint(&mut s, shift);
+        let (mut same, mut total, mut stippled) = (0, 0, 0);
+        // Above the flare, and clear of the trunk's edges by more than `k`.
+        let sx = s.cx as usize;
+        let half = (s.tr[0] * s.focal / s.tz[0]) as usize;
+        for r in 0..s.rows / 2 {
+            for c in sx - half + k + 2..sx + half - 2 {
+                let (now, was) = (b[r * s.cols + c - k], a[r * s.cols + c]);
+                assert_eq!(material(was.colour()), "trunk");
+                total += 1;
+                same += usize::from(now == was);
+                stippled += usize::from(was.glyph() == font::SHADE as usize);
+            }
+        }
+        assert!(
+            stippled * 20 > total,
+            "a near trunk has no grain ({stippled}/{total})"
+        );
+        assert!(
+            same * 100 >= total * 99,
+            "the bark stayed on the screen while the trunk moved ({same}/{total})"
         );
     }
 
