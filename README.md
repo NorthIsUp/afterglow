@@ -980,6 +980,15 @@ ASCII_REST_GOLDEN=/tmp/golden cargo test --release ascii_rest -- --ignored --noc
 
 Cost: night-coast measures 2.3x matrix per panel frame, plasma 1.0x.
 
+**-wide variants** are scenes recomposed for a 320x100 canvas, 3.2:1, so they
+fill pine's glass with nothing cropped. Upstream has no wide pieces, so they have
+no golden; the originals stay untouched.
+
+- `kyoto-dusk-wide` — a temple hall beside the pagoda, hills rising further east.
+- `marine-drive-wide` — a longer necklace and skyline, a liner and a fishing boat past the point.
+- `misty-forest-wide` — the ridges and fog run on west; a young pine between the two framing giants.
+- `night-coast-wide` — a wider sea out to a low far shore with two hummocks; the beam reaches further.
+
 ## Gotchas
 
 - **The mirror looks perfect while the panel is wrong** — the mirror publishes `saver.grid().cells()`, the frame we just _wrote_, not a read-back of the scanout. Anything that clobbers the panel downstream of that write (fbcon, another DRM client) is invisible to it, which is why it sat green for four days while the monitor showed console text. Fix: trust the mirror for "is the renderer running", never for "is this what the screen shows".
