@@ -271,6 +271,15 @@ pub fn help(key: &str) -> Option<&'static str> {
         "MAZE_CUT" => "per cent of the corridor lattice cut away; more is longer walls",
         "MAZE_LIVES" => "lives each game starts with",
         "MAZE_BONUS" => "points per extra life; 0 is none",
+        "MICROPOLIS_VIEW_PCT" => "share of the map in view along the panel's tighter axis",
+        "MICROPOLIS_PAN" => "camera drift over the city, in panel pixels a second; 0 holds still",
+        "MICROPOLIS_HUD" => "the city's name, population, date and funds in a corner",
+        "MICROPOLIS_YEAR_SECS" => "seconds of wall clock per city year",
+        "MICROPOLIS_CITY_MINS" => "minutes before the next city; 0 keeps this one forever",
+        "MICROPOLIS_DISASTER_MINS" => {
+            "mean minutes between a fire, flood or earthquake; 0 for none"
+        }
+        "MICROPOLIS_BUNDLED_PCT" => "chance a new city is one of the release's sample cities",
         k if k.ends_with("_SEED") => "0 rolls a new one every build; anything else pins it",
         k if k.ends_with("_CELL_W") || k.ends_with("_CELL_H") || k.ends_with("_CELL") => {
             "cell size in framebuffer pixels"

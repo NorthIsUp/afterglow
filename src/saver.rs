@@ -20,6 +20,8 @@ use crate::lissajous::Lissajous;
 use crate::marble::Marble;
 use crate::matrix::Matrix;
 use crate::maze::MazeChase;
+#[cfg(feature = "micropolis")]
+use crate::micropolis::Micropolis;
 use crate::mirror::{self, Mirror};
 use crate::moire::Moire;
 use crate::plasma::Plasma;
@@ -132,6 +134,8 @@ macro_rules! savers {
         ("maze-chase", |p, fps| Box::new(MazeChase::new(p, fps))),
         #[cfg(feature = "doom")]
         ("doom", |p, fps| Box::new(Doom::new(p, fps))),
+        #[cfg(feature = "micropolis")]
+        ("micropolis", |p, fps| Box::new(Micropolis::new(p, fps))),
             $((
                 crate::ascii_rest::$sm::$st::NAME,
                 crate::ascii_rest::Play::<crate::ascii_rest::$sm::$st>::build,
@@ -196,6 +200,8 @@ const SECTIONS: &[(&str, usize)] = &[
     ("maze-chase", 2),
     #[cfg(feature = "doom")]
     ("doom", 2),
+    #[cfg(feature = "micropolis")]
+    ("micropolis", 4),
 ];
 
 /// Index into `GROUPS` of a row. A table walk, so for the HTTP thread and the
