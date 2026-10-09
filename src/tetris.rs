@@ -193,20 +193,13 @@ impl Tetris {
     fn label(&mut self, x: usize, y: usize, text: &[u8], colour: u16) {
         let sc = self.s;
         let c = Cell::new(font::SOLID, colour);
-        for (i, &ch) in text.iter().enumerate() {
-            for (py, row) in arcade::glyph3(ch).iter().enumerate() {
-                for px in 0..3 {
-                    if row & (4 >> px) == 0 {
-                        continue;
-                    }
-                    for dy in 0..sc {
-                        for dx in 0..sc {
-                            self.put(x + (i * 4 + px) * sc + dx, y + py * sc + dy, c);
-                        }
-                    }
+        arcade::each_pixel(text, |px, py| {
+            for dy in 0..sc {
+                for dx in 0..sc {
+                    self.put(x + px * sc + dx, y + py * sc + dy, c);
                 }
             }
-        }
+        });
     }
 
     fn number(&mut self, x: usize, y: usize, w: usize, v: u64, colour: u16) {

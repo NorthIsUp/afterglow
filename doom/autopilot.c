@@ -57,12 +57,19 @@ int ap_hops;
 enum kind { K_NONE, K_HEALTH, K_ITEM, K_EXIT, K_KEY, K_OPENER, K_SECRET, K_SWITCH, K_EXPLORE, K_HUNT, K_TRIGGER };
 enum act { A_TOUCH, A_USE, A_CROSS, A_SHOOT };
 
-static struct {
+typedef struct {
     enum kind kind;
     enum act act;
-    int cell, line, sector;
+    int cell, line, sector, d;
     mobj_t *thing;
-    fixed_t x, y;  // where to stand, or what to touch
+    fixed_t x, y;
+} cand_t;
+
+// What no errand looks like; offer() fills one in only nearer than `d`.
+static const cand_t NO_CAND = {K_NONE, A_TOUCH, -1, -1, -1, NAV_FAR, NULL, 0, 0};
+
+static struct {
+    cand_t c;  // c.x, c.y: where to stand, or what to touch
     int since, sub, budget;
     int side;  // for a walk-over line, the side the player set out from
 } job;
@@ -113,7 +120,7 @@ static void level_start(void) {
     memset(sec_ban, 0, numsectors);
     memset(seen, 0, nav_w * nav_h);
     nbanned = plen = pi = 0;
-    job.kind = K_NONE;
+    job.c.kind = K_NONE;
     replan_at = noprog = moved_at = hopped_at = jiggle = use_wait = waited = ride_until = 0;
     best_d = NAV_FAR;
 }
@@ -204,14 +211,6 @@ static int pickup_cell(mobj_t *m) {
 
 // ---- choosing an errand ----
 
-typedef struct {
-    enum kind kind;
-    enum act act;
-    int cell, line, sector, d;
-    mobj_t *thing;
-    fixed_t x, y;
-} cand_t;
-
 static void offer(cand_t *best, enum kind k, enum act a, int cell, fixed_t x, fixed_t y) {
     int d = nav_dist(cell);
     if (d >= best->d) return;
@@ -244,9 +243,7 @@ static int shot_clear(fixed_t x, fixed_t y, line_t *l) {
 static int crossable(line_t *l, int side) {
     if (!l->backsector || (l->flags & ML_BLOCKING)) return 0;
     sector_t *from = side ? l->backsector : l->frontsector, *to = side ? l->frontsector : l->backsector;
-    fixed_t top = from->ceilingheight < to->ceilingheight ? from->ceilingheight : to->ceilingheight;
-    fixed_t bot = from->floorheight > to->floorheight ? from->floorheight : to->floorheight;
-    return to->floorheight - from->floorheight <= 24 * FRACUNIT && top - bot >= 56 * FRACUNIT;
+    return nav_can_step(from->floorheight, from->ceilingheight, to->floorheight, to->ceilingheight);
 }
 
 // The best place to stand to press line l (side 0, its front), to walk over
@@ -286,21 +283,11 @@ static void offer_line(cand_t *best, enum kind k, int li, enum act act) {
         }
 }
 
-static int tier(enum kind k) {
-    switch (k) {
-    case K_HEALTH: return 0;
-    case K_ITEM: return 1;
-    case K_EXIT: return 2;
-    case K_KEY: return 3;
-    case K_OPENER: return 4;
-    case K_SECRET: return 5;
-    case K_SWITCH: return 6;
-    case K_EXPLORE: return 7;
-    case K_HUNT: return 8;
-    case K_TRIGGER: return 9;
-    default: return 10;
-    }
-}
+// enum kind is declared in priority order; no errand ranks below them all.
+static int tier(enum kind k) { return k == K_NONE ? K_TRIGGER + 1 : k; }
+
+// How an exit line is set off: walked over or pressed.
+static enum act exit_act(int special) { return fx_trigger(special) == FX_WALK ? A_CROSS : A_USE; }
 
 // ---- what a line would open ----
 
@@ -356,8 +343,8 @@ static int exit_reachable(void) {
     for (int i = 0; i < numlines; i++) {
         int s = lines[i].special;
         if (ap_is_exit(s) != 1) continue;
-        cand_t e = {K_NONE, A_TOUCH, -1, -1, -1, NAV_FAR, NULL, 0, 0};
-        offer_line(&e, K_EXIT, i, s == 52 ? A_CROSS : A_USE);
+        cand_t e = NO_CAND;
+        offer_line(&e, K_EXIT, i, exit_act(s));
         if (e.d < NAV_FAR) return 1;
     }
     return 0;
@@ -437,7 +424,7 @@ static void pick_lines(cand_t *to_exit, cand_t *to_key, cand_t *opens, cand_t *r
 }
 
 static void set_job(const cand_t *c, int sub) {
-    if (c->kind != job.kind || c->cell != job.cell || c->line != job.line) {
+    if (c->kind != job.c.kind || c->cell != job.c.cell || c->line != job.c.line) {
         job.since = leveltime;
         use_wait = 0;
         // A far errand gets the time its walk takes, at a fighting pace.
@@ -445,17 +432,10 @@ static void set_job(const cand_t *c, int sub) {
         noprog = 0;
         best_d = NAV_FAR;
     }
-    job.kind = c->kind;
-    job.act = c->act;
-    job.cell = c->cell;
-    job.line = c->line;
-    job.sector = c->sector;
-    job.thing = c->thing;
-    job.x = c->x;
-    job.y = c->y;
+    job.c = *c;
     job.sub = sub;
-    job.side = job.act == A_CROSS && job.line >= 0 ? P_PointOnLineSide(job.x, job.y, &lines[job.line]) : -1;
-    plen = job.kind == K_NONE ? 0 : nav_path(job.cell, path, PATH_MAX_CELLS);
+    job.side = job.c.act == A_CROSS && job.c.line >= 0 ? P_PointOnLineSide(job.c.x, job.c.y, &lines[job.c.line]) : -1;
+    plen = job.c.kind == K_NONE ? 0 : nav_path(job.c.cell, path, PATH_MAX_CELLS);
     pi = 0;
     noprog = 0;
     best_d = NAV_FAR;
@@ -467,7 +447,7 @@ static void choose(player_t *p) {
     int here = nav_cell(me->x, me->y);
     nav_moved();
     nav_flood(here, p);
-    cand_t c = {K_NONE, A_TOUCH, -1, -1, -1, NAV_FAR, NULL, 0, 0};
+    cand_t c = NO_CAND;
 
     // Fetch: health when it matters, otherwise what is in sight and close.
     for (thinker_t *t = thinkercap.next; t != &thinkercap; t = t->next) {
@@ -482,22 +462,20 @@ static void choose(player_t *p) {
         }
     }
 
-    cand_t exit = {K_NONE, A_TOUCH, -1, -1, -1, NAV_FAR, NULL, 0, 0};
-    cand_t secret = exit, key = exit, explore = exit, hunt = exit;
-    cand_t to_exit = exit, to_key = exit, opens = exit, rest = exit;
+    cand_t exit = NO_CAND, secret = NO_CAND, key = NO_CAND, explore = NO_CAND, hunt = NO_CAND;
+    cand_t to_exit = NO_CAND, to_key = NO_CAND, opens = NO_CAND, rest = NO_CAND;
     nlcand = 0;
     for (int i = 0; i < numlines; i++) {
         int s = lines[i].special;
         if (!s || line_ban[i] >= BANNED) continue;
         int ex = ap_is_exit(s), act;
         if (ex) {
-            cand_t e = exit;
-            e.d = NAV_FAR;
-            offer_line(&e, K_EXIT, i, s == 52 || s == 124 ? A_CROSS : A_USE);
+            cand_t e = NO_CAND;
+            offer_line(&e, K_EXIT, i, exit_act(s));
             if (ex == 2) e.d += 2000;  // the secret exit only when it is far nearer
             if (e.d < exit.d) exit = e;
         } else if ((act = line_act(p, i)) >= 0) {
-            cand_t l = exit;
+            cand_t l = NO_CAND;
             offer_line(&l, K_TRIGGER, i, (enum act)act);
             if (l.d < NAV_FAR) add_line_cand(&l);
         }
@@ -559,11 +537,11 @@ static void choose(player_t *p) {
     // Hold an errand that is still reachable unless something of a higher
     // order turns up, or the same order much nearer: flipping between
     // targets each second reads as dithering on screen.
-    int held = nav_dist(job.cell);
-    if (job.kind != K_NONE && held < NAV_FAR &&
-        (job.kind != c.kind ? tier(c.kind) >= tier(job.kind)
-                            : c.cell != job.cell && c.d * 10 > held * 6 && job.kind != K_ITEM && job.kind != K_HEALTH)) {
-        plen = nav_path(job.cell, path, PATH_MAX_CELLS);
+    int held = nav_dist(job.c.cell);
+    if (job.c.kind != K_NONE && held < NAV_FAR &&
+        (job.c.kind != c.kind ? tier(c.kind) >= tier(job.c.kind)
+                            : c.cell != job.c.cell && c.d * 10 > held * 6 && job.c.kind != K_ITEM && job.c.kind != K_HEALTH)) {
+        plen = nav_path(job.c.cell, path, PATH_MAX_CELLS);
         pi = 0;
         replan_at = leveltime + REPLAN_TICS;
         return;
@@ -571,20 +549,20 @@ static void choose(player_t *p) {
     set_job(&c, 0);
 #ifdef AP_TRACE
     printf("  t=%5.1f at %5d,%5d  job %d act %d line %d(sp %d) sec %d d=%d plen=%d exit=%d key=%d open=%d/%d/%d\n",
-           leveltime / 35.0, me->x >> FRACBITS, me->y >> FRACBITS, job.kind, job.act, job.line,
-           job.line >= 0 ? lines[job.line].special : 0, job.sector, c.d, plen, exit.d, key.d, to_exit.d, opens.d, rest.d);
+           leveltime / 35.0, me->x >> FRACBITS, me->y >> FRACBITS, job.c.kind, job.c.act, job.c.line,
+           job.c.line >= 0 ? lines[job.c.line].special : 0, job.c.sector, c.d, plen, exit.d, key.d, to_exit.d, opens.d, rest.d);
 #endif
 }
 
 static void drop_job(void) {
 #ifdef AP_TRACE
-    printf("  t=%5.1f drop job %d line %d\n", leveltime / 35.0, job.kind, job.line);
+    printf("  t=%5.1f drop job %d line %d\n", leveltime / 35.0, job.c.kind, job.c.line);
 #endif
-    if (job.thing) ban_thing(job.thing);
-    if (job.line >= 0) line_ban[job.line] = BANNED;
-    if (job.sector >= 0) sec_ban[job.sector] = BANNED;
-    if (job.kind == K_EXPLORE && job.cell >= 0) seen[job.cell] = 1;
-    job.kind = K_NONE;
+    if (job.c.thing) ban_thing(job.c.thing);
+    if (job.c.line >= 0) line_ban[job.c.line] = BANNED;
+    if (job.c.sector >= 0) sec_ban[job.c.sector] = BANNED;
+    if (job.c.kind == K_EXPLORE && job.c.cell >= 0) seen[job.c.cell] = 1;
+    job.c.kind = K_NONE;
     replan_at = 0;
 }
 
@@ -697,26 +675,26 @@ static void pick_weapon(player_t *p, fixed_t range) {
 // pressed or crossed.
 static int job_done(player_t *p) {
     mobj_t *me = p->mo;
-    switch (job.kind) {
+    switch (job.c.kind) {
     case K_ITEM: case K_HEALTH: case K_KEY:
-        if (!(job.thing->flags & MF_SPECIAL) || job.thing->thinker.function.acp1 != (actionf_p1)P_MobjThinker) return 1;
-        if (P_AproxDistance(me->x - job.x, me->y - job.y) < 20 * FRACUNIT) {
-            ban_thing(job.thing);  // standing on it and it stays: Doom will not let us take it
+        if (!(job.c.thing->flags & MF_SPECIAL) || job.c.thing->thinker.function.acp1 != (actionf_p1)P_MobjThinker) return 1;
+        if (P_AproxDistance(me->x - job.c.x, me->y - job.c.y) < 20 * FRACUNIT) {
+            ban_thing(job.c.thing);  // standing on it and it stays: Doom will not let us take it
             return 1;
         }
         return 0;
-    case K_SECRET: return sectors[job.sector].special != 9;
+    case K_SECRET: return sectors[job.c.sector].special != 9;
     case K_HUNT:
-        return job.thing->health <= 0 || job.thing->thinker.function.acp1 != (actionf_p1)P_MobjThinker ||
-               P_AproxDistance(me->x - job.thing->x, me->y - job.thing->y) < 128 * FRACUNIT;
-    case K_EXPLORE: return seen[job.cell];
+        return job.c.thing->health <= 0 || job.c.thing->thinker.function.acp1 != (actionf_p1)P_MobjThinker ||
+               P_AproxDistance(me->x - job.c.thing->x, me->y - job.c.thing->y) < 128 * FRACUNIT;
+    case K_EXPLORE: return seen[job.c.cell];
     default:
         // A repeatable walk-over line keeps its special: done once crossed.
-        if (job.act == A_CROSS && job.side >= 0 && fx_repeat(lines[job.line].special) &&
-            P_PointOnLineSide(me->x, me->y, &lines[job.line]) != job.side &&
-            P_AproxDistance(me->x - job.x, me->y - job.y) < 128 * FRACUNIT)
+        if (job.c.act == A_CROSS && job.side >= 0 && fx_repeat(lines[job.c.line].special) &&
+            P_PointOnLineSide(me->x, me->y, &lines[job.c.line]) != job.side &&
+            P_AproxDistance(me->x - job.c.x, me->y - job.c.y) < 128 * FRACUNIT)
             return 1;
-        return lines[job.line].special == 0;
+        return lines[job.c.line].special == 0;
     }
 }
 
@@ -754,43 +732,43 @@ static void hop(mobj_t *me) {
     ap_hops++;
 }
 
+// Three seconds at a line is enough: pressed, crossed or shot, or it never
+// will be. Either way try the next thing.
+static void give_up_line(void) {
+    if (++use_wait <= 3 * TIC) return;
+    use_wait = 0;
+    line_ban[job.c.line] = BANNED;
+    job.c.kind = K_NONE;
+    replan_at = 0;
+}
+
 // At the errand's spot: press its line, walk over it, or step on its thing.
 static void finish_job(ticcmd_t *cmd, mobj_t *me, angle_t *face, int *speed, angle_t *go) {
-    if (job.act == A_TOUCH || job.line < 0) {
-        *go = R_PointToAngle2(me->x, me->y, job.x, job.y);
+    if (job.c.act == A_TOUCH || job.c.line < 0) {
+        *go = R_PointToAngle2(me->x, me->y, job.c.x, job.c.y);
         *speed = 25;
         return;
     }
-    line_t *l = &lines[job.line];
+    line_t *l = &lines[job.c.line];
     fixed_t px, py;
     line_point(l, me->x, me->y, &px, &py);
-    if (job.act == A_SHOOT) {
+    if (job.c.act == A_SHOOT) {
         // A gun line: a bullet has only to cross it. Aim at its middle.
         pressing = shooting = 1;
         *face = R_PointToAngle2(me->x, me->y, l->v1->x + l->dx / 2, l->v1->y + l->dy / 2);
         *go = *face;
         *speed = 0;
         if (abs(angle_diff(*face, me->angle)) < 128) cmd->buttons |= BT_ATTACK;
-        if (++use_wait > 3 * TIC) {
-            use_wait = 0;
-            line_ban[job.line] = BANNED;
-            job.kind = K_NONE;
-            replan_at = 0;
-        }
+        give_up_line();
         return;
     }
-    if (job.act == A_USE) {
+    if (job.c.act == A_USE) {
         pressing = 1;
         *face = R_PointToAngle2(me->x, me->y, px, py);
         *go = *face;
         *speed = P_AproxDistance(px - me->x, py - me->y) > 40 * FRACUNIT ? 15 : 0;
         if (abs(angle_diff(*face, me->angle)) < 2048 && leveltime % 6 == 0) cmd->buttons |= BT_USE;
-        if (++use_wait > 3 * TIC) {
-            use_wait = 0;
-            line_ban[job.line] = BANNED;  // pressed, or it will not press: try the next thing
-            job.kind = K_NONE;
-            replan_at = 0;
-        }
+        give_up_line();
         return;
     }
     // Cross: aim through the line to the far side.
@@ -799,12 +777,7 @@ static void finish_job(ticcmd_t *cmd, mobj_t *me, angle_t *face, int *speed, ang
     fixed_t nx = FixedDiv(l->dy, len) * 48, ny = -FixedDiv(l->dx, len) * 48;
     *go = R_PointToAngle2(me->x, me->y, side ? px + nx : px - nx, side ? py + ny : py - ny);
     *speed = 30;
-    if (++use_wait > 3 * TIC) {
-        use_wait = 0;
-        line_ban[job.line] = BANNED;
-        job.kind = K_NONE;
-        replan_at = 0;
-    }
+    give_up_line();
 }
 
 void AP_Tick(ticcmd_t *cmd) {
@@ -834,28 +807,28 @@ void AP_Tick(ticcmd_t *cmd) {
         replan_at = 0;
     }
 
-    if (job.kind != K_NONE && job_done(p)) {
+    if (job.c.kind != K_NONE && job_done(p)) {
 #ifdef AP_TRACE
-        printf("  t=%5.1f done job %d line %d\n", leveltime / 35.0, job.kind, job.line);
+        printf("  t=%5.1f done job %d line %d\n", leveltime / 35.0, job.c.kind, job.c.line);
 #endif
-        if (job.line >= 0 && job.act != A_TOUCH) line_ban[job.line] = BANNED;
-        if (job.line >= 0 && ap_is_lift(lines[job.line].special)) ride_until = leveltime + 5 * TIC;
-        job.kind = K_NONE;
+        if (job.c.line >= 0 && job.c.act != A_TOUCH) line_ban[job.c.line] = BANNED;
+        if (job.c.line >= 0 && ap_is_lift(lines[job.c.line].special)) ride_until = leveltime + 5 * TIC;
+        job.c.kind = K_NONE;
         replan_at = 0;
     }
-    if (job.kind != K_NONE && leveltime - job.since > job.budget) drop_job();
-    if (job.kind != K_NONE && job.sub && leveltime >= replan_at) {
+    if (job.c.kind != K_NONE && leveltime - job.since > job.budget) drop_job();
+    if (job.c.kind != K_NONE && job.sub && leveltime >= replan_at) {
         // An errand on the way to the errand: keep it, just re-route.
         nav_flood(nav_cell(me->x, me->y), p);
-        plen = nav_path(job.cell, path, PATH_MAX_CELLS);
+        plen = nav_path(job.c.cell, path, PATH_MAX_CELLS);
         pi = 0;
         replan_at = leveltime + REPLAN_TICS;
         if (!plen) drop_job();
     }
-    if (job.kind == K_NONE || leveltime >= replan_at) {
-        use_wait = job.kind == K_NONE ? 0 : use_wait;
+    if (job.c.kind == K_NONE || leveltime >= replan_at) {
+        use_wait = job.c.kind == K_NONE ? 0 : use_wait;
         choose(p);
-        if (job.kind == K_NONE && leveltime - moved_at > 3 * TIC && leveltime - hopped_at > 20 * TIC) {
+        if (job.c.kind == K_NONE && leveltime - moved_at > 3 * TIC && leveltime - hopped_at > 20 * TIC) {
             // Nothing left it can reach: the way on is something it does not
             // model. Give the switches another go, from somewhere else.
             memset(line_ban, 0, numlines);
@@ -867,7 +840,7 @@ void AP_Tick(ticcmd_t *cmd) {
     angle_t go = me->angle, face;
     int speed = 0, use_line = -1;
     pressing = shooting = 0;
-    fixed_t tx = job.x, ty = job.y;
+    fixed_t tx = job.c.x, ty = job.c.y;
     int here = nav_cell(me->x, me->y);
     if (plen) {
         // Where the player is along the path; off it entirely means a fall
@@ -904,7 +877,7 @@ void AP_Tick(ticcmd_t *cmd) {
                     break;
                 }
             }
-            if (pi + 2 >= plen && clear_to(me, job.x, job.y)) tx = job.x, ty = job.y, via = -1;
+            if (pi + 2 >= plen && clear_to(me, job.c.x, job.c.y)) tx = job.c.x, ty = job.c.y, via = -1;
             if (noprog > TIC / 2) {
                 // Not yet at this cell's centre: go there first.
                 fixed_t cx, cy;
@@ -947,12 +920,12 @@ void AP_Tick(ticcmd_t *cmd) {
         } else if (!ap_is_use(l->special) || (d > 256 * FRACUNIT && P_PointOnLineSide(me->x, me->y, l) == 0)) {
             // The lift's switch is somewhere else, or it is a line to walk
             // over: go and press or cross that first.
-            cand_t c = {K_NONE, A_TOUCH, -1, -1, -1, NAV_FAR, NULL, 0, 0};
+            cand_t c = NO_CAND;
             offer_line(&c, K_SWITCH, use_line, ap_is_use(l->special) ? A_USE : A_CROSS);
             c.line = use_line;
             if (c.d < NAV_FAR && line_ban[use_line] < BANNED) set_job(&c, 1);
         }
-    } else if (at_end && job.kind != K_NONE) {
+    } else if (at_end && job.c.kind != K_NONE) {
         finish_job(cmd, me, &face, &speed, &go);
     }
 
@@ -969,9 +942,9 @@ void AP_Tick(ticcmd_t *cmd) {
         if (noprog > 3 * TIC) {
             if (pi + 1 < plen) nav_penalize(path[pi + 1]);
             // Three strikes against a line or a secret, one against a thing.
-            if (job.line >= 0 && ++line_ban[job.line] >= BANNED) drop_job();
-            else if (job.sector >= 0 && ++sec_ban[job.sector] >= BANNED) drop_job();
-            else if (job.line < 0 && job.sector < 0) drop_job();
+            if (job.c.line >= 0 && ++line_ban[job.c.line] >= BANNED) drop_job();
+            else if (job.c.sector >= 0 && ++sec_ban[job.c.sector] >= BANNED) drop_job();
+            else if (job.c.line < 0 && job.c.sector < 0) drop_job();
             replan_at = 0;
             noprog = 0;
             best_d = NAV_FAR;

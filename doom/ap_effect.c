@@ -47,9 +47,15 @@ static fixed_t *ofloor, *oceil, *ohigh;
 static unsigned char *movable;
 static int cap;
 
+typedef struct {
+    int trig;  // FX_*
+    int rep;   // repeatable
+    int act;   // X_*
+} effect_t;
+
 // The trigger and action of each special Doom has: walk (W), switch (S) or
 // gun (G), once (1) or repeatable (R).
-static void classify(int s, int *trig, int *rep, int *act) {
+static effect_t classify(int s) {
     int t = FX_WALK, r = 0, a = X_NONE;
     switch (s) {
     case 2: a = X_OPEN; break;
@@ -100,8 +106,7 @@ static void classify(int s, int *trig, int *rep, int *act) {
         case 21: case 122: a = X_LIFT; break;
         case 23: a = X_LO_FLOOR; break;
         case 29: case 111: a = X_TIMED; break;
-        case 41: a = X_SHUT; break;
-        case 50: case 113: a = X_SHUT; break;
+        case 41: case 50: case 113: a = X_SHUT; break;
         case 55: a = X_RAISE_CRUSH; break;
         case 71: a = X_TURBO; break;
         case 101: a = X_RAISE; break;
@@ -131,28 +136,22 @@ static void classify(int s, int *trig, int *rep, int *act) {
             }
         }
     }
-    *trig = t;
-    *rep = r;
-    *act = a;
+    return (effect_t){t, r, a};
 }
 
 int fx_trigger(int special) {
-    int t, r, a;
-    classify(special, &t, &r, &a);
-    return a == X_NONE ? 0 : t;
+    effect_t e = classify(special);
+    return e.act == X_NONE ? 0 : e.trig;
 }
 
-int fx_repeat(int special) {
-    int t, r, a;
-    classify(special, &t, &r, &a);
-    return r;
-}
+int fx_repeat(int special) { return classify(special).rep; }
 
 int fx_shuts(int special) {
-    int t, r, a;
-    classify(special, &t, &r, &a);
+    int a = classify(special).act;
     return a == X_SHUT || a == X_CEIL_FLOOR;
 }
+
+int ap_is_lift(int special) { return classify(special).act == X_LIFT; }
 
 static int on(int s) { return ogen[s] == ngen; }
 fixed_t fx_floor(int s) { return on(s) ? ofloor[s] : sectors[s].floorheight; }
@@ -174,22 +173,24 @@ static int other(line_t *l, int s) {
     return f == s ? b : f;
 }
 
-// mode 0: highest floor around, 1: lowest floor around (start at its own),
-// 2: lowest ceiling around, 3: highest ceiling around, 4: next floor above h.
-static fixed_t around(int s, int mode, fixed_t h) {
+// LO_FLOOR counts the sector's own floor; NEXT_FLOOR is the lowest above h.
+enum around { HI_FLOOR, LO_FLOOR, LO_CEIL, HI_CEIL, NEXT_FLOOR };
+
+static fixed_t around(int s, enum around mode, fixed_t h) {
     sector_t *S = &sectors[s];
-    fixed_t best = mode == 0 ? -500 * FRACUNIT : mode == 1 ? fx_floor(s) : mode == 2 ? INT32_MAX : mode == 3 ? 0 : h;
+    fixed_t best = mode == HI_FLOOR ? -500 * FRACUNIT : mode == LO_FLOOR ? fx_floor(s) : mode == LO_CEIL ? INT32_MAX
+                 : mode == HI_CEIL  ? 0 : h;
     int found = 0;
     for (int i = 0; i < S->linecount; i++) {
         int o = other(S->lines[i], s);
         if (o < 0) continue;
         fixed_t f = fx_floor(o), c = fx_ceil(o);
         switch (mode) {
-        case 0: if (f > best) best = f; break;
-        case 1: if (f < best) best = f; break;
-        case 2: if (c < best) best = c; break;
-        case 3: if (c > best) best = c; break;
-        default:
+        case HI_FLOOR: if (f > best) best = f; break;
+        case LO_FLOOR: if (f < best) best = f; break;
+        case LO_CEIL: if (c < best) best = c; break;
+        case HI_CEIL: if (c > best) best = c; break;
+        case NEXT_FLOOR:
             if (f > h && (!found || f < best)) best = f, found = 1;
             break;
         }
@@ -236,29 +237,29 @@ static int stairs(int s, fixed_t size) {
 static int act_on(int s, int a) {
     fixed_t f = fx_floor(s), c = fx_ceil(s), nf = f, nc = c;
     switch (a) {
-    case X_OPEN: case X_TIMED: nc = around(s, 2, 0) - 4 * FRACUNIT; break;
+    case X_OPEN: case X_TIMED: nc = around(s, LO_CEIL, 0) - 4 * FRACUNIT; break;
     case X_SHUT: nc = f; break;
     case X_CEIL_FLOOR: nc = f + 8 * FRACUNIT; break;
-    case X_CEIL_HI: nc = around(s, 3, 0); break;
-    case X_HI_FLOOR: nf = around(s, 0, 0); break;
-    case X_LO_FLOOR: nf = around(s, 1, 0); break;
+    case X_CEIL_HI: nc = around(s, HI_CEIL, 0); break;
+    case X_HI_FLOOR: nf = around(s, HI_FLOOR, 0); break;
+    case X_LO_FLOOR: nf = around(s, LO_FLOOR, 0); break;
     case X_LIFT:
         // Down and back up: both heights, for as long as the ride takes.
-        nf = around(s, 1, 0);
+        nf = around(s, LO_FLOOR, 0);
         if (nf == f) return 0;
         set(s, nf, c);
         ohigh[s] = f;
         return 1;
     case X_TURBO:
-        nf = around(s, 0, 0);
+        nf = around(s, HI_FLOOR, 0);
         if (nf != f) nf += 8 * FRACUNIT;
         break;
     case X_RAISE: case X_RAISE_CRUSH:
-        nf = around(s, 2, 0);
+        nf = around(s, LO_CEIL, 0);
         if (nf > c) nf = c;
         if (a == X_RAISE_CRUSH) nf -= 8 * FRACUNIT;
         break;
-    case X_NEXT: nf = around(s, 4, f); break;
+    case X_NEXT: nf = around(s, NEXT_FLOOR, f); break;
     case X_UP24: nf = f + 24 * FRACUNIT; break;
     case X_UP32: nf = f + 32 * FRACUNIT; break;
     case X_UP512: nf = f + 512 * FRACUNIT; break;
@@ -274,8 +275,7 @@ static int act_on(int s, int a) {
 
 int fx_push(int li) {
     line_t *l = &lines[li];
-    int t, r, a;
-    classify(l->special, &t, &r, &a);
+    int a = classify(l->special).act;
     if (a == X_NONE || a == X_EXIT || !l->tag) return 0;
     int n = 0;
     for (int s = -1; (s = P_FindSectorFromLineTag(l, s)) >= 0;)
@@ -299,8 +299,7 @@ void fx_build(void) {
     for (int i = 0; i < numsectors; i++) ogen[i] = 0, movable[i] = 0;
     for (int i = 0; i < numlines; i++) {
         line_t *l = &lines[i];
-        int t, r, a;
-        classify(l->special, &t, &r, &a);
+        int a = classify(l->special).act;
         if (a == X_NONE || a == X_EXIT || !l->tag) continue;
         for (int s = -1; (s = P_FindSectorFromLineTag(l, s)) >= 0;) {
             movable[s] = 1;

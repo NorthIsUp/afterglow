@@ -35,6 +35,8 @@ void nav_center(int c, fixed_t *x, fixed_t *y);
 // Where in cell c the player stands clear of walls: its centre, or near it.
 void nav_stand(int c, fixed_t *x, fixed_t *y);
 int nav_sector(int c);
+// The player can step from one floor and ceiling to the other as they stand.
+int nav_can_step(fixed_t from_floor, fixed_t from_ceil, fixed_t to_floor, fixed_t to_ceil);
 
 // Dijkstra from `start` over every cell the player can reach now, given its
 // keys: doors it can open and lifts it can call count as open.

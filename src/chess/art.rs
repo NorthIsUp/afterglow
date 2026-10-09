@@ -312,11 +312,26 @@ const TOP: usize = 3;
 
 /// Row `y` (`0..TEXT_H`) of `c`'s glyph, bit 7 the leftmost column.
 #[inline]
-pub fn glyph_row(c: u8, y: usize) -> u8 {
+fn glyph_row(c: u8, y: usize) -> u8 {
     let i = if (0x20..0x7f).contains(&c) {
         font::ASCII[(c - 0x20) as usize]
     } else {
         font::ASCII[(b'?' - 0x20) as usize]
     };
     font::GLYPHS[i as usize][TOP + y] << 1
+}
+
+/// Each lit pixel of `s` in the text face at scale 1, as `(x, y)`.
+#[inline]
+pub fn each_text_px(s: &[u8], mut f: impl FnMut(i32, i32)) {
+    for (n, &ch) in s.iter().enumerate() {
+        for gy in 0..TEXT_H {
+            let bits = glyph_row(ch, gy);
+            for bx in 0..ADVANCE {
+                if bits & (0x80 >> bx) != 0 {
+                    f((n * ADVANCE + bx) as i32, gy as i32);
+                }
+            }
+        }
+    }
 }

@@ -249,11 +249,11 @@ impl Scene {
     }
 }
 
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
+pub(super) fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-fn smooth(t: f32) -> f32 {
+pub(super) fn smooth(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }

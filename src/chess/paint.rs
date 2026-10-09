@@ -2,14 +2,16 @@
 //! changed, and the board, eval bar and side panel drawn onto it.
 
 use super::art::{
-    self, glyph_row, ink, mini_ink, shadow, square, Lit, Mini, Sprite, ACCENT, ADVANCE, BANNER, BG,
-    DIM, GOOD, PANEL, RULE, SPRITE, TEXT, TEXT_H,
+    self, ink, mini_ink, shadow, square, Lit, Mini, Sprite, ACCENT, ADVANCE, BANNER, BG, DIM, GOOD,
+    PANEL, RULE, SPRITE, TEXT, TEXT_H,
 };
+use super::fight::smooth;
 use super::fighters::Body;
 use super::game::{Game, Phase};
 use super::rules::{kind, side, Move, CASTLE};
 use super::search::MATE;
 use super::Layout;
+use crate::arcade;
 use crate::font;
 use crate::grid::{Cell, Grid};
 use crate::surface::Surface;
@@ -72,18 +74,9 @@ impl Canvas {
 
     /// `s` at `scale`, top-left at `x, y`; returns the width drawn.
     pub fn text(&mut self, x: i32, y: i32, s: &[u8], c: u16, scale: i32) -> i32 {
-        for (n, &ch) in s.iter().enumerate() {
-            let gx = x + (n * ADVANCE) as i32 * scale;
-            for gy in 0..TEXT_H {
-                let bits = glyph_row(ch, gy);
-                for bx in 0..ADVANCE {
-                    if bits & (0x80 >> bx) != 0 {
-                        let (px, py) = (gx + bx as i32 * scale, y + gy as i32 * scale);
-                        self.rect(px, py, scale, scale, c);
-                    }
-                }
-            }
-        }
+        art::each_text_px(s, |gx, gy| {
+            self.rect(x + gx * scale, y + gy * scale, scale, scale, c);
+        });
         (s.len() * ADVANCE) as i32 * scale
     }
 
@@ -112,20 +105,6 @@ impl Canvas {
     }
 }
 
-/// Glyphs for a number, into `buf`; returns the used tail.
-pub fn digits(mut n: u32, buf: &mut [u8; 10]) -> &[u8] {
-    let mut i = buf.len();
-    loop {
-        i -= 1;
-        buf[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-        if n == 0 || i == 0 {
-            break;
-        }
-    }
-    &buf[i..]
-}
-
 /// `+1.25`, `-0.40`, `#3`, `-#2` for White's score.
 fn eval_text(score: i32, buf: &mut [u8; 12]) -> &[u8] {
     let mut n = 0;
@@ -143,14 +122,14 @@ fn eval_text(score: i32, buf: &mut [u8; 12]) -> &[u8] {
         }
         let moves = ((MATE - score.abs()) as u32).div_ceil(2).max(1);
         let mut d = [0u8; 10];
-        for &c in digits(moves, &mut d) {
+        for &c in arcade::decimal(u64::from(moves), &mut d, 10) {
             push(c, &mut n);
         }
     } else {
         push(if score < 0 { b'-' } else { b'+' }, &mut n);
         let cp = score.unsigned_abs().min(9999);
         let mut d = [0u8; 10];
-        for &c in digits(cp / 100, &mut d) {
+        for &c in arcade::decimal(u64::from(cp / 100), &mut d, 10) {
             push(c, &mut n);
         }
         push(b'.', &mut n);
@@ -227,8 +206,7 @@ fn gliders(m: Move) -> [(u8, u8); 2] {
 }
 
 fn ease(t: u32, n: u32) -> f32 {
-    let x = (t + 1) as f32 / n.max(1) as f32;
-    x * x * (3.0 - 2.0 * x)
+    smooth((t + 1) as f32 / n.max(1) as f32)
 }
 
 pub struct Painter<'a> {
@@ -282,7 +260,7 @@ impl Painter<'_> {
 
     /// Where a glider's sprite is at step `t`.
     fn glider_xy(&self, from: u8, to: u8, t: u32) -> (i32, i32) {
-        let e = ease(t, self.l.glide);
+        let e = ease(t, self.g.pace.glide);
         let (ax, ay) = self.l.sprite_xy(from);
         let (bx, by) = self.l.sprite_xy(to);
         let x = ax + ((bx - ax) as f32 * e).round() as i32;
@@ -435,7 +413,7 @@ impl Painter<'_> {
         if to_move {
             if let Some((depth, _)) = self.g.progress() {
                 let mut b = [0u8; 10];
-                let ds = digits(u32::from(depth), &mut b);
+                let ds = arcade::decimal(u64::from(depth), &mut b, 10);
                 let mut label = [b'd', 0, 0, 0];
                 let n = ds.len().min(3);
                 label[1..=n].copy_from_slice(&ds[..n]);
@@ -446,7 +424,7 @@ impl Painter<'_> {
             }
             let thinking = matches!(self.g.phase, Phase::Think { .. });
             for i in 0..3u64 {
-                let on = thinking && (now / (self.l.fps / 6).max(1)) % 3 == i;
+                let on = thinking && (now / (self.g.pace.fps / 6).max(1)) % 3 == i;
                 let c = if on {
                     GOOD
                 } else if thinking {
@@ -457,7 +435,7 @@ impl Painter<'_> {
                 self.c.rect(x + w - 16 + i as i32 * 6, y + 5, 3, 3, c);
             }
             let elapsed = now.saturating_sub(self.g.think_from);
-            let full = (self.l.think_frames).max(1);
+            let full = self.g.pace.think_frames();
             let bw = ((w as u64 * elapsed.min(full)) / full) as i32;
             let c = if thinking { GOOD } else { PANEL };
             self.c.rect(x, y + TEXT_H as i32 + 2, bw, 1, c);
@@ -469,12 +447,12 @@ impl Painter<'_> {
         let them = sd ^ 1;
         let z = self.l.k;
         let mut px = x;
-        let mut material = [0i32; 2];
-        for (who, m) in material.iter_mut().enumerate() {
-            for k in 1..6 {
-                *m += i32::from(self.g.taken[who][k]) * [0, 1, 3, 3, 5, 9][k];
-            }
-        }
+        let material = self.g.taken.map(|t| {
+            t.iter()
+                .zip(POINTS)
+                .map(|(&n, v)| i32::from(n) * v)
+                .sum::<i32>()
+        });
         let counts = &self.g.taken[sd];
         let n: i32 = counts[1..6].iter().map(|&c| i32::from(c)).sum();
         let kinds = counts[1..6].iter().filter(|&&c| c > 0).count() as i32;
@@ -502,7 +480,7 @@ impl Painter<'_> {
             }
             if grouped && count > 1 {
                 let mut b = [0u8; 10];
-                let ds = digits(u32::from(count), &mut b);
+                let ds = arcade::decimal(u64::from(count), &mut b, 10);
                 px += 2 * z;
                 px += self.c.text(px, ty, ds, DIM, 1);
             }
@@ -514,7 +492,7 @@ impl Painter<'_> {
         let lead = material[sd] - material[them];
         if lead > 0 {
             let mut b = [0u8; 10];
-            let ds = digits(lead as u32, &mut b);
+            let ds = arcade::decimal(lead as u64, &mut b, 10);
             let tx = px + 4;
             self.c.text(tx, ty, b"+", DIM, 1);
             self.c.text(tx + ADVANCE as i32, ty, ds, DIM, 1);
@@ -550,7 +528,7 @@ impl Painter<'_> {
                 continue;
             }
             let mut b = [0u8; 10];
-            let num = digits((r + 1) as u32, &mut b);
+            let num = arcade::decimal((r + 1) as u64, &mut b, 10);
             let nx = cx + (3 - num.len() as i32).max(0) * adv;
             self.c.text(nx, cy, num, DIM, 1);
             self.c.text(nx + num.len() as i32 * adv, cy, b".", DIM, 1);
@@ -588,6 +566,9 @@ impl Painter<'_> {
         self.c.rect(x, y, w, h, BG);
     }
 }
+
+/// The scoresheet's material count, by kind.
+const POINTS: [i32; 6] = [0, 1, 3, 3, 5, 9];
 
 const INK_LIGHT: u16 = art::INK[0][1];
 const INK_DARK: u16 = art::INK[1][1];

@@ -53,13 +53,10 @@ pub struct Layout {
     k: i32,
     ev: (i32, i32, i32, i32),
     info: (i32, i32, i32, i32),
-    glide: u32,
-    fps: u64,
-    think_frames: u64,
 }
 
 impl Layout {
-    fn new(slot: (i32, i32, i32, i32), pace: &Pace) -> Self {
+    fn new(slot: (i32, i32, i32, i32)) -> Self {
         let (x, y, w, h) = slot;
         let m = (w.min(h) / 48).max(2);
         let gap = (m / 2).max(2);
@@ -91,9 +88,6 @@ impl Layout {
             k: (sq / art::SPRITE as i32).max(1),
             ev: (bx + b + gap, by, ev_w, b),
             info,
-            glide: pace.glide,
-            fps: pace.fps,
-            think_frames: (pace.think.as_millis() as u64 * pace.fps / 1000).max(1),
         }
     }
 }
@@ -188,7 +182,7 @@ impl Chess {
                     let (y0, y1) = (rows * i / n as i32, rows * (i + 1) / n as i32);
                     (0, y0, cols, y1 - y0)
                 };
-                Layout::new(slot, &pace)
+                Layout::new(slot)
             })
             .collect();
         let theme0 = next_rand(&mut seed) as usize;
@@ -255,8 +249,6 @@ impl Saver for Chess {
             };
             if full {
                 p.clear();
-            }
-            if full {
                 *drawn = None;
             }
             if let Some(f) = &g.fight {
