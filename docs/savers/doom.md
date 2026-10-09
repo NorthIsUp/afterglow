@@ -51,8 +51,8 @@ Source: [`src/doom/`](../../src/doom/mod.rs),
 
 ## Knobs
 
-- `DOOM_HUD`: 1 draws the status bar centred over the view (default), 0 shows
-  the view alone.
+- `DOOM_HUD`: 0 shows the view alone (default), 1 draws the status bar centred
+  over it.
 - `DOOM_SKILL`: 1..5, from I'm Too Young To Die to Nightmare (default 3, Hurt
   Me Plenty). The mirror page shows it as a slider. A new skill applies from
   the next map.
