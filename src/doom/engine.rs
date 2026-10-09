@@ -27,7 +27,7 @@ const REBUILD: Duration = Duration::from_secs(1);
 
 extern "C" {
     fn dgx_init(wad: *const c_char, seed: u32) -> c_int;
-    fn dgx_view(width: c_int, pct: c_int, fov: c_int);
+    fn dgx_view(width: c_int, pct: c_int, fov: c_int, hud: c_int);
     fn dgx_warp(seed: u32, brightness: c_int) -> c_int;
     fn dgx_tick(ms: u32) -> c_int;
     fn dgx_frame(width: *mut c_int, palette: *mut c_int) -> *const u8;
@@ -61,6 +61,7 @@ pub struct Want {
     pub width: usize,
     pub view_pct: c_int,
     pub fov: c_int,
+    pub hud: c_int,
     pub map_every: Option<Duration>,
     pub light: c_int,
 }
@@ -196,7 +197,7 @@ impl Runner<'_> {
     fn apply(&mut self, w: &Want, fresh: bool) -> bool {
         // SAFETY (every call below): only this thread enters the engine, and
         // the pointers handed in outlive the call.
-        unsafe { dgx_view(w.width as c_int, w.view_pct, w.fov) };
+        unsafe { dgx_view(w.width as c_int, w.view_pct, w.fov, w.hud) };
         if !self.started {
             self.started = true;
             self.rng = w.seed;

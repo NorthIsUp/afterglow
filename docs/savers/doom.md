@@ -7,8 +7,8 @@ The screen is as wide as the panel's glass shape needs, and the view is Hor+
 widescreen in the manner of Crispy Doom: the vertical field of view stays
 classic Doom's, and the horizontal one grows with the width. That gives 90° at
 4:3 and about 106° at 16:9. On pine's 3.2:1 glass it would reach 135°, so it is
-capped at 120°. The status bar sits in the middle with the border flat on both
-sides of it. A switch to `doom` starts a new random map, and so does each
+capped at 120°. The view runs the full height of the screen, with the status
+bar drawn over it in the middle. A switch to `doom` starts a new random map, and so does each
 `DOOM_MAP_SECS` after that.
 
 **Only in the `-doom` image** (`ghcr.io/northisup/afterglow:latest-doom`,
@@ -51,6 +51,8 @@ Source: [`src/doom/`](../../src/doom/mod.rs),
 
 ## Knobs
 
+- `DOOM_HUD`: 1 draws the status bar centred over the view (default), 0 shows
+  the view alone.
 - `DOOM_WIDTH_PCT`: the share of the screen's width the game view takes, 0..100
   (default 100; 0 also means the whole width, and below 10 counts as 10). The
   rest is the border flat with Doom's bevel, and the status bar stays centred.

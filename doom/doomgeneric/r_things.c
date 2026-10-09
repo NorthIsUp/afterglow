@@ -34,6 +34,9 @@
 #include "r_local.h"
 
 #include "doomstat.h"
+#include "st_stuff.h"
+
+extern int dg_hud;
 
 
 
@@ -687,6 +690,10 @@ void R_DrawPSprite (pspdef_t* psp)
     vis = &avis;
     vis->mobjflags = 0;
     vis->texturemid = (BASEYCENTER<<FRACBITS)+FRACUNIT/2-(psp->sy-spritetopoffset[lump]);
+    /* afterglow: over a full-height view the status bar would cover the
+     * weapon, so it sits on the bar as it does in the classic layout. */
+    if (dg_hud && viewheight == SCREENHEIGHT)
+	vis->texturemid += ST_HEIGHT<<FRACBITS;
     vis->x1 = x1 < 0 ? 0 : x1;
     vis->x2 = x2 >= viewwidth ? viewwidth-1 : x2;	
     vis->scale = pspritescale<<detailshift;

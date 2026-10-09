@@ -19,6 +19,7 @@ fn knobs(fov: i32, pct: i32) -> Knobs {
         light: 1,
         fov,
         pct,
+        hud: 1,
         seed: 7,
     }
 }

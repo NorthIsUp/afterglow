@@ -32,7 +32,7 @@ static jmp_buf guard;
 static int guarded, dead;
 static uint32_t now_ms;
 static int light, started;
-extern int dg_viewpct, dg_fov;
+extern int dg_viewpct, dg_fov, dg_hud;
 extern int dg_palnum;
 
 // Every exit() in the engine (I_Error, I_Quit, -help paths) lands here via the
@@ -275,6 +275,14 @@ static void reset_autopilot(void) {
     }                               \
     guarded = 1
 
+// Full height: the view runs to the bottom of the screen and the status bar,
+// if any, is drawn over it (see dg_hud in d_main.c).
+static void apply_view(void) {
+    screenblocks = 11;
+    R_SetViewSize(screenblocks, detailLevel);
+    ST_Invalidate();
+}
+
 int dgx_init(const char *wad, uint32_t seed) {
     static char *argv[] = {"doom", "-iwad", NULL, "-config", "/dev/null", "-extraconfig", "/dev/null", "-skill", "3", NULL};
     GUARD(-1);
@@ -282,20 +290,20 @@ int dgx_init(const char *wad, uint32_t seed) {
     argv[2] = (char *)wad;
     doomgeneric_Create(9, argv);
     started = 1;
+    apply_view();
     guarded = 0;
     return 0;
 }
 
 // The screen is `width` x 200, the 3D view `pct` of that width with its
-// horizontal field of view `fov` degrees (0: Hor+). Before init or after.
-void dgx_view(int width, int pct, int fov) {
+// horizontal field of view `fov` degrees (0: Hor+), and `hud` 1 to overlay
+// the status bar. Before init or after.
+void dgx_view(int width, int pct, int fov, int hud) {
     dg_screenwidth = width < ORIGWIDTH ? ORIGWIDTH : width > MAXSCREENWIDTH ? MAXSCREENWIDTH : width;
     dg_viewpct = pct;
     dg_fov = fov;
-    if (started && !dead) {
-        R_SetViewSize(screenblocks, detailLevel);
-        ST_Invalidate();
-    }
+    dg_hud = hud;
+    if (started && !dead) apply_view();
 }
 
 // Returns the map as episode * 100 + map, or -1 if the engine has died.

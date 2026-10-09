@@ -166,6 +166,9 @@ extern  boolean setsizeneeded;
 extern  int             showMessages;
 void R_ExecuteSetViewSize (void);
 
+/* afterglow: 1 overlays the status bar on a full-height view, 0 hides it. */
+int dg_hud = 1;
+
 void D_Display (void)
 {
     static  boolean		viewactivestate = false;
@@ -242,6 +245,11 @@ void D_Display (void)
     // draw the view directly
     if (gamestate == GS_LEVEL && !automapactive && gametic)
     	R_RenderPlayerView (&players[displayplayer]);
+
+    /* afterglow: a full-height view leaves the status bar to be drawn over
+     * it, in full every frame since the view has just painted under it. */
+    if (gamestate == GS_LEVEL && gametic && dg_hud && viewheight == SCREENHEIGHT)
+    	ST_Drawer (false, true);
 
     if (gamestate == GS_LEVEL && gametic)
     	HU_Drawer ();

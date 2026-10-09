@@ -426,20 +426,6 @@ void ST_refreshBackground(void)
     {
         V_UseBuffer(st_backing_screen);
 
-        /* afterglow: tile the border flat beside the centred bar. */
-        if (WIDESCREENDELTA > 0)
-        {
-            byte *flat = W_CacheLumpName(DEH_String(gamemode == commercial
-                                                    ? "GRNROCK" : "FLOOR7_2"),
-                                         PU_CACHE);
-            int x, y;
-
-            for (y = 0; y < ST_HEIGHT; y++)
-                for (x = 0; x < SCREENWIDTH; x++)
-                    st_backing_screen[y * SCREENWIDTH + x] =
-                        flat[((y + ST_Y) & 63) * 64 + (x & 63)];
-        }
-
 	V_DrawPatch(ST_X, 0, sbar);
 
 	if (netgame)
@@ -447,8 +433,7 @@ void ST_refreshBackground(void)
 
         V_RestoreBuffer();
 
-	V_CopyRect(ST_X - WIDESCREENDELTA, 0, st_backing_screen, SCREENWIDTH,
-	           ST_HEIGHT, ST_X - WIDESCREENDELTA, ST_Y);
+	V_CopyRect(ST_X, 0, st_backing_screen, ST_WIDTH, ST_HEIGHT, ST_X, ST_Y);
     }
 
 }

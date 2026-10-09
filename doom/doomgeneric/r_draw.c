@@ -791,7 +791,7 @@ R_InitBuffer
 	columnofs[i] = viewwindowx + i;
 
     // Samw with base row offset.
-    if (width == SCREENWIDTH) 
+    if (width == SCREENWIDTH || height == SCREENHEIGHT) /* afterglow */
 	viewwindowy = 0; 
     else 
 	viewwindowy = (SCREENHEIGHT-SBARHEIGHT-height) >> 1; 
@@ -845,7 +845,7 @@ void R_FillBackScreen (void)
 	
     if (background_buffer == NULL)
     {
-        background_buffer = Z_Malloc(MAXSCREENWIDTH * (SCREENHEIGHT - SBARHEIGHT),
+        background_buffer = Z_Malloc(MAXSCREENWIDTH * SCREENHEIGHT,
                                      PU_STATIC, NULL);
     }
 
@@ -857,7 +857,7 @@ void R_FillBackScreen (void)
     src = W_CacheLumpName(name, PU_CACHE); 
     dest = background_buffer;
 	 
-    for (y=0 ; y<SCREENHEIGHT-SBARHEIGHT ; y++) 
+    for (y=0 ; y<SCREENHEIGHT ; y++) /* afterglow: a full-height view's sides */
     { 
 	for (x=0 ; x<SCREENWIDTH/64 ; x++) 
 	{ 
@@ -948,11 +948,14 @@ void R_DrawViewBorder (void)
     int		side;
     int		ofs;
     int		i; 
+    int		bordh;
  
     if (scaledviewwidth == SCREENWIDTH) 
 	return; 
   
-    top = ((SCREENHEIGHT-SBARHEIGHT)-viewheight)/2; 
+    /* afterglow: a full-height view has no status-bar row to stop at */
+    bordh = viewheight == SCREENHEIGHT ? SCREENHEIGHT : SCREENHEIGHT-SBARHEIGHT;
+    top = (bordh-viewheight)/2; 
     side = (SCREENWIDTH-scaledviewwidth)/2; 
  
     // copy top and one line of left side 
@@ -973,7 +976,7 @@ void R_DrawViewBorder (void)
     } 
 
     // ? 
-    V_MarkRect (0,0,SCREENWIDTH, SCREENHEIGHT-SBARHEIGHT); 
+    V_MarkRect (0,0,SCREENWIDTH, bordh); 
 } 
  
  
