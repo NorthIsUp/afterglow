@@ -243,6 +243,17 @@ pub fn help(key: &str) -> Option<&'static str> {
         }
         "VINYL_SIDE_SECS" => "seconds a side plays before the tonearm lifts and returns",
         "TV_STATIC_COLOR" => "the set in colour: bars, cabinet and dial; off is upstream's one ink",
+        "DOOM_HUD" => "the status bar over the view; off is the camera alone",
+        "DOOM_SKILL" => {
+            "1 I'm Too Young To Die .. 3 Hurt Me Plenty .. 5 Nightmare; from the next map"
+        }
+        "DOOM_GOD" => "god mode; off, a death waits 3 s, then a new random map",
+        "DOOM_FOV" => "horizontal field of view in degrees; 0 is Hor+ for the box, up to 120",
+        "DOOM_WIDTH_PCT" => "share of the panel's width the game view takes; 0 is all of it",
+        "DOOM_MAP_SECS" => "seconds before a new random map; 0 only on switching to doom",
+        "DOOM_LIGHT" => "extra sector light, Doom's gun flash held on; from the next map",
+        "DOOM_GAMMA" => "palette brightness lift",
+        "DOOM_WAD" => "path to the IWAD; a running engine keeps the one it loaded",
         k if k.ends_with("_SEED") => "0 rolls a new one every build; anything else pins it",
         k if k.ends_with("_CELL_W") || k.ends_with("_CELL_H") || k.ends_with("_CELL") => {
             "cell size in framebuffer pixels"

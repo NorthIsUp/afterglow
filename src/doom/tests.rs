@@ -20,6 +20,8 @@ fn knobs(fov: i32, pct: i32) -> Knobs {
         fov,
         pct,
         hud: 1,
+        skill: 3,
+        god: 1,
         seed: 7,
     }
 }

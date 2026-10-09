@@ -2,7 +2,7 @@
 
 ![`doom`](../media/doom.gif)
 
-Freedoom, played by an autopilot in god mode, as one game sized to the panel.
+Freedoom, played by an autopilot (in god mode unless `DOOM_GOD=0`), as one game sized to the panel.
 The screen is as wide as the panel's glass shape needs, and the view is Hor+
 widescreen in the manner of Crispy Doom: the vertical field of view stays
 classic Doom's, and the horizontal one grows with the width. That gives 90° at
@@ -53,6 +53,12 @@ Source: [`src/doom/`](../../src/doom/mod.rs),
 
 - `DOOM_HUD`: 1 draws the status bar centred over the view (default), 0 shows
   the view alone.
+- `DOOM_SKILL`: 1..5, from I'm Too Young To Die to Nightmare (default 3, Hurt
+  Me Plenty). The mirror page shows it as a slider. A new skill applies from
+  the next map.
+- `DOOM_GOD`: 1 makes the player invulnerable (default). With 0 the autopilot
+  can die: the death view holds for 3 s, then a new random map starts, so the
+  saver never waits on Doom's press-use screen.
 - `DOOM_WIDTH_PCT`: the share of the screen's width the game view takes, 0..100
   (default 100; 0 also means the whole width, and below 10 counts as 10). The
   rest is the border flat with Doom's bevel, and the status bar stays centred.
