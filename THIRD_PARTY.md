@@ -1,6 +1,6 @@
 # Third-party notices
 
-afterglow is MIT-licensed (see `LICENSE`). Two parts of it derive from other
+afterglow is MIT-licensed (see `LICENSE`). Several parts of it are, or derive from, other
 people's work, and the GPL image (`-gpl`, also tagged `-doom`) adds three
 more, below.
 
@@ -21,6 +21,78 @@ MIT License
 
 Copyright (c) 2026 bas3line (https://github.com/bas3line)
 
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## mizu-core (the `gameboy` saver's emulator)
+
+`vendor/mizu-core/` is [mizu-core](https://github.com/Amjad50/mizu) 1.3.0
+(`ece2c0d`), Amjad Alsharafi's Game Boy and Game Boy Color emulator, MIT. It
+is modified, each change marked `afterglow`: no zstd (save states are
+uncompressed), ROMs and battery RAM come from bytes and nothing is written
+back, frames are raw RGB555 with the background layer and per-line scroll
+kept alongside, audio samples are not produced, and RAM, VRAM and joypad
+accessors are added. Its licence, also at `vendor/mizu-core/LICENSE`:
+
+```
+MIT License
+
+Copyright (c) 2021 Amjad Alsharafi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## Bundled Game Boy homebrew (`gameboy/`)
+
+The `gameboy` saver plays these, unmodified, in both images. No commercial
+ROM is bundled; see [the saver's page](docs/savers/gameboy.md) for playing one
+of your own.
+
+- `tobu-tobu-girl-deluxe.gb`: [Tobu Tobu Girl
+  Deluxe](https://github.com/SimonLarsen/tobutobugirl-dx) by Tangram Games.
+  Code under the MIT License (Copyright (c) 2017 Tangram Games); all assets
+  (images, text, sound and music) under [Creative Commons Attribution 4.0
+  International](https://creativecommons.org/licenses/by/4.0/).
+- `rebound.gbc`: [Rebound](https://github.com/DevEd2/ReboundGB) by DevEd, the
+  GB Compo 2021 v1.4.3 release. MIT License, Copyright (c) 2021 DevEd.
+- `life.gb`: [LIFE_gb](https://github.com/Brehana/LIFE_gb), Conway's Game of
+  Life by Miguel Ramos. MIT License, Copyright (c) 2024 Miguel Ramos.
+
+Each is under the MIT terms above with its own copyright line:
+
+```
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

@@ -25,6 +25,9 @@ RUN apk add --no-cache musl-dev
 WORKDIR /src
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
+# The gameboy saver's emulator core (MIT) and the homebrew it plays.
+COPY vendor ./vendor
+COPY gameboy ./gameboy
 # --locked so the committed Cargo.lock is authoritative; a drifting dependency
 # should fail the build rather than silently ship something else.
 RUN cargo build --release --locked
@@ -41,6 +44,8 @@ RUN apk add --no-cache musl-dev gcc g++
 WORKDIR /src
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
+COPY vendor ./vendor
+COPY gameboy ./gameboy
 COPY doom ./doom
 COPY micropolis ./micropolis
 RUN cargo build --release --locked --features doom,micropolis

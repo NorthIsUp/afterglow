@@ -1,5 +1,6 @@
 //! The one thing a screensaver is, and the one per-frame call around it.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::ascii_rest::{Canvas, Piece};
@@ -12,6 +13,7 @@ use crate::doom::Doom;
 use crate::dvd::Dvd;
 use crate::fire::Fire;
 use crate::fractal::Fractal;
+use crate::gameboy::GameBoySaver;
 use crate::grid::Grid;
 use crate::hardrain::HardRain;
 use crate::hypercube::Hypercube;
@@ -136,6 +138,7 @@ macro_rules! savers {
         ("doom", |p, fps| Box::new(Doom::new(p, fps))),
         #[cfg(feature = "micropolis")]
         ("micropolis", |p, fps| Box::new(Micropolis::new(p, fps))),
+        ("gameboy", |p, fps| Box::new(GameBoySaver::new(p, fps))),
             $((
                 crate::ascii_rest::$sm::$st::NAME,
                 crate::ascii_rest::Play::<crate::ascii_rest::$sm::$st>::build,
@@ -209,6 +212,7 @@ const SECTIONS: &[(&str, usize)] = &[
     ("doom", 5),
     #[cfg(feature = "micropolis")]
     ("micropolis", 5),
+    ("gameboy", 5),
 ];
 
 /// Index into `GROUPS` of a row. A table walk, so for the HTTP thread and the
@@ -260,6 +264,19 @@ pub fn index_of(name: &str) -> Option<usize> {
 /// Position in `SAVERS` of exactly `name`, no aliases.
 fn row_of(name: &str) -> Option<usize> {
     SAVERS.iter().position(|(n, _)| *n == name)
+}
+
+/// Bumped by the mirror's `/restart`. A saver whose state lives past a
+/// rebuild (an engine thread) reads it at construction and starts over when
+/// it moved.
+static RESTARTS: AtomicU64 = AtomicU64::new(0);
+
+pub fn request_restart() {
+    RESTARTS.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn restarts() -> u64 {
+    RESTARTS.load(Ordering::Relaxed)
 }
 
 pub fn make(name: &str, panel: &Panel, fps: u32) -> Box<dyn Saver> {
