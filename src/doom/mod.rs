@@ -1,9 +1,10 @@
-//! `doom`: Freedoom played by an autopilot, as many 320x200 views side by side
-//! as the panel's shape fits, each on its own random map.
+//! `doom`: Freedoom played by an autopilot, one Hor+ widescreen game sized to
+//! the panel.
 //!
 //! Only in a `--features doom` build, which links doomgeneric and is GPL as a
-//! whole; see `THIRD_PARTY.md`. The engines run on their own thread
-//! (`engine.rs`); this saver only maps their last finished frames to cells.
+//! whole; see `THIRD_PARTY.md`. The engine runs on its own thread
+//! (`engine.rs`) at a width chosen here from the panel's glass shape; this
+//! saver maps its last finished frame to cells.
 //!
 //! Every Doom pixel is one SOLID cell whose colour is `palette * 256 + index`
 //! into all fourteen PLAYPAL palettes at once, so the damage and pickup tints
@@ -21,14 +22,18 @@ use crate::saver::Saver;
 use crate::surface::{Panel, Surface};
 use crate::{env_num, env_str, next_rand, saver_seed};
 
-use engine::{Engines, Want, H, INSTANCES, W};
+use engine::{Engine, Want, H, MAX_W};
 
 const PALETTES: usize = 14;
 const STATIC: usize = PALETTES * 256;
 const STATIC_LEVELS: usize = 16;
 const OFF: u16 = u16::MAX;
+/// Doom's 320x200 fills 4:3 glass, so a Doom pixel is 1.2 times taller than
+/// wide: a screen `r` times as wide as tall is `240 * r` pixels across.
+const PX_PER_RATIO: f32 = 240.0;
+const MIN_W: usize = 320;
 
-/// Each saver instance's claim on the engines. Not a pointer: a dropped
+/// Each saver instance's claim on the engine. Not a pointer: a dropped
 /// saver's address can be reused by the next one, and the engine thread must
 /// tell a new claim from a stale release.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -38,62 +43,77 @@ pub struct Doom {
     palette: Vec<u32>,
     id: u64,
     /// Taken by the first `render`, not the constructor: the mirror builds
-    /// savers just to read their knobs, and that must not steal the engines.
+    /// savers just to read their knobs, and that must not steal the engine.
     want: Option<Want>,
     engaged: bool,
-    views: usize,
-    /// Per grid column: the view it shows and the source x; `OFF` is margin.
-    col_view: Vec<u16>,
+    /// The cells the frame covers, `x0..x1` by `y0..y1`; the rest is margin.
+    rect: (usize, usize, usize, usize),
+    /// Per grid column and row: the source pixel, `OFF` outside the frame.
+    /// Columns are for a frame `col_w` wide, rebuilt when the engine's width
+    /// moves (only after a knob change), in place.
     col_src: Vec<u16>,
+    col_w: usize,
     row_src: Vec<u16>,
     pix: Vec<u8>,
-    seq: [u32; INSTANCES],
-    /// The palette each view's frame shows in; `None` draws static.
-    pal: [Option<u8>; INSTANCES],
+    seq: u32,
+    /// The frame's width and palette; `None` draws static.
+    shown: Option<(usize, u8)>,
     rng: u32,
+}
+
+/// The Doom screen width for a panel, and the share of the panel's width and
+/// height (per mille) its picture fills without stretching.
+fn layout(panel: &Panel, aspect: usize) -> (usize, usize, usize) {
+    let glass = panel.w as f32 * aspect as f32 / (100.0 * panel.h as f32);
+    let w = ((PX_PER_RATIO * glass).round() as usize).clamp(MIN_W, MAX_W);
+    let own = w as f32 / PX_PER_RATIO;
+    if own >= glass {
+        (w, 1000, (glass / own * 1000.0) as usize)
+    } else {
+        (w, (own / glass * 1000.0) as usize, 1000)
+    }
 }
 
 impl Doom {
     pub fn new(panel: &Panel, _fps: u32) -> Self {
         let wad = env_str(&["DOOM_WAD"], "/freedoom1.wad");
-        let auto = env_num(&["DOOM_VIEWS"], 0, 0, INSTANCES as i64) as usize;
         let map_secs = env_num(&["DOOM_MAP_SECS"], 180, 0, 86_400) as u64;
         let gamma = env_num(&["DOOM_GAMMA"], 2, 0, 4) as u32;
         let light = env_num(&["DOOM_LIGHT"], 1, 0, 2) as i32;
+        let fov = env_num(&["DOOM_FOV"], 0, 0, 170) as i32;
+        let pct = env_num(&["DOOM_WIDTH_PCT"], 100, 0, 100) as i32;
         let seed = saver_seed(&["DOOM_SEED"], 1);
-        Self::build(panel, &wad, auto, map_secs, gamma, light, seed)
+        let knobs = Knobs {
+            map_secs,
+            gamma,
+            light,
+            fov: if fov == 0 { 0 } else { fov.max(60) },
+            pct: if pct == 0 { 100 } else { pct.max(10) },
+            seed,
+        };
+        Self::build(panel, &wad, &knobs)
     }
 
-    fn build(
-        panel: &Panel,
-        wad: &str,
-        auto: usize,
-        map_secs: u64,
-        gamma: u32,
-        light: i32,
-        seed: u32,
-    ) -> Self {
+    fn build(panel: &Panel, wad: &str, k: &Knobs) -> Self {
         let aspect = pixel_aspect();
-        let views = if auto > 0 {
-            auto
-        } else {
-            views_for(panel, aspect)
-        };
-        // As many cells as Doom has pixels, no more: a cell per pixel is the
-        // whole picture, and a smaller cell would only repeat pixels.
-        let cell_w = (panel.w / (views * W)).max(1);
+        let (width, wide, tall) = layout(panel, aspect);
+        // A cell per Doom pixel across at most: a smaller cell would only
+        // repeat pixels.
+        let cell_w = (panel.w / width).max(1);
         let cell_h = (panel.h * 100 / aspect / H).max(1);
         let grid = Grid::new(panel, cell_w, cell_h);
         let (cols, rows) = (grid.cols(), grid.rows());
-        let per = cols / views;
-        let x0 = (cols - per * views) / 2;
-        let mut col_view = vec![OFF; cols];
-        let mut col_src = vec![0; cols];
-        for c in 0..per * views {
-            col_view[x0 + c] = (c / per) as u16;
-            col_src[x0 + c] = ((c % per) * W / per) as u16;
-        }
-        let row_src = (0..rows).map(|r| (r * H / rows) as u16).collect();
+        let (fw, fh) = (cols * wide / 1000, rows * tall / 1000);
+        let (x0, y0) = ((cols - fw) / 2, (rows - fh) / 2);
+        let row_src = (0..rows)
+            .map(|r| {
+                if (y0..y0 + fh).contains(&r) {
+                    ((r - y0) * H / fh.max(1)) as u16
+                } else {
+                    OFF
+                }
+            })
+            .collect();
 
         let playpal = std::fs::read(wad)
             .ok()
@@ -103,36 +123,56 @@ impl Doom {
         }
         let want = playpal.as_ref().and_then(|_| {
             Some(Want {
-                views,
-                seed,
+                seed: k.seed,
                 wad: CString::new(wad).ok()?,
-                map_every: (map_secs > 0).then(|| Duration::from_secs(map_secs)),
-                light,
+                width,
+                view_pct: k.pct,
+                fov: k.fov,
+                map_every: (k.map_secs > 0).then(|| Duration::from_secs(k.map_secs)),
+                light: k.light,
             })
         });
-        Self {
+        let mut d = Self {
             grid,
-            palette: palette(playpal.as_deref(), gamma),
+            palette: palette(playpal.as_deref(), k.gamma),
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             want,
             engaged: false,
-            views,
-            col_view,
-            col_src,
+            rect: (x0, x0 + fw, y0, y0 + fh),
+            col_src: vec![OFF; cols],
+            col_w: 0,
             row_src,
-            pix: vec![0; INSTANCES * W * H],
-            seq: [0; INSTANCES],
-            pal: [None; INSTANCES],
-            rng: seed,
+            pix: vec![0; MAX_W * H],
+            seq: 0,
+            shown: None,
+            rng: k.seed,
+        };
+        d.columns_for(width);
+        d
+    }
+
+    /// Point the frame's columns at a source `w` pixels wide.
+    fn columns_for(&mut self, w: usize) {
+        let (x0, x1, ..) = self.rect;
+        let span = (x1 - x0).max(1);
+        for (c, src) in self.col_src.iter_mut().enumerate() {
+            *src = if (x0..x1).contains(&c) {
+                ((c - x0) * w / span) as u16
+            } else {
+                OFF
+            };
         }
+        self.col_w = w;
     }
 }
 
-/// Views side by side: one per square-and-a-quarter of glass width, so 4:3
-/// and narrower show one, 16:9 two and pine's 3.2:1 three.
-fn views_for(panel: &Panel, aspect: usize) -> usize {
-    let glass = panel.w as f32 * aspect as f32 / (100.0 * panel.h as f32);
-    ((glass + 0.25) as usize).clamp(1, INSTANCES)
+struct Knobs {
+    map_secs: u64,
+    gamma: u32,
+    light: i32,
+    fov: i32,
+    pct: i32,
+    seed: u32,
 }
 
 /// A WAD lump by name, or None for a file that is not a WAD or lacks it.
@@ -171,34 +211,30 @@ fn palette(playpal: Option<&[u8]>, gamma: u32) -> Vec<u32> {
 impl Saver for Doom {
     fn render(&mut self, s: &mut Surface<'_>) {
         if let Some(w) = self.want.take() {
-            Engines::get().claim(self.id, w);
+            Engine::get().claim(self.id, w);
             self.engaged = true;
         }
-        let live = self.engaged;
-        for v in 0..self.views {
-            let dst = &mut self.pix[v * W * H..(v + 1) * W * H];
-            if let Some((seq, pal)) = live
-                .then(|| Engines::get().latest(v, self.seq[v], dst))
-                .flatten()
-            {
-                self.seq[v] = seq;
-                self.pal[v] = pal;
+        if self.engaged {
+            if let Some((seq, shown)) = Engine::get().latest(self.seq, &mut self.pix) {
+                self.seq = seq;
+                self.shown = shown;
             }
         }
-        let (pix, pals, rng) = (&self.pix, &self.pal, &mut self.rng);
-        let (col_view, col_src, row_src) = (&self.col_view, &self.col_src, &self.row_src);
+        if let Some((w, _)) = self.shown {
+            if w != self.col_w {
+                self.columns_for(w);
+            }
+        }
+        let (pix, shown, rng) = (&self.pix, self.shown, &mut self.rng);
+        let (col_src, row_src) = (&self.col_src, &self.row_src);
         self.grid.fill(|cx, cy| {
-            let v = col_view[cx];
-            if v == OFF {
+            let (sx, sy) = (col_src[cx], row_src[cy]);
+            if sx == OFF || sy == OFF {
                 return Cell::CLEAR;
             }
-            let v = v as usize;
-            let colour = match pals[v] {
+            let colour = match shown {
                 None => STATIC + next_rand(rng) as usize % STATIC_LEVELS,
-                Some(pal) => {
-                    let at = v * W * H + row_src[cy] as usize * W + col_src[cx] as usize;
-                    pal as usize * 256 + pix[at] as usize
-                }
+                Some((w, pal)) => pal as usize * 256 + pix[sy as usize * w + sx as usize] as usize,
             };
             Cell::new(font::SOLID, colour as u16)
         });
@@ -221,7 +257,7 @@ impl Saver for Doom {
 impl Drop for Doom {
     fn drop(&mut self) {
         if self.engaged {
-            Engines::get().release(self.id);
+            Engine::get().release(self.id);
         }
     }
 }

@@ -88,6 +88,10 @@ void V_CopyRect(int srcx, int srcy, byte *source,
 { 
     byte *src;
     byte *dest; 
+
+    /* afterglow: callers address the 320-wide status bar */
+    srcx += WIDESCREENDELTA;
+    destx += WIDESCREENDELTA;
  
 #ifdef RANGECHECK 
     if (srcx < 0
@@ -131,6 +135,19 @@ void V_SetPatchClipCallback(vpatchclipfunc_t func)
     patchclip_callback = func;
 }
 
+/* afterglow: paint colour c beside the centred 320 columns, every row. */
+void V_FillSides(int c)
+{
+    int y;
+
+    for (y = 0; y < SCREENHEIGHT; y++)
+    {
+        memset(dest_screen + y * SCREENWIDTH, c, WIDESCREENDELTA);
+        memset(dest_screen + y * SCREENWIDTH + WIDESCREENDELTA + ORIGWIDTH, c,
+               SCREENWIDTH - WIDESCREENDELTA - ORIGWIDTH);
+    }
+}
+
 //
 // V_DrawPatch
 // Masks a column based masked pic to the screen. 
@@ -148,6 +165,15 @@ void V_DrawPatch(int x, int y, patch_t *patch)
 
     y -= SHORT(patch->topoffset);
     x -= SHORT(patch->leftoffset);
+
+    /* afterglow: a full-screen picture (title, intermission, finale) is
+     * centred; black out the width beside it, or the last frame shows there. */
+    if (x == 0 && y == 0 && SHORT(patch->width) == ORIGWIDTH
+     && SHORT(patch->height) == SCREENHEIGHT && WIDESCREENDELTA > 0)
+    {
+        V_FillSides(0);
+    }
+    x += WIDESCREENDELTA; /* afterglow */
 
     // haleyjd 08/28/10: Strife needs silent error checking here.
     if(patchclip_callback)
@@ -212,6 +238,7 @@ void V_DrawPatchFlipped(int x, int y, patch_t *patch)
  
     y -= SHORT(patch->topoffset); 
     x -= SHORT(patch->leftoffset); 
+    x += WIDESCREENDELTA; /* afterglow */
 
     // haleyjd 08/28/10: Strife needs silent error checking here.
     if(patchclip_callback)
@@ -285,6 +312,7 @@ void V_DrawTLPatch(int x, int y, patch_t * patch)
 
     y -= SHORT(patch->topoffset);
     x -= SHORT(patch->leftoffset);
+    x += WIDESCREENDELTA; /* afterglow */
 
     if (x < 0
      || x + SHORT(patch->width) > SCREENWIDTH 
@@ -335,6 +363,7 @@ void V_DrawXlaPatch(int x, int y, patch_t * patch)
 
     y -= SHORT(patch->topoffset);
     x -= SHORT(patch->leftoffset);
+    x += WIDESCREENDELTA; /* afterglow */
 
     if(patchclip_callback)
     {
@@ -384,6 +413,7 @@ void V_DrawAltTLPatch(int x, int y, patch_t * patch)
 
     y -= SHORT(patch->topoffset);
     x -= SHORT(patch->leftoffset);
+    x += WIDESCREENDELTA; /* afterglow */
 
     if (x < 0
      || x + SHORT(patch->width) > SCREENWIDTH
@@ -435,6 +465,7 @@ void V_DrawShadowedPatch(int x, int y, patch_t *patch)
 
     y -= SHORT(patch->topoffset);
     x -= SHORT(patch->leftoffset);
+    x += WIDESCREENDELTA; /* afterglow */
 
     if (x < 0
      || x + SHORT(patch->width) > SCREENWIDTH

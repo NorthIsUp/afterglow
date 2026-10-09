@@ -28,7 +28,7 @@
 // Size of statusbar.
 // Now sensitive for scaling.
 #define ST_HEIGHT	32
-#define ST_WIDTH	SCREENWIDTH
+#define ST_WIDTH	ORIGWIDTH
 #define ST_Y		(SCREENHEIGHT - ST_HEIGHT)
 
 
@@ -74,6 +74,7 @@ typedef enum
 
 
 extern byte *st_backing_screen;
+void ST_Invalidate(void);
 extern cheatseq_t cheat_mus;
 extern cheatseq_t cheat_god;
 extern cheatseq_t cheat_ammo;

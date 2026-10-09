@@ -60,6 +60,12 @@ fixed_t			centerxfrac;
 fixed_t			centeryfrac;
 fixed_t			projection;
 
+/* afterglow: the share of the screen width the 3D view takes, and its
+ * horizontal field of view in degrees (0: Hor+, capped at DG_AUTO_FOV). */
+int			dg_viewpct = 100;
+int			dg_fov = 0;
+#define DG_AUTO_FOV 120
+
 // just for profiling purposes
 int			framecount;	
 
@@ -95,7 +101,7 @@ int			viewangletox[FINEANGLES/2];
 // The xtoviewangleangle[] table maps a screen pixel
 // to the lowest viewangle that maps back to x ranges
 // from clipangle to -clipangle.
-angle_t			xtoviewangle[SCREENWIDTH+1];
+angle_t			xtoviewangle[MAXSCREENWIDTH+1];
 
 lighttable_t*		scalelight[LIGHTLEVELS][MAXLIGHTSCALE];
 lighttable_t*		scalelightfixed[MAXLIGHTSCALE];
@@ -550,14 +556,17 @@ void R_InitTextureMapping (void)
     //
     // Calc focallength
     //  so FIELDOFVIEW angles covers SCREENWIDTH.
-    focallength = FixedDiv (centerxfrac,
+    /* afterglow: from the projection, not the view's half-width, so a wide
+     * view spans more than FIELDOFVIEW; the tangent limit is raised from 2
+     * so fields of view past 127 degrees reach the screen edge. */
+    focallength = FixedDiv (projection,
 			    finetangent[FINEANGLES/4+FIELDOFVIEW/2] );
 	
     for (i=0 ; i<FINEANGLES/2 ; i++)
     {
-	if (finetangent[i] > FRACUNIT*2)
+	if (finetangent[i] > FRACUNIT*16)
 	    t = -1;
-	else if (finetangent[i] < -FRACUNIT*2)
+	else if (finetangent[i] < -FRACUNIT*16)
 	    t = viewwidth+1;
 	else
 	{
@@ -622,7 +631,7 @@ void R_InitLightTables (void)
 	startmap = ((LIGHTLEVELS-1-i)*2)*NUMCOLORMAPS/LIGHTLEVELS;
 	for (j=0 ; j<MAXLIGHTZ ; j++)
 	{
-	    scale = FixedDiv ((SCREENWIDTH/2*FRACUNIT), (j+1)<<LIGHTZSHIFT);
+	    scale = FixedDiv ((ORIGWIDTH/2*FRACUNIT), (j+1)<<LIGHTZSHIFT);
 	    scale >>= LIGHTSCALESHIFT;
 	    level = startmap - scale/DISTMAP;
 	    
@@ -673,18 +682,23 @@ void R_ExecuteSetViewSize (void)
     int		level;
     int		startmap; 	
 
+    int		nominal;
+    int		lightwidth;
+    double	half;
+
     setsizeneeded = false;
 
+    /* afterglow: `nominal` is the view's width on a 320-wide screen, which
+     * 90 degrees spans. The view itself is dg_viewpct of the real width. */
+    nominal = setblocks >= 10 ? ORIGWIDTH : setblocks*32;
     if (setblocks == 11)
-    {
-	scaledviewwidth = SCREENWIDTH;
 	viewheight = SCREENHEIGHT;
-    }
     else
-    {
-	scaledviewwidth = setblocks*32;
 	viewheight = (setblocks*168/10)&~7;
-    }
+    scaledviewwidth = nominal * SCREENWIDTH / ORIGWIDTH * dg_viewpct / 100;
+    scaledviewwidth = scaledviewwidth < 64 ? 64 : scaledviewwidth & ~1;
+    if (scaledviewwidth > SCREENWIDTH)
+	scaledviewwidth = SCREENWIDTH;
     
     detailshift = setdetail;
     viewwidth = scaledviewwidth>>detailshift;
@@ -693,7 +707,19 @@ void R_ExecuteSetViewSize (void)
     centerx = viewwidth/2;
     centerxfrac = centerx<<FRACBITS;
     centeryfrac = centery<<FRACBITS;
-    projection = centerxfrac;
+
+    /* Hor+: with no fixed FOV, 90 degrees spans `nominal` columns, so the
+     * vertical field of view is 320x200's and the horizontal one grows with
+     * the view, up to DG_AUTO_FOV. A fixed FOV sets the horizontal field and
+     * the vertical one follows. Either way pixels keep their aspect. */
+    if (dg_fov > 0)
+	half = dg_fov * M_PI / 360.0;
+    else
+	half = fmin(atan((double)scaledviewwidth / nominal), DG_AUTO_FOV * M_PI / 360.0);
+    projection = (fixed_t)(viewwidth / 2.0 / tan(half) * FRACUNIT);
+    lightwidth = (int)((projection >> FRACBITS) * 2) << detailshift;
+    if (lightwidth < 1)
+	lightwidth = 1;
 
     if (!detailshift)
     {
@@ -715,8 +741,10 @@ void R_ExecuteSetViewSize (void)
     R_InitTextureMapping ();
     
     // psprite scales
-    pspritescale = FRACUNIT*viewwidth/SCREENWIDTH;
-    pspriteiscale = FRACUNIT*SCREENWIDTH/viewwidth;
+    /* afterglow: the weapon keeps its classic size; scaling it with the
+     * projection would float it off the bottom of the view. */
+    pspritescale = FRACUNIT*(nominal>>detailshift)/ORIGWIDTH;
+    pspriteiscale = FRACUNIT*ORIGWIDTH/(nominal>>detailshift);
     
     // thing clipping
     for (i=0 ; i<viewwidth ; i++)
@@ -727,7 +755,7 @@ void R_ExecuteSetViewSize (void)
     {
 	dy = ((i-viewheight/2)<<FRACBITS)+FRACUNIT/2;
 	dy = abs(dy);
-	yslope[i] = FixedDiv ( (viewwidth<<detailshift)/2*FRACUNIT, dy);
+	yslope[i] = FixedDiv (projection<<detailshift, dy);
     }
 	
     for (i=0 ; i<viewwidth ; i++)
@@ -743,7 +771,7 @@ void R_ExecuteSetViewSize (void)
 	startmap = ((LIGHTLEVELS-1-i)*2)*NUMCOLORMAPS/LIGHTLEVELS;
 	for (j=0 ; j<MAXLIGHTSCALE ; j++)
 	{
-	    level = startmap - j*SCREENWIDTH/(viewwidth<<detailshift)/DISTMAP;
+	    level = startmap - j*ORIGWIDTH/lightwidth/DISTMAP;
 	    
 	    if (level < 0)
 		level = 0;

@@ -72,8 +72,8 @@ lighttable_t**	spritelights;
 
 // constant arrays
 //  used for psprite clipping and initializing clipping
-short		negonearray[SCREENWIDTH];
-short		screenheightarray[SCREENWIDTH];
+short		negonearray[MAXSCREENWIDTH];
+short		screenheightarray[MAXSCREENWIDTH];
 
 
 //
@@ -292,7 +292,7 @@ void R_InitSprites (char** namelist)
 {
     int		i;
 	
-    for (i=0 ; i<SCREENWIDTH ; i++)
+    for (i=0 ; i<MAXSCREENWIDTH ; i++)
     {
 	negonearray[i] = -1;
     }
@@ -491,7 +491,9 @@ void R_ProjectSprite (mobj_t* thing)
     tx = -(gyt+gxt); 
 
     // too far off the side?
-    if (abs(tx)>(tz<<2))
+    /* afterglow: <<2 culled the edges of wide views; 64-bit so far things
+     * cannot overflow into being culled. */
+    if ((long long)abs(tx) > ((long long)tz<<4))
 	return;
     
     // decide which patch to use for sprite relative to player
@@ -832,8 +834,8 @@ void R_SortVisSprites (void)
 //
 // R_DrawSprite
 //
-static short		clipbot[SCREENWIDTH];
-static short		cliptop[SCREENWIDTH];
+static short		clipbot[MAXSCREENWIDTH];
+static short		cliptop[MAXSCREENWIDTH];
 void R_DrawSprite (vissprite_t* spr)
 {
     drawseg_t*		ds;

@@ -92,21 +92,19 @@ typedef struct
     char *filename;
 } default_collection_t;
 
-/* afterglow: stringified here, not in CONFIG_VARIABLE_GENERIC, so the
- * per-instance rename header cannot turn "x" into "dg0_x". */
 #define CONFIG_VARIABLE_GENERIC(name, type) \
-    { name, NULL, type, 0, 0, false }
+    { #name, NULL, type, 0, 0, false }
 
 #define CONFIG_VARIABLE_KEY(name) \
-    CONFIG_VARIABLE_GENERIC(#name, DEFAULT_KEY)
+    CONFIG_VARIABLE_GENERIC(name, DEFAULT_KEY)
 #define CONFIG_VARIABLE_INT(name) \
-    CONFIG_VARIABLE_GENERIC(#name, DEFAULT_INT)
+    CONFIG_VARIABLE_GENERIC(name, DEFAULT_INT)
 #define CONFIG_VARIABLE_INT_HEX(name) \
-    CONFIG_VARIABLE_GENERIC(#name, DEFAULT_INT_HEX)
+    CONFIG_VARIABLE_GENERIC(name, DEFAULT_INT_HEX)
 #define CONFIG_VARIABLE_FLOAT(name) \
-    CONFIG_VARIABLE_GENERIC(#name, DEFAULT_FLOAT)
+    CONFIG_VARIABLE_GENERIC(name, DEFAULT_FLOAT)
 #define CONFIG_VARIABLE_STRING(name) \
-    CONFIG_VARIABLE_GENERIC(#name, DEFAULT_STRING)
+    CONFIG_VARIABLE_GENERIC(name, DEFAULT_STRING)
 
 //! @begin_config_file default
 
