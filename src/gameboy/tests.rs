@@ -14,6 +14,7 @@ fn want(width: usize, mode: Mode) -> Want {
         mode,
         rotate: None,
         seed: 7,
+        restart: 0,
     }
 }
 
@@ -189,32 +190,177 @@ fn a_crashing_cartridge_moves_on() {
     assert_ne!(r.playing(), first);
 }
 
-/// A user's Pokémon ROM, read in place and never copied: `POKEMON_TEST_ROM`.
-/// Skipped when unset, so CI needs no commercial ROM.
-fn pokemon_rom() -> Option<Cart> {
-    let path = std::env::var("POKEMON_TEST_ROM").ok()?;
-    let carts = load(&path, "");
-    let c = carts.into_iter().next()?;
-    assert!(
-        matches!(c.pilot, Pilot::Pokemon(_)),
-        "{path}: not a known Pokémon revision"
-    );
-    Some(c)
+/// A restart from the page is a power-on reset: the game starts over even
+/// though nothing else about the saver changed. A knob change is not.
+#[test]
+fn a_restart_starts_the_cartridge_over() {
+    let mut r = engine::tests_runner(Vec::new());
+    let w = want(256, Mode::Frame);
+    r.take_for_test(None, &w);
+    for _ in 0..120 {
+        assert!(r.frame_for_test(&w));
+    }
+    let palette = Want {
+        palette: "grey".into(),
+        ..w.clone()
+    };
+    r.take_for_test(Some(&w), &palette);
+    assert!(r.frame_for_test(&palette));
+    assert_eq!(r.frames(), 121, "a palette change restarted the game");
+    let restarted = Want {
+        restart: 1,
+        ..palette.clone()
+    };
+    r.take_for_test(Some(&palette), &restarted);
+    assert!(r.frame_for_test(&restarted));
+    assert_eq!(r.frames(), 1, "the restart kept the old game");
+}
+
+/// The user's Pokémon ROMs, read in place and never copied:
+/// `POKEMON_TEST_ROM` names a ROM or a folder (only the Pokémon revisions in
+/// it are used). Unset, the tests skip, so CI needs no commercial ROM.
+fn pokemon_roms() -> Vec<Cart> {
+    let Ok(path) = std::env::var("POKEMON_TEST_ROM") else {
+        eprintln!("POKEMON_TEST_ROM unset; skipping");
+        return Vec::new();
+    };
+    let carts: Vec<Cart> = load(&path, "")
+        .into_iter()
+        .filter(|c| matches!(c.pilot, Pilot::Pokemon(_)))
+        .collect();
+    assert!(!carts.is_empty(), "{path}: no known Pokémon revision");
+    carts
+}
+
+fn ram_of(cart: &Cart) -> pokemon::Ram {
+    match cart.pilot {
+        Pilot::Pokemon(r) => pokemon::Ram::of(r),
+        _ => unreachable!("filtered to Pokémon"),
+    }
+}
+
+/// From power-on: both names chosen, then out of the house into Pallet
+/// Town, each step read from RAM, in every revision given.
+#[test]
+fn pokemon_intro_reaches_pallet_town() {
+    for cart in pokemon_roms() {
+        let r = ram_of(&cart);
+        let mut s = Session::boot(&cart, &want(461, Mode::Wide), 7).expect("boots");
+        let mut view = vec![0u16; MAX_W * H];
+        let (mut names_at, mut outside_at) = (None, None);
+        for f in 0..60 * 60 * 15 {
+            s.step(&mut view);
+            if names_at.is_none() && pokemon::named(&mut s.gb, r) {
+                names_at = Some(f);
+            }
+            if names_at.is_some() && s.gb.peek(r.cur_map) == 0 {
+                outside_at = Some(f);
+                break;
+            }
+        }
+        eprintln!(
+            "{}: named at {names_at:?}, outside at {outside_at:?}",
+            cart.name
+        );
+        assert!(
+            names_at.is_some(),
+            "{}: never got through naming",
+            cart.name
+        );
+        assert!(outside_at.is_some(), "{}: never left the house", cart.name);
+    }
+}
+
+/// Hold `key` for a few frames, then let go for some.
+fn tap(s: &mut Session, view: &mut [u16], key: u8, wait: u32) {
+    for f in 0..4 + wait {
+        s.gb.set_buttons(if f < 4 { key } else { 0 });
+        s.gb.clock_for_frame().unwrap();
+    }
+    let _ = view;
+}
+
+/// With a battery save, the title menu gains CONTINUE above NEW GAME; the
+/// bot must take CONTINUE, not wander into OPTION. The save is made in the
+/// game, through its own start menu, by a short run of the bot.
+#[test]
+fn pokemon_bot_continues_from_a_save() {
+    for cart in pokemon_roms() {
+        let r = ram_of(&cart);
+        let mut s = Session::boot(&cart, &want(160, Mode::Frame), 7).expect("boots");
+        let mut view = vec![0u16; MAX_W * H];
+        let mut f = 0;
+        while !(s.gb.peek(r.party_count) > 0
+            && s.gb.peek(r.in_battle) == 0
+            && s.gb.peek(r.font_loaded) & 1 == 0
+            && s.gb.peek(r.cur_map) == 0)
+        {
+            s.step(&mut view);
+            f += 1;
+            assert!(
+                f < 60 * 60 * 30,
+                "{}: never had a starter outside",
+                cart.name
+            );
+        }
+        for _ in 0..60 {
+            tap(&mut s, &mut view, 0, 0);
+        }
+        // Start menu, down to SAVE (one below the player's name), A, YES.
+        tap(&mut s, &mut view, pilot::START, 30);
+        let save = (0..20 * 18)
+            .map(|i| s.gb.peek(0xC3A0 + i))
+            .collect::<Vec<_>>()
+            .windows(4)
+            .position(|w| w == [0x92, 0x80, 0x95, 0x84])
+            .expect("SAVE in the start menu");
+        let want_item = ((save / 20) - 2) / 2;
+        while usize::from(s.gb.peek(0xCC26)) != want_item {
+            tap(&mut s, &mut view, pilot::DOWN, 8);
+        }
+        // Open SAVE, let "Would you like to SAVE the game?" print, YES.
+        for wait in [150, 150, 900] {
+            tap(&mut s, &mut view, pilot::A, wait);
+        }
+        let sram = s.gb.sram().to_vec();
+        assert!(sram.iter().any(|&b| b != 0), "{}: nothing saved", cart.name);
+
+        let saved = Cart {
+            name: cart.name.clone(),
+            rom: cart.rom.clone(),
+            pilot: cart.pilot,
+            sram: Some(sram),
+        };
+        let mut s = Session::boot(&saved, &want(160, Mode::Frame), 7).expect("boots");
+        let mut back = None;
+        for f in 0..60 * 60 * 2 {
+            s.step(&mut view);
+            if s.gb.peek(r.party_count) > 0 && s.gb.peek(r.cur_map) == 0 {
+                back = Some(f);
+                break;
+            }
+        }
+        eprintln!(
+            "{}: continued into Pallet Town at frame {back:?}",
+            cart.name
+        );
+        assert!(
+            back.is_some(),
+            "{}: did not continue from the save",
+            cart.name
+        );
+    }
 }
 
 /// The bot gets through the intro and out of the bedroom, and the world
 /// view lines up with the real screen wherever it is drawn.
 #[test]
 fn pokemon_bot_leaves_home_and_the_world_lines_up() {
-    let Some(cart) = pokemon_rom() else {
-        eprintln!("POKEMON_TEST_ROM unset; skipping");
+    let Some(cart) = pokemon_roms().into_iter().next() else {
         return;
     };
     let mut s = Session::boot(&cart, &want(461, Mode::Wide), 7).expect("boots");
-    let ram = pokemon::Ram::of(match cart.pilot {
-        Pilot::Pokemon(r) => r,
-        _ => unreachable!(),
-    });
+    let ram = ram_of(&cart);
     let mut view = vec![0u16; MAX_W * H];
     let mut maps = std::collections::BTreeSet::new();
     let (mut drawn, mut checked) = (0, 0);
@@ -382,5 +528,57 @@ fn bench_blit() {
             saver::frame(&mut g, &mut buf, &p);
         }
         eprintln!("{name}: {:?}/frame", t0.elapsed() / n);
+    }
+}
+
+/// Mean luma of view columns `xs`, 0..=255.
+fn luma(view: &[u16], w: usize, xs: &(impl Iterator<Item = usize> + Clone)) -> u32 {
+    let (mut sum, mut n) = (0u32, 0u32);
+    for y in 0..H {
+        for x in xs.clone() {
+            let c = xrgb(view[y * w + x]);
+            sum += ((c >> 16 & 255) * 3 + (c >> 8 & 255) * 6 + (c & 255)) / 10;
+            n += 1;
+        }
+    }
+    sum / n.max(1)
+}
+
+/// The sides never jump in brightness from one frame to the next unless
+/// the game's own screen does: a jump is a strobe on the panel.
+fn assert_no_strobe(cart: &Cart, frames: u64) {
+    let w = 461;
+    let x0 = (w - SCREEN_W) / 2;
+    let mut s = Session::boot(cart, &want(w, Mode::Wide), 7).expect("boots");
+    let mut view = vec![0u16; MAX_W * H];
+    let mut prev: Option<(u32, u32)> = None;
+    for f in 0..frames {
+        s.step(&mut view);
+        let side = luma(&view, w, &(0..x0).chain(x0 + SCREEN_W..w));
+        let screen = luma(&view, w, &(x0..x0 + SCREEN_W));
+        if let Some((ps, pc)) = prev {
+            assert!(
+                // The glow follows the screen's edges, so in a fade it moves
+                // with the screen, a little more where an edge leads.
+                side.abs_diff(ps) <= 24.max(screen.abs_diff(pc) * 3 / 2 + 8),
+                "{} frame {f}: sides jumped {ps} -> {side} while the screen went {pc} -> {screen}",
+                cart.name
+            );
+        }
+        prev = Some((side, screen));
+    }
+}
+
+#[test]
+fn the_sides_never_strobe() {
+    for b in BUNDLED {
+        assert_no_strobe(&bundled(b.name), 60 * 40);
+    }
+}
+
+#[test]
+fn the_sides_never_strobe_in_pokemon() {
+    for cart in pokemon_roms() {
+        assert_no_strobe(&cart, 60 * 60 * 4);
     }
 }

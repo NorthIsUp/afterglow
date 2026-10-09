@@ -319,6 +319,7 @@
   <section id="cfg">
     <h3>saver</h3>
     <span id="cfgname"></span>
+    <button id="restart" title="build the saver again from scratch">↺ Restart</button>
     <div id="knobs"></div>
   </section>
   <section>
@@ -419,14 +420,15 @@
   // request, so rapid clicking ends on the last one.
   let pending = null;
 
-  async function select(name) {
+  // `/restart` answers as `/select` does, after a rebuild from scratch.
+  async function select(name, route = "/select") {
     pending?.abort();
     const mine = (pending = new AbortController());
     showPicked(name);
     closeStream();
     let res;
     try {
-      res = await fetch("/select?saver=" + encodeURIComponent(name), {
+      res = await fetch(route + "?saver=" + encodeURIComponent(name), {
         method: "POST",
         cache: "no-store",
         signal: mine.signal,
@@ -450,6 +452,8 @@
     // monitor, or wedged): fall back to reading /meta.
     session(body.epoch ? body : null);
   }
+
+  document.getElementById("restart").onclick = () => meta && select(meta.saver, "/restart");
 
   // The click's effect, before the server has said anything.
   function showPicked(name) {

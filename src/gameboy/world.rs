@@ -90,6 +90,10 @@ impl World {
     /// is part of the way to the next square while the coordinates still
     /// name the last, so the fine scroll counts on from them: back from 16
     /// when the step goes left or up.
+    pub fn map(&self) -> Option<u8> {
+        self.map
+    }
+
     pub fn camera(&self, gb: &mut GameBoy) -> (i32, i32) {
         let r = self.ram;
         let (x, y) = (i32::from(gb.peek(r.x)), i32::from(gb.peek(r.y)));
@@ -188,6 +192,9 @@ impl World {
         let map = gb.peek(self.ram.cur_map);
         if self.map != Some(map) {
             self.map = Some(map);
+            // A new map must line up from scratch, not ride on the old one's
+            // standing: the number changes a moment before the screen does.
+            self.shown = false;
             self.border = self
                 .kanto
                 .place(gb.rom(), map, REACH, &mut self.placed)

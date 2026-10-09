@@ -37,12 +37,14 @@ pub struct Want {
     pub mode: Mode,
     pub rotate: Option<Duration>,
     pub seed: u32,
+    /// `saver::restarts()` when built: a new value is a power-on reset.
+    pub restart: u64,
 }
 
 impl Want {
     /// Same cartridges: a change in anything else keeps the game running.
     fn same_carts(&self, o: &Self) -> bool {
-        (&self.rom, &self.sav, &self.palette) == (&o.rom, &o.sav, &o.palette)
+        (&self.rom, &self.sav, self.restart) == (&o.rom, &o.sav, o.restart)
     }
 }
 
@@ -176,6 +178,7 @@ pub struct Session {
     pub name: String,
     driver: Driver,
     tone: Box<[u16]>,
+    color: bool,
     pub composer: Composer,
     pub frames: u64,
 }
@@ -193,6 +196,7 @@ impl Session {
             name: cart.name.clone(),
             driver: Driver::new(cart.pilot, seed),
             tone: tone_map(color, carts::shades(&want.palette, cart.pilot)),
+            color,
             composer: Composer::new(want.width, want.mode, cart.pilot),
             frames: 0,
         })
@@ -212,6 +216,11 @@ impl Session {
         }
         self.frames += 1;
         self.composer.compose(&mut self.gb, &self.tone, view);
+    }
+
+    /// A new `GAMEBOY_PALETTE`, without restarting the game.
+    fn repaint(&mut self, palette: &str) {
+        self.tone = tone_map(self.color, carts::shades(palette, self.pilot()));
     }
 
     pub fn pilot(&self) -> Pilot {
@@ -239,6 +248,14 @@ pub fn tests_runner(carts: Vec<Cart>) -> Runner {
 impl Runner {
     pub fn frame_for_test(&mut self, want: &Want) -> bool {
         self.frame(want)
+    }
+
+    pub fn take_for_test(&mut self, old: Option<&Want>, w: &Want) {
+        self.take(old, w);
+    }
+
+    pub fn frames(&self) -> u64 {
+        self.session.as_ref().map_or(0, |s| s.frames)
     }
 
     pub fn playing(&self) -> String {
@@ -281,6 +298,23 @@ impl Runner {
             }
         }
         false
+    }
+
+    /// A new want from the saver: reload the cartridges when they changed
+    /// (or on a restart), else keep the game going under the new view.
+    fn take(&mut self, old: Option<&Want>, w: &Want) {
+        if old.is_none_or(|o| !o.same_carts(w)) {
+            // A restart is a fresh cartridge: no battery save, so the game
+            // starts from NEW GAME.
+            let restarted = old.is_some_and(|o| o.restart != w.restart);
+            self.carts = carts::load(&w.rom, if restarted { "" } else { &w.sav });
+            self.idx = (w.seed as usize) % self.carts.len().max(1);
+            self.seed = w.seed;
+            self.session = None;
+        } else if let Some(s) = &mut self.session {
+            s.composer = Composer::new(w.width, w.mode, s.pilot());
+            s.repaint(&w.palette);
+        }
     }
 
     fn next(&mut self) {
@@ -341,15 +375,7 @@ fn run(e: &Engine) {
             c.want.clone().filter(|_| changed)
         };
         if let Some(w) = w {
-            let reload = want.as_ref().is_none_or(|o| !o.same_carts(&w));
-            if reload {
-                r.carts = carts::load(&w.rom, &w.sav);
-                r.idx = (w.seed as usize) % r.carts.len().max(1);
-                r.seed = w.seed;
-                r.session = None;
-            } else if let Some(s) = &mut r.session {
-                s.composer = Composer::new(w.width, w.mode, s.pilot());
-            }
+            r.take(want.as_ref(), &w);
             want = Some(w);
         }
         let w = want.as_ref().expect("set on the first claim");

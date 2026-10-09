@@ -125,6 +125,7 @@ impl GameBoySaver {
             mode: if wide { Mode::Wide } else { Mode::Frame },
             rotate: (rotate > 0).then(|| Duration::from_secs(rotate)),
             seed,
+            restart: crate::saver::restarts(),
         };
         Self::build(panel, aspect, want)
     }

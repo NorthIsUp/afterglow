@@ -29,7 +29,24 @@ pub struct Composer {
     mode: Mode,
     stitch: Stitch,
     world: Option<Box<World>>,
+    /// What filled the sides last frame, the view as it was then, and the
+    /// frames left of a crossfade from that view's sides.
+    source: Source,
+    last: Vec<u16>,
+    from: Vec<u16>,
+    fade: u32,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    Glow,
+    Stitch,
+    /// The world view of one map: a new map crossfades too.
+    World(Option<u8>),
+}
+
+/// About half a second at 59.7 Hz.
+const FADE: u32 = 30;
 
 impl Composer {
     pub fn new(w: usize, mode: Mode, pilot: Pilot) -> Self {
@@ -42,6 +59,10 @@ impl Composer {
             mode,
             stitch: Stitch::new(),
             world,
+            source: Source::Glow,
+            last: vec![0; w * H],
+            from: vec![0; w * H],
+            fade: 0,
         }
     }
 
@@ -66,13 +87,48 @@ impl Composer {
         if self.mode == Mode::Frame || w == SCREEN_W {
             return;
         }
-        if let Some(world) = &mut self.world {
-            if world.compose(gb, tone, out, w) {
-                return;
+        // Pokémon has the real map, or the glow: never a remembered
+        // background, which in the intro is a blank cream screen slid about.
+        let source = match self
+            .world
+            .as_mut()
+            .map(|world| world.compose(gb, tone, out, w))
+        {
+            Some(true) => Source::World(self.world.as_ref().and_then(|w| w.map())),
+            None if self.stitch.compose(gb, tone, out, w) => Source::Stitch,
+            Some(false) | None => Source::Glow,
+        };
+        if source != self.source {
+            self.source = source;
+            self.from.copy_from_slice(&self.last);
+            self.fade = FADE;
+        }
+        if self.fade > 0 {
+            self.fade -= 1;
+            let t = FADE - self.fade;
+            for y in 0..H {
+                let (row, old) = (&mut out[y * w..][..w], &self.from[y * w..][..w]);
+                for x in (0..x0).chain(x0 + SCREEN_W..w) {
+                    row[x] = blend(old[x], row[x], t, FADE);
+                }
             }
         }
-        self.stitch.compose(gb, tone, out, w);
+        self.last.copy_from_slice(&out[..w * H]);
     }
+}
+
+/// `a` toward `b`, `t` of `n` of the way, dimming applied before the mix.
+fn blend(a: u16, b: u16, t: u32, n: u32) -> u16 {
+    let ch = |c: u16, s: u16| {
+        let v = u32::from(c >> s & 31);
+        if c & DIM != 0 {
+            v * 85 / 256
+        } else {
+            v
+        }
+    };
+    let mix = |s: u16| ((ch(a, s) * (n - t) + ch(b, s) * t) / n) as u16;
+    mix(0) | mix(5) << 5 | mix(10) << 10
 }
 
 /// Columns of the screen's edge the glow averages, and rows it blurs over.
@@ -133,7 +189,12 @@ pub struct Stitch {
     canvas: Vec<u16>,
     cam: (usize, usize),
     prev: Option<(u8, u8)>,
+    /// Frames since the memory last started over; it is shown only once
+    /// a scene has held a second, so a one-frame fill never flashes up.
+    steady: u32,
 }
+
+const STEADY: u32 = 60;
 
 impl Stitch {
     fn new() -> Self {
@@ -141,12 +202,14 @@ impl Stitch {
             canvas: vec![UNKNOWN; CW * CH],
             cam: (0, 0),
             prev: None,
+            steady: 0,
         }
     }
 
     fn forget(&mut self) {
         self.canvas.fill(UNKNOWN);
         self.prev = None;
+        self.steady = 0;
     }
 
     /// The scroll most lines were drawn at. Lines at another one are a
@@ -165,10 +228,11 @@ impl Stitch {
         best.1
     }
 
-    pub fn compose(&mut self, gb: &GameBoy, tone: &[u16], out: &mut [u16], w: usize) {
+    /// True when it drew anything remembered.
+    pub fn compose(&mut self, gb: &GameBoy, tone: &[u16], out: &mut [u16], w: usize) -> bool {
         if !gb.lcd_on() {
             self.forget();
-            return;
+            return false;
         }
         let (bg, lines) = (gb.bg_buffer(), gb.line_scroll());
         let (sx, sy) = Self::scroll(lines);
@@ -197,9 +261,20 @@ impl Stitch {
                 }
             }
         }
+        // A blank or faded-out screen says nothing about the world: neither
+        // a new scene nor anything to remember.
+        let first = bg[lines.iter().position(|l| *l == [sx, sy]).unwrap_or(0) * SCREEN_W];
+        let blank = (0..H)
+            .filter(|&y| lines[y] == [sx, sy])
+            .all(|y| bg[y * SCREEN_W..][..SCREEN_W].iter().all(|&p| p == first));
+        if blank {
+            return self.draw(out, w);
+        }
         if known > 200 && differ * 3 > known {
             self.canvas.fill(UNKNOWN);
+            self.steady = 0;
         }
+        self.steady = self.steady.saturating_add(1);
         for y in 0..H {
             if lines[y] != [sx, sy] {
                 continue;
@@ -211,7 +286,16 @@ impl Stitch {
                 }
             }
         }
+        self.draw(out, w)
+    }
+
+    /// The remembered background into the sides, once the scene is steady.
+    fn draw(&self, out: &mut [u16], w: usize) -> bool {
+        if self.steady < STEADY {
+            return false;
+        }
         let x0 = (w - SCREEN_W) / 2;
+        let mut any = false;
         for y in 0..H {
             let row = &mut out[y * w..][..w];
             for (vx, o) in row.iter_mut().enumerate() {
@@ -222,8 +306,10 @@ impl Stitch {
                 let c = self.canvas[((self.cam.1 + y) % CH) * CW + wx];
                 if c != UNKNOWN {
                     *o = c;
+                    any = true;
                 }
             }
         }
+        any
     }
 }

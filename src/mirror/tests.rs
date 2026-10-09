@@ -197,6 +197,40 @@ fn a_viewer_gets_a_keyframe_then_deltas() {
     assert!(head.contains("\r\n\r\n24\r\n"), "{head}");
 }
 
+/// /restart rebuilds the saver even when it is already the one showing,
+/// answers like /select, and refuses a name that is not a saver.
+#[test]
+fn restart_rebuilds_the_saver_showing() {
+    let m = Mirror::new(15);
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    {
+        let m = Arc::clone(&m);
+        std::thread::spawn(move || {
+            for s in l.incoming().flatten() {
+                let m = Arc::clone(&m);
+                std::thread::spawn(move || handle(&m, s));
+            }
+        });
+    }
+    let req = |line: &str| {
+        let mut s = TcpStream::connect(addr).unwrap();
+        s.write_all(format!("{line} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes())
+            .unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).unwrap();
+        out
+    };
+    let (sel, restarts) = (m.selection(), crate::saver::restarts());
+    let body = req("POST /restart?saver=ascii");
+    assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+    assert!(body.contains("\"saver\":\"ascii\""), "{body}");
+    assert_ne!(m.selection(), sel, "the saver showing was not rebuilt");
+    assert!(crate::saver::restarts() > restarts);
+    assert!(req("POST /restart?saver=nope").starts_with("HTTP/1.1 400 "));
+    assert!(req("GET /restart?saver=ascii").starts_with("HTTP/1.1 405 "));
+}
+
 /// /select is the one route that changes what the panel draws, so it is the
 /// one route where a bad request must not be taken at face value: an
 /// unknown name 400s and leaves the selection alone. Over a real socket,

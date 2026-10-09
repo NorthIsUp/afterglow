@@ -78,7 +78,7 @@ pub fn serve(mirror: &Arc<Mirror>, addr: &str) {
 /// Routes that change what the panel does. POST only — a GET must not be able
 /// to, and everything else on any other path is a 405 so `POST /stream` cannot
 /// take a viewer slot and hold a thread.
-const WRITES: &[&str] = &["/select", "/rotate", "/rotation"];
+const WRITES: &[&str] = &["/select", "/restart", "/rotate", "/rotation"];
 
 pub(super) fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
     s.set_read_timeout(Some(Duration::from_secs(10)))?;
@@ -133,6 +133,28 @@ pub(super) fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
                 )
             }
         },
+        // As `/select`, but a rebuild from scratch even of the saver showing:
+        // a saver whose engine outlives a rebuild (gameboy) starts over too.
+        ("POST", "/restart") => {
+            match param(&query, "saver").filter(|n| saver::index_of(n).is_some()) {
+                Some(name) => {
+                    saver::request_restart();
+                    let i = saver::index_of(&name).expect("filtered above");
+                    if !mirror.reselect(i) {
+                        mirror.select(&name);
+                    }
+                    let body = applied_meta(mirror, mirror.selection())
+                        .unwrap_or_else(|| selected_json(mirror));
+                    send(&mut s, "200 OK", "application/json", body.as_bytes())
+                }
+                None => send(
+                    &mut s,
+                    "400 Bad Request",
+                    "application/json",
+                    br#"{"error":"unknown saver"}"#,
+                ),
+            }
+        }
         // Minutes, because that is the unit anyone setting this thinks in; the
         // renderer's own unit is seconds and `/meta` reports those. 0 is off.
         ("POST", "/rotate") => {

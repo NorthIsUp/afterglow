@@ -125,6 +125,8 @@ pub struct Bot {
     snapshots: Vec<Vec<u8>>,
     rewinds: u32,
     last_dir: u8,
+    /// Frames spent in the intro, for the watchdog.
+    intro_frames: u64,
     kanto: Kanto,
     /// The current map's walkable squares, row-major, and its size in
     /// squares and joined edges.
@@ -157,6 +159,7 @@ impl Bot {
             snapshots: Vec::new(),
             rewinds: 0,
             last_dir: DOWN,
+            intro_frames: 0,
             kanto: Kanto::new(rev),
             grid_map: None,
             walkable: Vec::new(),
@@ -175,27 +178,42 @@ impl Bot {
     pub fn buttons(&mut self, gb: &mut GameBoy, frame: u64) -> u8 {
         self.rewind_if_stuck(gb, frame);
         let r = self.ram;
-        // Title screen and Oak's speech, until both names are chosen. Down
-        // and A picks the first preset name; if the keyboard opened
-        // instead, Start jumps to its END and A takes it.
-        if naming_screen(gb) {
-            self.walking = None;
-            return press(
-                frame,
-                16,
-                if (frame / 16).is_multiple_of(2) {
-                    START
-                } else {
+        // The title's menus, read from the screen rather than counted out
+        // in presses: a battery save adds CONTINUE above NEW GAME.
+        match screen(gb) {
+            Screen::Options => return press(frame, 16, B),
+            // Item 0 is CONTINUE when there is a save, NEW GAME when not:
+            // carrying on is what a screensaver wants, the player's own
+            // adventure or the bot's from before a restart.
+            Screen::MainMenu => {
+                let key = if gb.peek(CURRENT_MENU_ITEM) == 0 {
                     A
-                },
-            );
+                } else {
+                    UP
+                };
+                return press(frame, 16, key);
+            }
+            // Type one letter, jump to END, take it. An empty name is not
+            // accepted, so Start and A alone would go round forever.
+            Screen::Keyboard => {
+                let key = [A, START, A][(frame / 16 % 3) as usize];
+                return press(frame, 16, key);
+            }
+            Screen::Other => {}
         }
-        let mut unnamed = |a: u16| matches!(gb.peek(a), 0 | 0x50);
-        if unnamed(r.player_name) || unnamed(r.rival_name) {
+        if !named(gb, r) {
             self.walking = None;
-            let key = [DOWN, A, START, A][(frame / 16 % 4) as usize];
-            return press(frame, 16, key);
+            // Oak's speech: A through it; Down and A takes the first preset
+            // name from each list.
+            self.intro_frames += 1;
+            if self.intro_frames > INTRO_LIMIT {
+                self.intro_frames = 0;
+                return SOFT_RESET;
+            }
+            let key = [DOWN, A, A, A][(frame / 8 % 4) as usize];
+            return press(frame, 8, key);
         }
+        self.intro_frames = 0;
         if gb.peek(r.in_battle) != 0 {
             self.walking = None;
             self.text_frames = 0;
@@ -508,14 +526,55 @@ impl Bot {
     }
 }
 
-/// The naming keyboard is up: its last line reads `UPPER CASE` or
-/// `lower case`, in the game's own character codes, in `wTileMap` (the same
-/// address in all three revisions).
-fn naming_screen(gb: &mut GameBoy) -> bool {
+/// Both names are the player's choices. Until Oak asks, they are empty,
+/// then the placeholders the title screen sets (`NINTEN`, `SONY`).
+pub fn named(gb: &mut GameBoy, r: Ram) -> bool {
+    const NINTEN: [u8; 7] = [0x8D, 0x88, 0x8D, 0x93, 0x84, 0x8D, 0x50];
+    const SONY: [u8; 5] = [0x92, 0x8E, 0x8D, 0x98, 0x50];
+    let mut read = |a: u16, n: u16| (0..n).map(|i| gb.peek(a + i)).collect::<Vec<_>>();
+    let (player, rival) = (read(r.player_name, 7), read(r.rival_name, 5));
+    !matches!(player[0], 0 | 0x50)
+        && !matches!(rival[0], 0 | 0x50)
+        && player != NINTEN
+        && rival != SONY
+}
+
+/// `wCurrentMenuItem`, the same in all three revisions.
+const CURRENT_MENU_ITEM: u16 = 0xCC26;
+/// A, B, Select and Start together: the game's own soft reset.
+const SOFT_RESET: u8 = A | B | 0x40 | START;
+/// The intro takes about four minutes; twice that is stuck somewhere.
+const INTRO_LIMIT: u64 = 60 * 60 * 8;
+
+enum Screen {
+    MainMenu,
+    Options,
+    Keyboard,
+    Other,
+}
+
+/// Which title-side screen is up, from words on it in `wTileMap` (the same
+/// address in all three revisions), in the game's own character codes.
+fn screen(gb: &mut GameBoy) -> Screen {
     const TILE_MAP: u16 = 0xC3A0;
-    const AT: u16 = TILE_MAP + 15 * 20 + 8;
-    let word = [0, 1, 2, 3].map(|i| gb.peek(AT + i));
-    word == [0x82, 0x80, 0x92, 0x84] || word == [0xA2, 0xA0, 0xB2, 0xA4]
+    const NEW_GAME: &[u8] = &[0x8D, 0x84, 0x96, 0x7F, 0x86, 0x80, 0x8C, 0x84];
+    const TEXT_SPEED: &[u8] = &[0x93, 0x84, 0x97, 0x93, 0x7F, 0x92, 0x8F, 0x84, 0x84, 0x83];
+    const CASE: &[u8] = &[0x82, 0x80, 0x92, 0x84];
+    const LOWER_CASE: &[u8] = &[0xA2, 0xA0, 0xB2, 0xA4];
+    let mut map = [0u8; 20 * 18];
+    for (i, t) in map.iter_mut().enumerate() {
+        *t = gb.peek(TILE_MAP + i as u16);
+    }
+    let has = |w: &[u8]| map.windows(w.len()).any(|x| x == w);
+    if has(TEXT_SPEED) {
+        Screen::Options
+    } else if has(NEW_GAME) {
+        Screen::MainMenu
+    } else if map[15 * 20 + 8..][..4] == *CASE || map[15 * 20 + 8..][..4] == *LOWER_CASE {
+        Screen::Keyboard
+    } else {
+        Screen::Other
+    }
 }
 
 /// `key` for the first two frames of every `every`, so each press is a

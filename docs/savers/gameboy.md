@@ -108,15 +108,27 @@ back to the last Pokémon Center, healed, and it sets off again. If some
 scripted moment holds it in one place for three minutes it rewinds to a save
 state from a few minutes before and tries again with different luck.
 
-It does not beat the game. Doing that needs either a full route through the
-story (every key item, gym and cutscene) or a tool-assisted movie replayed
-input for input, and a movie only replays on an emulator whose timing
-matches the one it was made on, from the same boot ROM: TASVideos' Pokémon
-runs are BizHawk movies on Gambatte or GBHawk with Nintendo's GBC boot ROM.
-mizu-core starts without a boot ROM and is a different emulator; whether
-any published movie syncs on it is still being tested (WIP). In the author's tests, an hour and a
-half of play takes it from the bedroom through Pallet Town and Route 1 to
-Viridian City.
+At the title it reads the menu off the screen rather than counting presses:
+with a battery save the menu gains CONTINUE, and the bot takes it, so it
+carries on the save (yours, from `GAMEBOY_SAV`) instead of starting over. An
+options screen it wanders into is backed out of with B, and an intro still
+going after eight minutes gets the game's own soft reset.
+
+The mirror page's **↺ Restart** (`POST /restart?saver=gameboy`) is a
+power-on reset: the cartridge boots again with no battery save, so the bot
+takes NEW GAME.
+
+It does not beat the game. That needs either a full route through the story
+(every key item, gym and cutscene) or a tool-assisted movie replayed input
+for input. TASVideos' Pokémon movies are BizHawk recordings on Gambatte or
+GBHawk, from power-on with Nintendo's GBC boot ROM, which afterglow cannot
+ship. Tried here with the 75-second Red "save glitch" movie (4329M): the
+menus sync (the game is saving at the frame the movie cuts the power), but
+the full run does not, across 630 boot-offset and power-cut timings. A
+movie would need your own boot ROM dump to start from the same state, which
+the emulator could load but this saver does not take yet. In the author's
+tests, an hour and a half of play takes the bot from the bedroom through
+Pallet Town and Route 1 to Viridian City.
 
 ## How it runs
 
