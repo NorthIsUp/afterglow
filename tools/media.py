@@ -47,6 +47,7 @@ WARMUP = {
     "reaction-diffusion": 10,
     "fractal-tree": 4,
     "doom": 8,
+    "chess": 10,
 }
 DEFAULT_WARMUP = 2
 
@@ -55,6 +56,10 @@ DEFAULT_WARMUP = 2
 # paced: their engines run on the wall clock, so an unpaced dump would be a
 # second of play stretched over the clip.
 FEATURED = {"doom"}
+
+# Savers whose engines think on the wall clock in the default build: dumped
+# paced for the same reason, with what they need to show some play in a clip.
+PACED = {"chess": {"SAVER_DUMP_PACED": "1", "CHESS_THINK_MS": "600"}}
 
 
 def savers() -> list[str]:
@@ -181,7 +186,7 @@ def main() -> int:
                 assert doom
                 frames = capture(doom[0], name, Path(scratch), doom[1])
             else:
-                frames = capture(binary, name, Path(scratch), {})
+                frames = capture(binary, name, Path(scratch), PACED.get(name, {}))
             mode = gif(frames, out / f"{name}.gif")
             if name in tour:
                 clips[name] = frames
