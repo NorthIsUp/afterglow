@@ -157,7 +157,14 @@ crate::ascii_rest::each_piece!(savers);
 
 /// The mirror page's list sections, in the order it shows them. A saver's
 /// section is `group_at`.
-pub const GROUPS: &[&str] = &["scenes", "ascii.rest", "classics", "flights", "generative"];
+pub const GROUPS: &[&str] = &[
+    "scenes",
+    "ascii.rest",
+    "classics",
+    "flights",
+    "generative",
+    "games",
+];
 const SCENES: usize = 0;
 const ASCII_REST: usize = 1;
 
@@ -195,13 +202,13 @@ const SECTIONS: &[(&str, usize)] = &[
     ("tactiles", 4),
     ("zot", 4),
     ("plasma", 4),
-    ("chess", 4),
-    ("tetris", 2),
-    ("maze-chase", 2),
+    ("chess", 5),
+    ("tetris", 5),
+    ("maze-chase", 5),
     #[cfg(feature = "doom")]
-    ("doom", 2),
+    ("doom", 5),
     #[cfg(feature = "micropolis")]
-    ("micropolis", 4),
+    ("micropolis", 5),
 ];
 
 /// Index into `GROUPS` of a row. A table walk, so for the HTTP thread and the

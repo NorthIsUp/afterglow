@@ -9,7 +9,7 @@ by the `tailscale-auth` sidecar — there is no login and there must never be on
 The saver list is on the left, the panel in the middle, and a bar along the
 bottom with the shown saver's settings, rotation (on/off, interval) and the
 view controls (`actual ratio / size / calibrate`, below). The list is grouped —
-`scenes`, `ascii.rest`, `classics`, `flights`, `generative` — and the groups come
+`scenes`, `ascii.rest`, `classics`, `flights`, `generative`, `games` — and the groups come
 from `/meta`, built from one table in `saver.rs`, so the page knows no saver by
 name. Type in the filter box to narrow it; up/down and enter pick from the
 keyboard, escape clears. The saver on the panel is highlighted and scrolled into
