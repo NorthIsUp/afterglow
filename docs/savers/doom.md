@@ -45,8 +45,25 @@ and picks one errand by path cost, in this order:
    first real gun, armour or ammo it is short of);
 3. the exit, once a route reaches it, after any secret sector within reach in
    the first 90 s;
-4. keys, then secrets, then switches and trigger lines not yet tried;
-5. ground it has not seen, then the monsters still alive.
+4. a switch, walk-over or gun line that opens the way to the exit, then keys,
+   then a line that opens the way to a key, then secrets;
+5. a line that opens up new ground, ground it has not seen, the monsters still
+   alive, and last the lines that seem to do nothing.
+
+What a line does is worked out in `doom/ap_effect.c`. For every switch,
+walk-over and gun special it knows the trigger, whether it repeats, and the
+action: a door opening or shutting, a floor raised or lowered to its target
+(next floor up, lowest ceiling around, lowest floor around, +24, and so on), a
+lift, a flight of stairs, a ceiling brought down. While the exit is out of
+reach, a few lines a second have their effect laid over the tagged sectors'
+heights as a hypothesis, and the grid is flooded again from where the player
+would stand to set the line off. A line that brings the exit within reach is
+the errand at once; one that reaches a key, or opens up new ground, comes
+next; one that only shuts things is left alone. Scores hold until a line fires
+for good, a key is taken, or 10 s pass. A walk-over line on the lip of a
+ledge is crossed from the top, and a gun line is shot from a spot with a clear
+line to it. Each score costs one flood, one to two milliseconds on a
+desktop, and there are at most four a second.
 
 It follows the path, aiming through the middle of each opening and at the
 farthest cell in a clear straight walk. A door or lift on the way is pressed:
@@ -54,13 +71,15 @@ it walks up, faces the line and uses it, or stands on a lift and waits. A lift
 called from elsewhere becomes an errand first. It strafes along the route while
 turning to shoot the nearest monster it can see. Pressing a switch takes
 priority over turning to fight. A cell it keeps failing to cross gets
-expensive. An errand that fails three times, or takes over 25 s, is dropped.
-If it has not moved 96 units in 15 s, it jumps to a random item.
+expensive. An errand that fails three times, or outlasts its walk by 25 s, is dropped.
+If it has not moved 96 units in 15 s, it jumps to a random item with room
+around it.
 
 Some ideas come from Ioan Chera's
 [AutoDoom](https://github.com/ioan-chera/AutoDoom) bot for Eternity: aiming
-through the middle of each opening, and a lift that counts as being at either
-end. No code is taken from it.
+through the middle of each opening, a lift that counts as being at either end,
+and judging a switch by laying its effect over the sector heights and
+searching again. No code is taken from it.
 
 `tools/doom-bench/` plays maps headless at full speed and reports exits, time,
 kills, secrets and stuck-jumps. `mise run bench-doom 1 8` plays every Episode 1

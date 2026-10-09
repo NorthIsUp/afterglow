@@ -22,7 +22,8 @@ int dgx_init(const char *wad, uint32_t seed);
 int dgx_tick(uint32_t ms);
 void dgx_view(int width, int pct, int fov, int hud, int skill_1to5, int godmode);
 extern uint32_t ap_seed;
-extern int ap_hops;
+extern int ap_hops, ap_evals;
+extern double ap_eval_ms, ap_eval_max_ms;
 extern int prndindex;
 
 static void dump(const char *dir, const char *map, int n) {
@@ -43,6 +44,8 @@ static void run(int e, int m, int minutes, int skill, const char *frames) {
     if (W_CheckNumForName(name) < 0) return;
     G_DeferedInitNew(skill, e, m);
     int hops0 = ap_hops;
+    ap_evals = 0;
+    ap_eval_ms = ap_eval_max_ms = 0;
     int limit = minutes * 60 * 35, started = 0, deaths = 0, shots = 0, played = 0, last = -1;
     for (int i = 0; i < limit * 4 + 35 * 30; i++) {
         if (dgx_tick(29) < 0) {
@@ -60,11 +63,11 @@ static void run(int e, int m, int minutes, int skill, const char *frames) {
         deaths = p->playerstate == PST_DEAD;
         if (frames && gamestate == GS_LEVEL && played % (35 * 10) == 0 && played / 350 >= shots)
             dump(frames, name, shots++);
-        int exited = gamestate == GS_INTERMISSION || gameaction == ga_completed;
+        int exited = gamestate == GS_INTERMISSION || gamestate == GS_FINALE || gameaction == ga_completed || gameaction == ga_victory;
         if (exited || deaths || played >= limit || gamestate != GS_LEVEL) {
-            printf("%-6s %-4s %6.1f  kills %3d/%-3d  secrets %2d/%-2d  deaths %d  hops %d\n", name,
-                   exited ? "EXIT" : deaths ? "DIED" : "--", played / 35.0, p->killcount, totalkills, p->secretcount, totalsecret,
-                   deaths, ap_hops - hops0);
+            printf("%-6s %-4s %6.1f  kills %3d/%-3d  secrets %2d/%-2d  deaths %d  hops %d  evals %d  eval-ms %.1f max %.2f\n",
+                   name, exited ? "EXIT" : deaths ? "DIED" : "--", played / 35.0, p->killcount, totalkills, p->secretcount,
+                   totalsecret, deaths, ap_hops - hops0, ap_evals, ap_eval_ms, ap_eval_max_ms);
             fflush(stdout);
             return;
         }
