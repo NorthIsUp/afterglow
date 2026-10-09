@@ -101,7 +101,7 @@ fn layout(panel: &Panel, aspect: usize) -> (usize, usize, usize) {
 impl Doom {
     pub fn new(panel: &Panel, _fps: u32) -> Self {
         let wad = env_str(&["DOOM_WAD"], "/freedoom1.wad");
-        let map_secs = env_num(&["DOOM_MAP_SECS"], 180, 0, 86_400) as u64;
+        let map_secs = env_num(&["DOOM_MAP_SECS"], 300, 0, 86_400) as u64;
         let gamma = env_num(&["DOOM_GAMMA"], 2, 0, 4) as u32;
         let light = env_num(&["DOOM_LIGHT"], 1, 0, 2) as i32;
         let fov = env_num(&["DOOM_FOV"], 0, 0, 170) as i32;

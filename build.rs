@@ -1,7 +1,7 @@
 //! A no-op unless `--features doom`, so the default build needs no C compiler.
 //!
-//! With it, doomgeneric and `doom/afterglow_doom.c` are compiled into one
-//! static library. `exit` is defined to `dg_exit`, which is how the engine's
+//! With it, doomgeneric, `doom/afterglow_doom.c` and the autopilot
+//! (`doom/autopilot.c`, `doom/ap_nav.c`) are compiled into one static library. `exit` is defined to `dg_exit`, which is how the engine's
 //! error paths reach the glue's setjmp boundary instead of ending the process.
 
 fn main() {
@@ -19,7 +19,7 @@ fn doom() {
         .filter(|p| p.extension().is_some_and(|x| x == "c"))
         .collect();
     sources.sort();
-    sources.push("doom/afterglow_doom.c".into());
+    sources.extend(["doom/afterglow_doom.c", "doom/autopilot.c", "doom/ap_nav.c"].map(Into::into));
     cc::Build::new()
         .files(&sources)
         .include("doom/doomgeneric")

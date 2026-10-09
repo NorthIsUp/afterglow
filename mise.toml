@@ -29,6 +29,14 @@ run         = "cargo build --release --locked --features doom"
 description = "Run tests with Doom compiled in, against Freedoom (downloaded once)"
 run         = 'DOOM_TEST_WAD="$PWD/$(tools/freedoom.sh)" cargo test --release --locked --features doom'
 
+[tasks.bench-doom]
+description = "Play every map of an episode headless, several times, and count autopilot exits"
+usage       = '''
+arg "[episode]" default="1" help="Doom episode, 1..4"
+arg "[trials]" default="8" help="runs per map, each with its own random game"
+'''
+run         = 'tools/doom-bench/many.sh {{arg(name="episode")}} {{arg(name="trials")}}'
+
 [tasks.clippy-doom]
 description = "Run clippy on the Doom build"
 run         = "cargo clippy --release --locked --all-targets --features doom -- -D warnings"

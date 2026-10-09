@@ -250,7 +250,7 @@ pub fn help(key: &str) -> Option<&'static str> {
         "DOOM_GOD" => "god mode; off, a death waits 3 s, then a new random map",
         "DOOM_FOV" => "horizontal field of view in degrees; 0 is Hor+ for the box, up to 120",
         "DOOM_WIDTH_PCT" => "share of the panel's width the game view takes; 0 is all of it",
-        "DOOM_MAP_SECS" => "seconds before a new random map; 0 only on switching to doom",
+        "DOOM_MAP_SECS" => "longest a map runs before a new random one; 0 only on exit or switch",
         "DOOM_LIGHT" => "extra sector light, Doom's gun flash held on; from the next map",
         "DOOM_GAMMA" => "palette brightness lift",
         "DOOM_WAD" => "path to the IWAD; a running engine keeps the one it loaded",

@@ -215,11 +215,14 @@ impl Runner<'_> {
         self.check(unsafe { dgx_warp(seed, w.light) })
     }
 
-    fn tick(&self, ms: u32) -> bool {
+    /// One tic. Returns the count of levels started so far, or `None` if the
+    /// engine died.
+    fn tick(&self, ms: u32) -> Option<c_int> {
         #[cfg(test)]
         let t0 = Instant::now();
-        if !self.check(unsafe { dgx_tick(ms) }) {
-            return false;
+        let level = unsafe { dgx_tick(ms) };
+        if !self.check(level) {
+            return None;
         }
         let (mut w, mut pal): (c_int, c_int) = (0, 0);
         let src = unsafe { dgx_frame(&raw mut w, &raw mut pal) };
@@ -238,7 +241,7 @@ impl Runner<'_> {
             TICK_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
             TICKS.fetch_add(1, Ordering::Relaxed);
         }
-        true
+        Some(level)
     }
 }
 
@@ -259,6 +262,7 @@ fn run(e: &Engine) {
     let mut tics: u64 = 0;
     let mut next_tic = Instant::now();
     let mut next_map = None;
+    let mut level = -1;
     while !e.dead() {
         // Engine calls (an init is a WAD parse, a warp a level load) happen
         // with the lock released: `claim` on the render thread takes it.
@@ -300,8 +304,14 @@ fn run(e: &Engine) {
         // each tic keeps 35 tics a second without drift.
         let ms = ((tics + 1) * 1000 / TICRATE - tics * 1000 / TICRATE) as u32;
         tics += 1;
-        if !r.tick(ms) {
+        let Some(now_level) = r.tick(ms) else {
             break;
+        };
+        // A map the autopilot finished, or died on, was followed by a new
+        // one: its time runs from its own start.
+        if now_level != level {
+            level = now_level;
+            next_map = w.map_every.map(|d| Instant::now() + d);
         }
         next_tic += Duration::from_nanos(1_000_000_000 / TICRATE);
         let now = Instant::now();
