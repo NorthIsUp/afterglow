@@ -79,7 +79,7 @@
 //!   `off` disables it). See `src/mirror/`.
 //! * `SAVER_DUMP`     — render to PPM files in this directory instead of to a
 //!   display, then exit. Not with `SAVER_TERM`. Also honours `SAVER_DUMP_FRAMES`, `SAVER_DUMP_EVERY`,
-//!   `SAVER_WIDTH`, `SAVER_HEIGHT`.
+//!   `SAVER_DUMP_PACED`, `SAVER_WIDTH`, `SAVER_HEIGHT`.
 //! * `SAVER_TERM`     — 1 animates the saver in this terminal instead of on a
 //!   display, until Ctrl-C or `q`. Any OS with a truecolor terminal, no card
 //!   needed. See `term.rs`.
@@ -101,6 +101,8 @@ mod config;
 #[cfg(test)]
 mod docs_check;
 mod doodles;
+#[cfg(feature = "doom")]
+mod doom;
 mod dump;
 mod dvd;
 mod fire;

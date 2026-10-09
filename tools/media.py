@@ -46,8 +46,15 @@ WARMUP = {
     "lissajous": 6,
     "reaction-diffusion": 10,
     "fractal-tree": 4,
+    "doom": 8,
 }
 DEFAULT_WARMUP = 2
+
+# Savers only a `--features doom` build has. Rendered only when named
+# (`mise run media doom`), never in the tour of the default image, and dumped
+# paced: their engines run on the wall clock, so an unpaced dump would be a
+# second of play stretched over the clip.
+FEATURED = {"doom"}
 
 
 def savers() -> list[str]:
@@ -57,12 +64,27 @@ def savers() -> list[str]:
     return list(dict.fromkeys(names))
 
 
-def capture(binary: Path, name: str, scratch: Path) -> list[np.ndarray]:
+def doom_build() -> tuple[Path, dict[str, str]]:
+    """The doom binary, in its own target dir so the default one stays MIT,
+    and the Freedoom WAD it plays."""
+    target = ROOT / "target/doom"
+    subprocess.run(
+        ["cargo", "build", "--release", "--locked", "--features", "doom",
+         "--target-dir", str(target)],
+        cwd=ROOT, check=True,
+    )
+    wad = subprocess.run([str(ROOT / "tools/freedoom.sh")], cwd=ROOT, check=True,
+                         capture_output=True, text=True).stdout.strip()
+    return target / "release/screensaver", {"DOOM_WAD": str(ROOT / wad), "SAVER_DUMP_PACED": "1"}
+
+
+def capture(binary: Path, name: str, scratch: Path, extra: dict[str, str]) -> list[np.ndarray]:
     warm = WARMUP.get(name, DEFAULT_WARMUP)
     dump = scratch / name
     every = DUMP_FPS // FPS
     env = {
         **os.environ,
+        **extra,
         "SAVER": name,
         "SAVER_HTTP": "off",
         "SAVER_DUMP": str(dump),
@@ -143,18 +165,23 @@ def main() -> int:
     if not binary.exists():
         sys.exit(f"{binary}: run `mise run build` first")
     indexed = savers()
-    want = names or indexed
+    want = names or [n for n in indexed if n not in FEATURED]
     unknown = set(want) - set(indexed)
     if unknown:
         sys.exit(f"not in the README's saver index: {sorted(unknown)}")
-    tour = [] if names else indexed
+    tour = [] if names else want
+    doom = doom_build() if FEATURED & set(want) else None
     out.mkdir(parents=True, exist_ok=True)
     clips: dict[str, list[np.ndarray]] = {}
 
     with tempfile.TemporaryDirectory() as scratch:
 
         def one(name: str) -> None:
-            frames = capture(binary, name, Path(scratch))
+            if name in FEATURED:
+                assert doom
+                frames = capture(doom[0], name, Path(scratch), doom[1])
+            else:
+                frames = capture(binary, name, Path(scratch), {})
             mode = gif(frames, out / f"{name}.gif")
             if name in tour:
                 clips[name] = frames
