@@ -35,6 +35,7 @@ const SEND_BUFFER: libc::c_int = 256 << 10;
 
 const PAGE: &str = include_str!("mirror.html");
 const STREAM_JS: &str = include_str!("stream.js");
+const KNOBS_JS: &str = include_str!("knobs.js");
 
 /// Longest interval `POST /rotate` accepts, in minutes — the same day
 /// `SAVER_ROTATE_SECS` tops out at.
@@ -210,6 +211,12 @@ pub(super) fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
             "200 OK",
             "text/javascript; charset=utf-8",
             STREAM_JS.as_bytes(),
+        ),
+        (_, "/knobs.js") => send(
+            &mut s,
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            KNOBS_JS.as_bytes(),
         ),
         (_, "/meta") => match meta_json(mirror) {
             Some(meta) => send(&mut s, "200 OK", "application/json", meta.as_bytes()),
