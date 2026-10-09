@@ -216,6 +216,8 @@ impl Runner<'_> {
     }
 
     fn tick(&self, ms: u32) -> bool {
+        #[cfg(test)]
+        let t0 = Instant::now();
         if !self.check(unsafe { dgx_tick(ms) }) {
             return false;
         }
@@ -231,9 +233,20 @@ impl Runner<'_> {
         f.pal = pal.clamp(0, 13) as u8;
         f.blank = false;
         f.seq = f.seq.wrapping_add(1);
+        #[cfg(test)]
+        {
+            TICK_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            TICKS.fetch_add(1, Ordering::Relaxed);
+        }
         true
     }
 }
+
+/// Engine time per tic, for the bench: the tic, the render and the copy out.
+#[cfg(test)]
+pub static TICK_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+pub static TICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn run(e: &Engine) {
     let mut r = Runner {

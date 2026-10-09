@@ -41,9 +41,14 @@ map. Intermissions and the end-of-episode text are skipped to a new random map.
   `doom/afterglow_doom.c` instead of ending the process. The saver then shows
   static until the pod restarts, because Doom's globals cannot be re-initialised
   in place.
-- Each Doom pixel is a solid cell. The palette holds all fourteen PLAYPAL
-  palettes, so damage and pickup tints are ordinary colour indices and the web
-  mirror works unchanged. A panel narrower than 4:3 shows the 320-wide game
+- The frame is scaled straight onto the panel's pixels, and only when the
+  engine has finished a new one. Only source rows that changed are redrawn,
+  each over the columns that changed. On pine that keeps a full-motion frame
+  about as cheap as `plasma`, where a cell-by-cell diff of 207k cells cost
+  five times as much.
+- The web mirror and the terminal get the same frame as solid cells. The
+  palette holds all fourteen PLAYPAL palettes, so damage and pickup tints are
+  ordinary colour indices. A panel narrower than 4:3 shows the 320-wide game
   letterboxed.
 
 Source: [`src/doom/`](../../src/doom/mod.rs),
