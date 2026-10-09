@@ -166,6 +166,7 @@ them live — see [Live settings](docs/mirror.md#live-settings-config).
 | [`maze-chase`](docs/savers/maze-chase.md)        | A Pac-Man-style maze chase on autopilot: four ghosts with the classic personalities, in a maze generated to fill the panel, new every level.                                                                                            |
 | [`doom`](docs/savers/doom.md)                    | Freedoom on autopilot, one widescreen game on a random map, its field of view sized to the panel. **Only in the `-gpl` image** (see the page).                                                                                          |
 | [`micropolis`](docs/savers/micropolis.md)        | Micropolis, the open-source SimCity, built by an AI mayor from empty land, disasters and all, under a slow camera that fills the panel. **Only in the `-gpl` image** (see the page).                                                    |
+| [`gameboy`](docs/savers/gameboy.md)              | A Game Boy emulator playing free homebrew on autopilot, the screen at full height and the game's world carried out to the sides; mount your own ROM, and Pokémon Red, Blue or Yellow get a bot that plays forever.                      |
 
 ### ascii.rest halftone scenes
 

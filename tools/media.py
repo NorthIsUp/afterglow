@@ -51,6 +51,7 @@ WARMUP = {
     "tetris": 30,
     "maze-chase": 6,
     "micropolis": 30,
+    "gameboy": 30,
 }
 DEFAULT_WARMUP = 2
 
@@ -70,8 +71,13 @@ FEATURED = {
 
 # Savers whose engines think on the wall clock in the default build: dumped
 # paced for the same reason, with what they need to show some play in a clip.
-# Chess's seed is pinned so the clip catches a capture being fought out.
-PACED = {"chess": {"SAVER_DUMP_PACED": "1", "CHESS_THINK_MS": "600", "CHESS_SEED": "1"}}
+# Chess's seed is pinned so the clip catches a capture being fought out; the
+# gameboy one plays Rebound, whose level scrolls, so the wide view fills in.
+PACED = {
+    "chess": {"SAVER_DUMP_PACED": "1", "CHESS_THINK_MS": "600", "CHESS_SEED": "1"},
+    "gameboy": {"SAVER_DUMP_PACED": "1", "GAMEBOY_SEED": "4"},
+}
+
 
 
 def savers() -> list[str]:

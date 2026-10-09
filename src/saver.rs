@@ -12,6 +12,7 @@ use crate::doom::Doom;
 use crate::dvd::Dvd;
 use crate::fire::Fire;
 use crate::fractal::Fractal;
+use crate::gameboy::GameBoySaver;
 use crate::grid::Grid;
 use crate::hardrain::HardRain;
 use crate::hypercube::Hypercube;
@@ -136,6 +137,7 @@ macro_rules! savers {
         ("doom", |p, fps| Box::new(Doom::new(p, fps))),
         #[cfg(feature = "micropolis")]
         ("micropolis", |p, fps| Box::new(Micropolis::new(p, fps))),
+        ("gameboy", |p, fps| Box::new(GameBoySaver::new(p, fps))),
             $((
                 crate::ascii_rest::$sm::$st::NAME,
                 crate::ascii_rest::Play::<crate::ascii_rest::$sm::$st>::build,
@@ -209,6 +211,7 @@ const SECTIONS: &[(&str, usize)] = &[
     ("doom", 5),
     #[cfg(feature = "micropolis")]
     ("micropolis", 5),
+    ("gameboy", 5),
 ];
 
 /// Index into `GROUPS` of a row. A table walk, so for the HTTP thread and the

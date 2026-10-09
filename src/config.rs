@@ -280,6 +280,11 @@ pub fn help(key: &str) -> Option<&'static str> {
             "mean minutes between a fire, flood or earthquake; 0 for none"
         }
         "MICROPOLIS_BUNDLED_PCT" => "chance a new city is one of the release's sample cities",
+        "GAMEBOY_ROM" => "a .gb/.gbc file or a folder of them; empty plays the bundled homebrew",
+        "GAMEBOY_SAV" => "battery save to start a single ROM from; read once, never written",
+        "GAMEBOY_WIDE" => "fill the sides with more of the game's world; off is a glow",
+        "GAMEBOY_PALETTE" => "monochrome games: auto, green, pocket, grey, red or blue",
+        "GAMEBOY_ROTATE_SECS" => "seconds per cartridge when there are several; 0 never moves on",
         k if k.ends_with("_SEED") => "0 rolls a new one every build; anything else pins it",
         k if k.ends_with("_CELL_W") || k.ends_with("_CELL_H") || k.ends_with("_CELL") => {
             "cell size in framebuffer pixels"

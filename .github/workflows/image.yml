@@ -126,6 +126,13 @@ jobs:
               }
               rm -rf /tmp/dump-$s
             done
+            # Paced: the emulator runs on its own thread at its own 59.7 Hz.
+            # The damage self-check is the point here; whether the bundled
+            # cartridges play is for the gameboy::tests in cargo test.
+            SAVER=gameboy SAVER_HTTP=off SAVER_DUMP=/tmp/dump-gameboy SAVER_DUMP_FRAMES=90 \
+              SAVER_DUMP_EVERY=1 SAVER_DUMP_PACED=1 ./target/release/screensaver
+            moved=$(md5sum /tmp/dump-gameboy/frame-000[3-8]?.ppm | sort -u -k1,1 | wc -l)
+            [ "$moved" -gt 1 ] || { echo "gameboy: frames are all identical"; exit 1; }
           '
 
       - id: build

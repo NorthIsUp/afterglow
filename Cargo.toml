@@ -26,6 +26,11 @@ bytemuck = "1"
 # Deflate for the mirror's packed frames, which the browser inflates natively
 # (`DecompressionStream`). Pure Rust, so the static musl build stays C-free.
 miniz_oxide = "0.9"
+# The `gameboy` saver's emulator: mizu-core (MIT), vendored with the C
+# (zstd) and file I/O cut out, so it stays in the default MIT image.
+mizu-core = { path = "vendor/mizu-core" }
+# Recognises a user-supplied Pokémon ROM revision by checksum.
+sha1 = "0.10"
 
 [features]
 # Doom, compiled in from doomgeneric (GPL-2.0). Off by default: a binary built
@@ -44,7 +49,9 @@ cc = { version = "1", optional = true, features = ["parallel"] }
 opt-level = 3
 lto = true
 codegen-units = 1
-panic = "abort"
+# Unwind, not abort: the `gameboy` emulator thread catches a core panic and
+# moves on to the next cartridge instead of taking the frame loop with it.
+panic = "unwind"
 strip = true
 
 # Pedantic on, minus the lints this codebase breaks on purpose. CI, hk and

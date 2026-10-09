@@ -363,7 +363,6 @@ impl Grid {
     /// `fill` a row at a time: `f(cy, row)` must write all of `row`. For a
     /// saver whose cells are a gather along each row, which a per-cell
     /// closure makes twice as dear.
-    #[cfg(feature = "doom")]
     #[inline]
     pub fn fill_rows<F: FnMut(usize, &mut [Cell])>(&mut self, mut f: F) {
         for (cy, row) in self.cur.chunks_exact_mut(self.cols).enumerate() {
