@@ -132,14 +132,19 @@ fn a_viewer_gets_a_keyframe_then_deltas() {
     get("/meta").read_to_string(&mut body).unwrap();
     assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
     assert!(body.contains("\"cols\":2"), "{body}");
-    // The page is two files; a page whose script 404s is a blank canvas.
+    // The page is three files; a page whose script 404s is a blank canvas.
     let mut body = String::new();
     get("/").read_to_string(&mut body).unwrap();
     assert!(body.contains(r#"<script src="stream.js">"#));
+    assert!(body.contains(r#"<script src="knobs.js">"#));
     let mut body = String::new();
     get("/stream.js").read_to_string(&mut body).unwrap();
     assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
     assert!(body.contains("function session("));
+    let mut body = String::new();
+    get("/knobs.js").read_to_string(&mut body).unwrap();
+    assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+    assert!(body.contains("function showKnobs("));
     let mut body = String::new();
     get("/nope").read_to_string(&mut body).unwrap();
     assert!(body.starts_with("HTTP/1.1 404 "), "{body}");
