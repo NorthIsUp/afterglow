@@ -1,5 +1,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use super::http::{handle, json_str, param, stat_json, APPLY_WAIT, NEVER};
 use super::*;
@@ -130,6 +132,14 @@ fn a_viewer_gets_a_keyframe_then_deltas() {
     get("/meta").read_to_string(&mut body).unwrap();
     assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
     assert!(body.contains("\"cols\":2"), "{body}");
+    // The page is two files; a page whose script 404s is a blank canvas.
+    let mut body = String::new();
+    get("/").read_to_string(&mut body).unwrap();
+    assert!(body.contains(r#"<script src="stream.js">"#));
+    let mut body = String::new();
+    get("/stream.js").read_to_string(&mut body).unwrap();
+    assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
+    assert!(body.contains("function session("));
     let mut body = String::new();
     get("/nope").read_to_string(&mut body).unwrap();
     assert!(body.starts_with("HTTP/1.1 404 "), "{body}");
@@ -146,7 +156,20 @@ fn a_viewer_gets_a_keyframe_then_deltas() {
         Cell::new(0, 0),
         Cell::new(0, 0),
     ];
-    m.publish(&cells);
+    // Published every millisecond, as the render loop would, never once:
+    // `publish` drops a frame whenever the viewer holds the lock, and a single
+    // dropped publish left this test reading a silent stream forever.
+    let stop = Arc::new(AtomicBool::new(false));
+    let publisher = {
+        let (m, stop) = (Arc::clone(&m), Arc::clone(&stop));
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                m.publish(&cells);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+    };
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     // Read until the chunk marker is complete, not once: a socket read may
     // return fewer bytes than were written, so a single read can split the
     // response mid-marker and fail a correct stream.
@@ -161,6 +184,8 @@ fn a_viewer_gets_a_keyframe_then_deltas() {
             break head;
         }
     };
+    stop.store(true, Ordering::Relaxed);
+    publisher.join().unwrap();
     // Without this nginx buffers the stream and the mirror runs behind.
     assert!(head.contains("X-Accel-Buffering: no"), "{head}");
     // Chunk of 4 + 4 cells * 8 = 36 bytes: a connect always keyframes.

@@ -42,10 +42,10 @@
 //! `GET /stream` is an HTTP/1.1 chunked binary stream, not a WebSocket: the
 //! traffic is one-way server -> client, which `fetch` + a stream reader already
 //! does, and a WebSocket here would buy nothing for a hand-rolled SHA-1 and a
-//! frame codec. Each record is `u32 count` then `count * (u32 index, u32 cell)`,
-//! little-endian. The first record after connect is every cell (the viewer's
-//! `prev` starts impossible), later ones only what changed; `count == 0` is the
-//! idle keepalive that notices a dead socket.
+//! frame codec. Records are sparse or packed, whichever is smaller — see
+//! `codec`. The first record after connect is every cell (the viewer's `prev`
+//! starts impossible), later ones only what changed; an empty sparse record is
+//! the idle keepalive that notices a dead socket.
 
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -57,6 +57,7 @@ use crate::grid::{Cell, Grid};
 use crate::saver;
 use crate::surface::Panel;
 
+pub mod codec;
 mod http;
 pub use http::serve;
 
@@ -363,5 +364,7 @@ impl Mirror {
     }
 }
 
+#[cfg(test)]
+mod stream_tests;
 #[cfg(test)]
 mod tests;
