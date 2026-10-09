@@ -255,7 +255,8 @@ void R_DrawColumnLow (void)
 // Spectre/Invisibility.
 //
 #define FUZZTABLE		50 
-#define FUZZOFF	(SCREENWIDTH)
+/* afterglow: a row, in units of the runtime SCREENWIDTH at the use site. */
+#define FUZZOFF	(1)
 
 
 int	fuzzoffset[FUZZTABLE] =
@@ -325,7 +326,7 @@ void R_DrawFuzzColumn (void)
 	//  a pixel that is either one column
 	//  left or right of the current one.
 	// Add index from colormap to index.
-	*dest = colormaps[6*256+dest[fuzzoffset[fuzzpos]]]; 
+	*dest = colormaps[6*256+dest[fuzzoffset[fuzzpos]*SCREENWIDTH]]; 
 
 	// Clamp table lookup index.
 	if (++fuzzpos == FUZZTABLE) 
@@ -391,8 +392,8 @@ void R_DrawFuzzColumnLow (void)
 	//  a pixel that is either one column
 	//  left or right of the current one.
 	// Add index from colormap to index.
-	*dest = colormaps[6*256+dest[fuzzoffset[fuzzpos]]]; 
-	*dest2 = colormaps[6*256+dest2[fuzzoffset[fuzzpos]]]; 
+	*dest = colormaps[6*256+dest[fuzzoffset[fuzzpos]*SCREENWIDTH]]; 
+	*dest2 = colormaps[6*256+dest2[fuzzoffset[fuzzpos]*SCREENWIDTH]]; 
 
 	// Clamp table lookup index.
 	if (++fuzzpos == FUZZTABLE) 
@@ -790,7 +791,7 @@ R_InitBuffer
 	columnofs[i] = viewwindowx + i;
 
     // Samw with base row offset.
-    if (width == SCREENWIDTH) 
+    if (width == SCREENWIDTH || height == SCREENHEIGHT) /* afterglow */
 	viewwindowy = 0; 
     else 
 	viewwindowy = (SCREENHEIGHT-SBARHEIGHT-height) >> 1; 
@@ -815,6 +816,7 @@ void R_FillBackScreen (void)
     byte*	dest; 
     int		x;
     int		y; 
+    int		x0;
     patch_t*	patch;
 
     // DOOM border patch.
@@ -843,7 +845,7 @@ void R_FillBackScreen (void)
 	
     if (background_buffer == NULL)
     {
-        background_buffer = Z_Malloc(SCREENWIDTH * (SCREENHEIGHT - SBARHEIGHT),
+        background_buffer = Z_Malloc(MAXSCREENWIDTH * SCREENHEIGHT,
                                      PU_STATIC, NULL);
     }
 
@@ -855,7 +857,7 @@ void R_FillBackScreen (void)
     src = W_CacheLumpName(name, PU_CACHE); 
     dest = background_buffer;
 	 
-    for (y=0 ; y<SCREENHEIGHT-SBARHEIGHT ; y++) 
+    for (y=0 ; y<SCREENHEIGHT ; y++) /* afterglow: a full-height view's sides */
     { 
 	for (x=0 ; x<SCREENWIDTH/64 ; x++) 
 	{ 
@@ -872,41 +874,43 @@ void R_FillBackScreen (void)
      
     // Draw screen and bezel; this is done to a separate screen buffer.
 
+    /* afterglow: these are screen coordinates, so take back the centring
+     * V_DrawPatch adds for the 320-wide UI; and a view as tall as the space
+     * above the status bar has side bezels only. */
     V_UseBuffer(background_buffer);
+    x0 = viewwindowx - WIDESCREENDELTA;
 
-    patch = W_CacheLumpName(DEH_String("brdr_t"),PU_CACHE);
+    if (viewwindowy >= 8)
+    {
+        patch = W_CacheLumpName(DEH_String("brdr_t"),PU_CACHE);
+        for (x=0 ; x<scaledviewwidth ; x+=8)
+            V_DrawPatch(x0+x, viewwindowy-8, patch);
+        patch = W_CacheLumpName(DEH_String("brdr_b"),PU_CACHE);
+        for (x=0 ; x<scaledviewwidth ; x+=8)
+            V_DrawPatch(x0+x, viewwindowy+viewheight, patch);
+    }
 
-    for (x=0 ; x<scaledviewwidth ; x+=8)
-	V_DrawPatch(viewwindowx+x, viewwindowy-8, patch);
-    patch = W_CacheLumpName(DEH_String("brdr_b"),PU_CACHE);
+    if (viewwindowx >= 8)
+    {
+        patch = W_CacheLumpName(DEH_String("brdr_l"),PU_CACHE);
+        for (y=0 ; y<viewheight ; y+=8)
+            V_DrawPatch(x0-8, viewwindowy+y, patch);
+        patch = W_CacheLumpName(DEH_String("brdr_r"),PU_CACHE);
+        for (y=0 ; y<viewheight ; y+=8)
+            V_DrawPatch(x0+scaledviewwidth, viewwindowy+y, patch);
+    }
 
-    for (x=0 ; x<scaledviewwidth ; x+=8)
-	V_DrawPatch(viewwindowx+x, viewwindowy+viewheight, patch);
-    patch = W_CacheLumpName(DEH_String("brdr_l"),PU_CACHE);
-
-    for (y=0 ; y<viewheight ; y+=8)
-	V_DrawPatch(viewwindowx-8, viewwindowy+y, patch);
-    patch = W_CacheLumpName(DEH_String("brdr_r"),PU_CACHE);
-
-    for (y=0 ; y<viewheight ; y+=8)
-	V_DrawPatch(viewwindowx+scaledviewwidth, viewwindowy+y, patch);
-
-    // Draw beveled edge. 
-    V_DrawPatch(viewwindowx-8,
-                viewwindowy-8,
-                W_CacheLumpName(DEH_String("brdr_tl"),PU_CACHE));
-    
-    V_DrawPatch(viewwindowx+scaledviewwidth,
-                viewwindowy-8,
-                W_CacheLumpName(DEH_String("brdr_tr"),PU_CACHE));
-    
-    V_DrawPatch(viewwindowx-8,
-                viewwindowy+viewheight,
-                W_CacheLumpName(DEH_String("brdr_bl"),PU_CACHE));
-    
-    V_DrawPatch(viewwindowx+scaledviewwidth,
-                viewwindowy+viewheight,
-                W_CacheLumpName(DEH_String("brdr_br"),PU_CACHE));
+    if (viewwindowx >= 8 && viewwindowy >= 8)
+    {
+        V_DrawPatch(x0-8, viewwindowy-8,
+                    W_CacheLumpName(DEH_String("brdr_tl"),PU_CACHE));
+        V_DrawPatch(x0+scaledviewwidth, viewwindowy-8,
+                    W_CacheLumpName(DEH_String("brdr_tr"),PU_CACHE));
+        V_DrawPatch(x0-8, viewwindowy+viewheight,
+                    W_CacheLumpName(DEH_String("brdr_bl"),PU_CACHE));
+        V_DrawPatch(x0+scaledviewwidth, viewwindowy+viewheight,
+                    W_CacheLumpName(DEH_String("brdr_br"),PU_CACHE));
+    }
 
     V_RestoreBuffer();
 } 
@@ -944,11 +948,14 @@ void R_DrawViewBorder (void)
     int		side;
     int		ofs;
     int		i; 
+    int		bordh;
  
     if (scaledviewwidth == SCREENWIDTH) 
 	return; 
   
-    top = ((SCREENHEIGHT-SBARHEIGHT)-viewheight)/2; 
+    /* afterglow: a full-height view has no status-bar row to stop at */
+    bordh = viewheight == SCREENHEIGHT ? SCREENHEIGHT : SCREENHEIGHT-SBARHEIGHT;
+    top = (bordh-viewheight)/2; 
     side = (SCREENWIDTH-scaledviewwidth)/2; 
  
     // copy top and one line of left side 
@@ -969,7 +976,7 @@ void R_DrawViewBorder (void)
     } 
 
     // ? 
-    V_MarkRect (0,0,SCREENWIDTH, SCREENHEIGHT-SBARHEIGHT); 
+    V_MarkRect (0,0,SCREENWIDTH, bordh); 
 } 
  
  

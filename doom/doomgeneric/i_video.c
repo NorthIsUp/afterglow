@@ -98,6 +98,8 @@ void I_GetEvent(void);
 
 byte *I_VideoBuffer = NULL;
 
+int dg_screenwidth = ORIGWIDTH;
+
 // If true, game is running as a screensaver
 
 boolean screensaver_mode = false;
@@ -289,7 +291,7 @@ void I_InitGraphics (void)
 
 
     /* Allocate screen to draw to */
-	I_VideoBuffer = (byte*)Z_Malloc (SCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);  // For DOOM to draw on
+	I_VideoBuffer = (byte*)Z_Malloc (MAXSCREENWIDTH * SCREENHEIGHT, PU_STATIC, NULL);  // For DOOM to draw on
 
 	screenvisible = true;
 
@@ -320,54 +322,10 @@ void I_UpdateNoBlit (void)
 // I_FinishUpdate
 //
 
+/* afterglow: the host reads I_VideoBuffer directly, at whatever width it
+ * is, so there is nothing to convert or scale here. */
 void I_FinishUpdate (void)
 {
-    int y;
-    int x_offset, y_offset, x_offset_end;
-    unsigned char *line_in, *line_out;
-
-    /* Offsets in case FB is bigger than DOOM */
-    /* 600 = s_Fb heigt, 200 screenheight */
-    /* 600 = s_Fb heigt, 200 screenheight */
-    /* 2048 =s_Fb width, 320 screenwidth */
-    y_offset     = (((s_Fb.yres - (SCREENHEIGHT * fb_scaling)) * s_Fb.bits_per_pixel/8)) / 2;
-    x_offset     = (((s_Fb.xres - (SCREENWIDTH  * fb_scaling)) * s_Fb.bits_per_pixel/8)) / 2; // XXX: siglent FB hack: /4 instead of /2, since it seems to handle the resolution in a funny way
-    //x_offset     = 0;
-    x_offset_end = ((s_Fb.xres - (SCREENWIDTH  * fb_scaling)) * s_Fb.bits_per_pixel/8) - x_offset;
-
-    /* DRAW SCREEN */
-    line_in  = (unsigned char *) I_VideoBuffer;
-    line_out = (unsigned char *) DG_ScreenBuffer;
-
-    y = SCREENHEIGHT;
-
-    while (y--)
-    {
-        int i;
-        for (i = 0; i < fb_scaling; i++) {
-            line_out += x_offset;
-#ifdef CMAP256
-            if (fb_scaling == 1) {
-                memcpy(line_out, line_in, SCREENWIDTH); /* fb_width is bigger than Doom SCREENWIDTH... */
-            } else {
-                int j;
-
-                for (j = 0; j < SCREENWIDTH; j++) {
-                    int k;
-                    for (k = 0; k < fb_scaling; k++) {
-                        line_out[j * fb_scaling + k] = line_in[j];
-                    }
-                }
-            }
-#else
-            //cmap_to_rgb565((void*)line_out, (void*)line_in, SCREENWIDTH);
-            cmap_to_fb((void*)line_out, (void*)line_in, SCREENWIDTH);
-#endif
-            line_out += (SCREENWIDTH * fb_scaling * (s_Fb.bits_per_pixel/8)) + x_offset_end;
-        }
-        line_in += SCREENWIDTH;
-    }
-
 	DG_DrawFrame();
 }
 

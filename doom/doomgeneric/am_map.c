@@ -198,7 +198,8 @@ static int 	grid = 0;
 static int 	leveljuststarted = 1; 	// kluge until AM_LevelInit() is called
 
 boolean    	automapactive = false;
-static int 	finit_width = SCREENWIDTH;
+/* afterglow: never opened here; a constant so it compiles. */
+static int 	finit_width = ORIGWIDTH;
 static int 	finit_height = SCREENHEIGHT - 32;
 
 // location of window on screen

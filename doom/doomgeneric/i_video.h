@@ -24,7 +24,16 @@
 
 // Screen width and height.
 
-#define SCREENWIDTH  320
+/* afterglow: the render width is a variable, set per engine before init and
+ * changeable after (dgx_set_width), so the 3D view can be Hor+ widescreen in
+ * the manner of Crispy Doom. The UI (menus, status bar, intermission, HUD)
+ * keeps its 320-wide coordinates and V_Draw* centres it by WIDESCREENDELTA.
+ * Arrays are sized for MAXSCREENWIDTH. */
+extern int dg_screenwidth;
+#define ORIGWIDTH 320
+#define MAXSCREENWIDTH 1280
+#define SCREENWIDTH dg_screenwidth
+#define WIDESCREENDELTA ((SCREENWIDTH - ORIGWIDTH) / 2)
 #define SCREENHEIGHT 200
 
 // Screen width used for "squash" scale functions

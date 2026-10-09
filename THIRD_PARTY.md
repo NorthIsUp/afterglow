@@ -44,10 +44,12 @@ SOFTWARE.
 `doom/doomgeneric/` is [doomgeneric](https://github.com/ozkl/doomgeneric) at
 `dcb7a8d`, id Software's Doom by way of Chocolate Doom, under the GNU General
 Public License v2 or later (`doom/doomgeneric/LICENSE`). `doom/afterglow_doom.c`
-links against it and is under the same licence. Three files are patched, each
-patch marked `afterglow`: `g_game.c` calls the autopilot, `i_video.c` records
-which palette is up, and `m_config.c` stringifies config names before the
-per-instance rename can reach them.
+links against it and is under the same licence. The engine is modified, each
+change marked `afterglow`: `g_game.c` calls the autopilot, `i_video.c` records
+which palette is up and takes its width at run time, and the renderer, video
+and UI files draw a Hor+ widescreen view with the 320-wide UI centred, in the
+manner of [Crispy Doom](https://github.com/fabiangreffrath/crispy-doom) (also
+GPL-2.0). `i_scale.c`, unused here, is removed.
 
 Only a `--features doom` build compiles any of it. That build, published as the
 `-doom` image tags, is a combined work distributed under the GPL v2: its

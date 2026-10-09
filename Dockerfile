@@ -33,8 +33,8 @@ RUN cargo build --release --locked
 # `docker build --target doom`. The default target below never copies doom/,
 # so the MIT image cannot pick up a byte of it.
 FROM rust:1-alpine AS build-doom
-# gcc and binutils (nm) for build.rs, which compiles the engine four times.
-RUN apk add --no-cache musl-dev gcc binutils
+# gcc for build.rs, which compiles the engine.
+RUN apk add --no-cache musl-dev gcc
 WORKDIR /src
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src

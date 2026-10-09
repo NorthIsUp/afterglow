@@ -1390,7 +1390,7 @@ M_WriteText
 	}
 		
 	w = SHORT (hu_font[c]->width);
-	if (cx+w > SCREENWIDTH)
+	if (cx+w > ORIGWIDTH)
 	    break;
 	V_DrawPatchDirect(cx, cy, hu_font[c]);
 	cx+=w;
@@ -1992,7 +1992,7 @@ void M_Drawer (void)
                 start += strlen(string);
             }
 
-	    x = SCREENWIDTH/2 - M_StringWidth(string) / 2;
+	    x = ORIGWIDTH/2 - M_StringWidth(string) / 2;
 	    M_WriteText(x, y, string);
 	    y += SHORT(hu_font[0]->height);
 	}

@@ -158,7 +158,7 @@ them live — see [Live settings](docs/mirror.md#live-settings-config).
 | [`hardrain`](docs/savers/hardrain.md)            | A downpour: steeply slanted streaks under a gusting wind, a mist the sky is veiled in, squalls sweeping across, and standing water at the bottom that ripples where the rain lands.                                                     |
 | [`zot`](docs/savers/zot.md)                      | Lightning.                                                                                                                                                                                                                              |
 | [`plasma`](docs/savers/plasma.md)                | The demo-scene plasma, full screen: four sine fields summed into soft blobs of density, drawn with ascii.rest's ramp `.,-~:;=+*#%@` at the panel's own resolution, any size or shape.                                                   |
-| [`doom`](docs/savers/doom.md)                    | Freedoom on autopilot, a view per random map, as many side by side as the panel fits. **Only in the `-doom` image, which is GPL** (see the page).                                                                                       |
+| [`doom`](docs/savers/doom.md)                    | Freedoom on autopilot, one widescreen game on a random map, its field of view sized to the panel. **Only in the `-doom` image, which is GPL** (see the page).                                                                           |
 
 ### ascii.rest halftone scenes
 

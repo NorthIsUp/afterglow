@@ -34,6 +34,9 @@
 #include "r_local.h"
 
 #include "doomstat.h"
+#include "st_stuff.h"
+
+extern int dg_hud;
 
 
 
@@ -72,8 +75,8 @@ lighttable_t**	spritelights;
 
 // constant arrays
 //  used for psprite clipping and initializing clipping
-short		negonearray[SCREENWIDTH];
-short		screenheightarray[SCREENWIDTH];
+short		negonearray[MAXSCREENWIDTH];
+short		screenheightarray[MAXSCREENWIDTH];
 
 
 //
@@ -292,7 +295,7 @@ void R_InitSprites (char** namelist)
 {
     int		i;
 	
-    for (i=0 ; i<SCREENWIDTH ; i++)
+    for (i=0 ; i<MAXSCREENWIDTH ; i++)
     {
 	negonearray[i] = -1;
     }
@@ -491,7 +494,9 @@ void R_ProjectSprite (mobj_t* thing)
     tx = -(gyt+gxt); 
 
     // too far off the side?
-    if (abs(tx)>(tz<<2))
+    /* afterglow: <<2 culled the edges of wide views; 64-bit so far things
+     * cannot overflow into being culled. */
+    if ((long long)abs(tx) > ((long long)tz<<4))
 	return;
     
     // decide which patch to use for sprite relative to player
@@ -685,6 +690,10 @@ void R_DrawPSprite (pspdef_t* psp)
     vis = &avis;
     vis->mobjflags = 0;
     vis->texturemid = (BASEYCENTER<<FRACBITS)+FRACUNIT/2-(psp->sy-spritetopoffset[lump]);
+    /* afterglow: over a full-height view the status bar would cover the
+     * weapon, so it sits on the bar as it does in the classic layout. */
+    if (dg_hud && viewheight == SCREENHEIGHT)
+	vis->texturemid += ST_HEIGHT<<FRACBITS;
     vis->x1 = x1 < 0 ? 0 : x1;
     vis->x2 = x2 >= viewwidth ? viewwidth-1 : x2;	
     vis->scale = pspritescale<<detailshift;
@@ -832,8 +841,8 @@ void R_SortVisSprites (void)
 //
 // R_DrawSprite
 //
-static short		clipbot[SCREENWIDTH];
-static short		cliptop[SCREENWIDTH];
+static short		clipbot[MAXSCREENWIDTH];
+static short		cliptop[MAXSCREENWIDTH];
 void R_DrawSprite (vissprite_t* spr)
 {
     drawseg_t*		ds;

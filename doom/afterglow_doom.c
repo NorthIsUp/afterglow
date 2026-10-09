@@ -5,9 +5,8 @@
 // Copyright (C) 2026 Adam Hitchcock. GPL-2.0-or-later, like the engine it
 // links against; see doomgeneric/LICENSE.
 //
-// build.rs compiles this file and the engine once per instance with a header
-// that renames every global (including `exit` and the dgx_ API) to
-// dg<N>_<name>, so up to four engines coexist in one binary.
+// build.rs compiles the engine with `exit` defined to `dg_exit`, so every exit
+// path reaches the setjmp boundary below.
 
 #include <setjmp.h>
 #include <stdio.h>
@@ -21,20 +20,23 @@
 #include "g_game.h"
 #include "i_system.h"
 #include "i_video.h"
+#include "m_menu.h"
 #include "m_random.h"
 #include "p_local.h"
 #include "r_main.h"
+#include "st_stuff.h"
 #include "tables.h"
 #include "w_wad.h"
 
 static jmp_buf guard;
 static int guarded, dead;
 static uint32_t now_ms;
-static int light;
+static int light, started;
+extern int dg_viewpct, dg_fov, dg_hud;
 extern int dg_palnum;
 
 // Every exit() in the engine (I_Error, I_Quit, -help paths) lands here via the
-// rename header. Outside a guarded call there is nowhere safe to go back to;
+// -Dexit=dg_exit build flag. Outside a guarded call there is nowhere safe to go back to;
 // that cannot happen because the engine only runs inside dgx_* calls.
 void exit(int code) {
     (void)code;
@@ -61,7 +63,7 @@ void DG_SetWindowTitle(const char *title) { (void)title; }
 #define VCELL 64
 #define VDIM 256
 static unsigned char visited[VDIM][VDIM];
-static int stuck, wander, use_tic, bored, offlevel;
+static int stuck, still, wander, use_tic, bored, offlevel;
 static fixed_t lastx, lasty;
 static angle_t goal;
 static uint32_t rng = 1;
@@ -180,9 +182,12 @@ void DG_Autopilot(ticcmd_t *cmd) {
     unsigned char *vc = vcell(me->x, me->y);
     bored = *vc == 0 ? 0 : bored + 1;
     if (*vc < 250) (*vc)++;
-    if (bored > 35 * 8) {
+    // Standing still for 2 s means boxed in (a start closet, a pit, a
+    // monster in a doorway): nothing on screen moves, so cut away sooner.
+    still = P_AproxDistance(me->x - lastx, me->y - lasty) < 2 * FRACUNIT ? still + 1 : 0;
+    if (bored > 35 * 8 || still > 35 * 2) {
         hop(me);
-        bored = 0;
+        bored = still = 0;
     }
 
     mobj_t *t = nearest_visible(me);
@@ -257,7 +262,7 @@ static int pick_map(int *episode, int *map) {
 
 static void reset_autopilot(void) {
     memset(visited, 0, sizeof visited);
-    stuck = wander = bored = offlevel = 0;
+    stuck = still = wander = bored = offlevel = 0;
 }
 
 // ---- the API afterglow calls; every entry is guarded ----
@@ -270,14 +275,35 @@ static void reset_autopilot(void) {
     }                               \
     guarded = 1
 
+// Full height: the view runs to the bottom of the screen and the status bar,
+// if any, is drawn over it (see dg_hud in d_main.c).
+static void apply_view(void) {
+    screenblocks = 11;
+    R_SetViewSize(screenblocks, detailLevel);
+    ST_Invalidate();
+}
+
 int dgx_init(const char *wad, uint32_t seed) {
     static char *argv[] = {"doom", "-iwad", NULL, "-config", "/dev/null", "-extraconfig", "/dev/null", "-skill", "3", NULL};
     GUARD(-1);
     rng = seed | 1;
     argv[2] = (char *)wad;
     doomgeneric_Create(9, argv);
+    started = 1;
+    apply_view();
     guarded = 0;
     return 0;
+}
+
+// The screen is `width` x 200, the 3D view `pct` of that width with its
+// horizontal field of view `fov` degrees (0: Hor+), and `hud` 1 to overlay
+// the status bar. Before init or after.
+void dgx_view(int width, int pct, int fov, int hud) {
+    dg_screenwidth = width < ORIGWIDTH ? ORIGWIDTH : width > MAXSCREENWIDTH ? MAXSCREENWIDTH : width;
+    dg_viewpct = pct;
+    dg_fov = fov;
+    dg_hud = hud;
+    if (started && !dead) apply_view();
 }
 
 // Returns the map as episode * 100 + map, or -1 if the engine has died.
@@ -302,8 +328,10 @@ int dgx_tick(uint32_t ms) {
     return 0;
 }
 
-// The last drawn 320x200 frame and which PLAYPAL palette it is shown with.
-const uint8_t *dgx_frame(int *palette) {
+// The last drawn frame, SCREENWIDTH x 200, its width, and which PLAYPAL
+// palette it is shown with.
+const uint8_t *dgx_frame(int *width, int *palette) {
+    *width = SCREENWIDTH;
     *palette = dg_palnum;
     return I_VideoBuffer;
 }

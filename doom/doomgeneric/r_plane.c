@@ -49,7 +49,7 @@ visplane_t*		floorplane;
 visplane_t*		ceilingplane;
 
 // ?
-#define MAXOPENINGS	SCREENWIDTH*64
+#define MAXOPENINGS	MAXSCREENWIDTH*64
 short			openings[MAXOPENINGS];
 short*			lastopening;
 
@@ -59,8 +59,8 @@ short*			lastopening;
 //  floorclip starts out SCREENHEIGHT
 //  ceilingclip starts out -1
 //
-short			floorclip[SCREENWIDTH];
-short			ceilingclip[SCREENWIDTH];
+short			floorclip[MAXSCREENWIDTH];
+short			ceilingclip[MAXSCREENWIDTH];
 
 //
 // spanstart holds the start of a plane span
@@ -76,7 +76,7 @@ lighttable_t**		planezlight;
 fixed_t			planeheight;
 
 fixed_t			yslope[SCREENHEIGHT];
-fixed_t			distscale[SCREENWIDTH];
+fixed_t			distscale[MAXSCREENWIDTH];
 fixed_t			basexscale;
 fixed_t			baseyscale;
 
