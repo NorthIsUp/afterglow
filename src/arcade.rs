@@ -1,5 +1,6 @@
-//! What the two arcade savers share: a 3x5 pixel font for scores, and the
-//! quadrant glyphs that draw a 2x2-pixel bitmap into one cell.
+//! What the arcade savers share, and chess's counters: a 3x5 pixel font for
+//! scores, a decimal formatter that never allocates, and the quadrant glyphs
+//! that draw a 2x2-pixel bitmap into one cell.
 
 use crate::font;
 use crate::glyph;
@@ -30,6 +31,20 @@ pub const fn glyph3(c: u8) -> Glyph3 {
         b'A'..=b'Z' => LETTERS[(c - b'A') as usize],
         b'-' => [0, 0, 7, 0, 0],
         _ => [0; 5],
+    }
+}
+
+/// Each lit pixel of `s` in the 3x5 font at scale 1, as `(x, y)`.
+#[inline]
+pub fn each_pixel(s: &[u8], mut f: impl FnMut(usize, usize)) {
+    for (i, &ch) in s.iter().enumerate() {
+        for (y, row) in glyph3(ch).iter().enumerate() {
+            for c in 0..3 {
+                if row & (4 >> c) != 0 {
+                    f(i * 4 + c, y);
+                }
+            }
+        }
     }
 }
 

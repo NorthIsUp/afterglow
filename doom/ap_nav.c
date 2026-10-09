@@ -91,14 +91,6 @@ int ap_has_key(player_t *p, int key) {
     }
 }
 
-int ap_is_lift(int s) {
-    switch (s) {
-    case 10: case 21: case 53: case 62: case 87: case 88:
-    case 120: case 121: case 122: case 123: return 1;
-    default: return 0;
-    }
-}
-
 int ap_is_exit(int s) {
     return s == 11 || s == 52 ? 1 : s == 51 || s == 124 ? 2 : 0;
 }
@@ -195,6 +187,12 @@ void nav_center(int c, fixed_t *x, fixed_t *y) {
 }
 
 int nav_sector(int c) { return c < 0 ? -1 : csec[c]; }
+
+int nav_can_step(fixed_t from_floor, fixed_t from_ceil, fixed_t to_floor, fixed_t to_ceil) {
+    fixed_t top = from_ceil < to_ceil ? from_ceil : to_ceil;
+    fixed_t bot = from_floor > to_floor ? from_floor : to_floor;
+    return to_floor - from_floor <= STEP && top - bot >= HEADROOM;
+}
 
 static edge_t *edge(int a, int d, int *rev);
 static int stand(int c);
@@ -503,9 +501,8 @@ static int cross(int side, int li, player_t *p, int *use, int *cost) {
     fixed_t top = ceil_open(s) < ceil_open(n) ? ceil_open(s) : ceil_open(n);
     fixed_t bot = floor_lo(s) > floor_lo(n) ? floor_lo(s) : floor_lo(n);
     if (floor_lo(n) - floor_hi(s) > STEP || top - bot < HEADROOM) return -1;
-    fixed_t ctop = sc < nc ? sc : nc;
     fixed_t cbot = sf > nf ? sf : nf;
-    int now = (nf - sf <= STEP && ctop - cbot >= HEADROOM) || fx_ranged(s) || fx_ranged(n);
+    int now = nav_can_step(sf, sc, nf, nc) || fx_ranged(s) || fx_ranged(n);
     if (now) return n;
     *cost += 64;
     if (N->specialdata || S->specialdata) {
@@ -628,9 +625,7 @@ static int walk(int a, int d, player_t *p, int *cost, int *use) {
         // The segment slipped through a vertex and missed the lines there:
         // only a step the player can take as it stands counts.
         int B = csec[b];
-        fixed_t top = fx_ceil(last) < fx_ceil(B) ? fx_ceil(last) : fx_ceil(B);
-        fixed_t bot = fx_floor(last) > fx_floor(B) ? fx_floor(last) : fx_floor(B);
-        if (fx_floor(B) - fx_floor(last) > STEP || top - bot < HEADROOM) return -1;
+        if (!nav_can_step(fx_floor(last), fx_ceil(last), fx_floor(B), fx_ceil(B))) return -1;
     }
     // The cache holds for the real heights; under the hypothesis a cell in or
     // next to a sector it moves gets the benefit of the doubt.

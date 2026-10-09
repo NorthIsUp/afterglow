@@ -2,10 +2,10 @@
 //! from the scene, and the effects over them.
 
 use super::art::{
-    self, glyph_row, ink, shadow, ACCENT, ADVANCE, ASH, BG, CLEAR, FIRE, FIRE_HOT, MAGIC,
-    MAGIC_HOT, SPARK, SPRITE, STEEL, TEXT_H, WOOD,
+    self, ink, shadow, ACCENT, ADVANCE, ASH, BG, CLEAR, FIRE, FIRE_HOT, MAGIC, MAGIC_HOT, SPARK,
+    SPRITE, STEEL, TEXT_H, WOOD,
 };
-use super::fight::{scene, weapon_line, Actor, Beat, Fight, Fx, Look};
+use super::fight::{scene, smooth, weapon_line, Actor, Beat, Fight, Fx, Look};
 use super::fighters::{leg_px, BODY, TORSO};
 use super::paint::Painter;
 use super::rules::{file, kind, rank, side, BISHOP, KING, KNIGHT, PAWN, QUEEN};
@@ -17,11 +17,6 @@ const ZOOM: f32 = 3.0;
 /// Cells `(x0, y0, x1, y1)`, the far edges exclusive.
 pub type Span = (i32, i32, i32, i32);
 const EMPTY: Span = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-
-fn smooth(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
 
 fn hash(a: u32, b: u32, c: u32) -> u32 {
     let mut h =
@@ -445,18 +440,10 @@ impl Painter<'_> {
                 let x0 = (x as i32 - w / 2).clamp(bx + ki, (bx + b - w - 2 * ki).max(bx + ki));
                 let y0 = (y as i32 - h / 2).clamp(by + ki, (by + b - h - 2 * ki).max(by + ki));
                 for (dx, c) in [(ki, BG), (0, colour)] {
-                    for (n, &ch) in text.iter().enumerate() {
-                        for gy in 0..TEXT_H {
-                            let bits = glyph_row(ch, gy);
-                            for bxx in 0..ADVANCE {
-                                if bits & (0x80 >> bxx) != 0 {
-                                    let px = x0 + dx + ((n * ADVANCE + bxx) as i32) * ki;
-                                    let py = y0 + dx + gy as i32 * ki;
-                                    self.plot(px as f32, py as f32, ki, c, span);
-                                }
-                            }
-                        }
-                    }
+                    art::each_text_px(text, |gx, gy| {
+                        let (px, py) = (x0 + dx + gx * ki, y0 + dx + gy * ki);
+                        self.plot(px as f32, py as f32, ki, c, span);
+                    });
                 }
             }
         }

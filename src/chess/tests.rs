@@ -407,6 +407,24 @@ const FIGHTS: [(&str, &str, &str); 13] = [
     ("mate", "3r2k1/5ppp/8/8/8/8/5PPP/3R2K1 w - -", "d1d8"),
 ];
 
+/// The attacker stands most of a square to the victim's side: on an edge
+/// file that has to be the board side, whichever way it came from.
+#[test]
+fn a_fight_on_an_edge_file_stays_on_the_board() {
+    use super::fight::{Fight, Flourish, Style};
+    for (f, uci, dir, style) in [
+        ("4k3/8/8/n7/8/8/8/R3K3 w - -", "a1a5", -1, Style::Slam),
+        ("4k2r/8/8/7N/8/8/8/4K3 b - -", "h8h5", 1, Style::Slam),
+        ("4k3/8/8/3r4/8/4N3/8/4K3 w - -", "e3d5", -1, Style::Crumble),
+        ("4k3/8/8/3r4/8/2N5/8/4K3 w - -", "c3d5", 1, Style::Crumble),
+    ] {
+        let pos = fen(f);
+        let m = pos.parse_uci(uci).unwrap();
+        let fight = Fight::new(&pos.sq, m, Flourish::None, 90);
+        assert_eq!((fight.dir, fight.style), (dir, style), "{uci}");
+    }
+}
+
 /// A capture is fought out, the fight ends, and the game goes on: the board
 /// shows the position after the move and the next move comes.
 #[test]

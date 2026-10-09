@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use super::book::BOOK;
 use super::fight::{Fight, Flourish};
-use super::rules::{ended, kind, side, End, Move, Pos, San, CASTLE, EN_PASSANT};
-use super::search::{level_limits, Engine, Job, HIST};
+use super::rules::{ended, kind, side, End, Move, Pos, San, CASTLE, EN_PASSANT, PAWN};
+use super::search::{level_limits, Engine, Job, HIST, MATE};
 use crate::next_rand;
 
 /// Plies before a game is adjudicated drawn.
@@ -46,6 +46,13 @@ pub struct Pace {
     pub fight: u32,
 }
 
+impl Pace {
+    /// Frames a think is allowed, for the clock bar.
+    pub fn think_frames(&self) -> u64 {
+        (self.think.as_millis() as u64 * self.fps / 1000).max(1)
+    }
+}
+
 /// What `paint` must redraw this frame.
 #[derive(Clone, Copy, Default)]
 pub struct Dirty {
@@ -80,7 +87,7 @@ pub struct Game {
     next_id: u32,
     fixed_level: u8,
     rng: u32,
-    pace: Pace,
+    pub pace: Pace,
     /// Frame the side to move started thinking, for the clock bar.
     pub think_from: u64,
 }
@@ -282,7 +289,7 @@ impl Game {
     fn land(&mut self, m: Move, now: u64) {
         let mover = self.pos.stm;
         let victim = if m.flag == EN_PASSANT {
-            1
+            PAWN
         } else {
             kind(self.pos.sq[m.to as usize])
         };
@@ -299,7 +306,7 @@ impl Game {
         self.phase = match self.end {
             Some(end) => {
                 if let End::Mate(w) = end {
-                    self.eval = if w == 0 { 30_000 } else { -30_000 };
+                    self.eval = if w == 0 { MATE } else { -MATE };
                 }
                 Phase::Over {
                     until: now + self.pace.result,

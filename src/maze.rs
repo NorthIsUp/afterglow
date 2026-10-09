@@ -239,15 +239,9 @@ impl MazeChase {
     }
 
     fn text(&mut self, qx: isize, qy: isize, s: &[u8], colour: u16) {
-        for (i, &ch) in s.iter().enumerate() {
-            for (r, row) in arcade::glyph3(ch).iter().enumerate() {
-                for c in 0..3 {
-                    if row & (4 >> c) != 0 {
-                        self.quad(qx + (i * 4 + c) as isize, qy + r as isize, colour);
-                    }
-                }
-            }
-        }
+        arcade::each_pixel(s, |x, y| {
+            self.quad(qx + x as isize, qy + y as isize, colour);
+        });
     }
 
     fn number(&mut self, qx: isize, qy: isize, v: u64, colour: u16, centre: bool) {
