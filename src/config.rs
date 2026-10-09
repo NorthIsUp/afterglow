@@ -260,6 +260,15 @@ pub fn help(key: &str) -> Option<&'static str> {
         "CHESS_GAMES" => "boards side by side; 0 fits the panel's shape (two on 3.2:1)",
         "CHESS_LEVEL" => "both engines' strength, 1 weakest .. 5; 0 varies it game to game",
         "CHESS_RESULT_SECS" => "seconds the result stays up before the next game",
+        "TETRIS_WELLS" => "wells side by side; 0 fits as many as the panel's shape holds",
+        "TETRIS_LEVEL" => "level each game starts at; gravity quickens every ten lines",
+        "TETRIS_MOVES" => "the AI's moves a second; a game ends where gravity outruns them",
+        "TETRIS_LOOKAHEAD" => "the AI also weighs where the next piece could go",
+        "MAZE_TILES" => "maze tiles up the panel's short side; fewer is bigger",
+        "MAZE_SPEED" => "full speed in tenths of a tile a second; actors run at 40-100% of it",
+        "MAZE_CUT" => "per cent of the corridor lattice cut away; more is longer walls",
+        "MAZE_LIVES" => "lives each game starts with",
+        "MAZE_BONUS" => "points per extra life; 0 is none",
         k if k.ends_with("_SEED") => "0 rolls a new one every build; anything else pins it",
         k if k.ends_with("_CELL_W") || k.ends_with("_CELL_H") || k.ends_with("_CELL") => {
             "cell size in framebuffer pixels"

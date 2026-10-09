@@ -92,6 +92,7 @@
 //! is bumped in a separate commit, so a new binary always runs against the old
 //! env block first.
 
+mod arcade;
 mod ascii_rest;
 #[cfg(test)]
 mod bench;
@@ -118,6 +119,7 @@ mod life;
 mod lissajous;
 mod marble;
 mod matrix;
+mod maze;
 mod mirror;
 mod moire;
 mod plasma;
@@ -135,6 +137,7 @@ mod tactiles;
 mod term;
 #[cfg(test)]
 mod testalloc;
+mod tetris;
 mod toasters;
 mod toasters2;
 mod toasters3;

@@ -48,6 +48,8 @@ WARMUP = {
     "fractal-tree": 4,
     "doom": 8,
     "chess": 10,
+    "tetris": 30,
+    "maze-chase": 6,
 }
 DEFAULT_WARMUP = 2
 
