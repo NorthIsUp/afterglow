@@ -148,11 +148,13 @@ jobs:
           echo "ghcr.io/northisup/afterglow@${{ steps.build.outputs.digest }}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
-  # The `-doom` variant: the same checks with doomgeneric compiled in, then its
-  # own image. GPL as a whole, so it ships as separate `-doom` tags and never
-  # replaces the MIT image. The engine tests need a real IWAD: Freedoom,
-  # checksummed by tools/freedoom.sh.
-  doom:
+  # The GPL variant: the same checks with doomgeneric (GPL-2.0-or-later) and
+  # Micropolis (GPL-3.0) compiled in, then its own image. GPL-3.0 as a whole,
+  # so it ships under separate tags and never replaces the MIT image: `-gpl`,
+  # and `-doom`, its name from before Micropolis, so existing pins keep
+  # resolving. The Doom tests need a real IWAD: Freedoom, checksummed by
+  # tools/freedoom.sh.
+  gpl:
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
@@ -173,26 +175,40 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/northisup/afterglow
-          flavor: suffix=-doom,onlatest=true
           tags: |
-            type=ref,event=branch
-            type=sha,format=long
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch,suffix=-gpl
+            type=sha,format=long,suffix=-gpl
+            type=raw,value=latest-gpl,enable={{is_default_branch}}
+            type=ref,event=branch,suffix=-doom
+            type=sha,format=long,suffix=-doom
+            type=raw,value=latest-doom,enable={{is_default_branch}}
 
-      - name: clippy, tests, render check (--features doom)
+      # The binary must stay one static file under musl, C++ runtime and
+      # all: a NEEDED entry means libstdc++ (or anything) linked dynamically,
+      # which FROM scratch cannot satisfy.
+      - name: clippy, tests, render check, static link (--features doom,micropolis)
         run: |
           docker run --rm -v "$PWD":/src -w /src rust:1-alpine sh -eu -c '
-            apk add --no-cache musl-dev gcc curl >/dev/null
+            apk add --no-cache musl-dev gcc g++ binutils curl >/dev/null
             rustup component add clippy >/dev/null
             wad="$PWD/$(tools/freedoom.sh)"
-            cargo clippy --release --locked --all-targets --features doom -- -D warnings
-            DOOM_TEST_WAD="$wad" cargo test --release --locked --features doom
-            cargo build --release --locked --features doom
-            # Paced, so the engines (wall-clock, own thread) get to draw.
+            f=doom,micropolis
+            cargo clippy --release --locked --all-targets --features $f -- -D warnings
+            DOOM_TEST_WAD="$wad" cargo test --release --locked --features $f
+            cargo build --release --locked --features $f
+            if readelf -d target/release/screensaver | grep NEEDED; then
+              echo "screensaver links a shared library"; exit 1
+            fi
+            # Paced, so the engines (wall-clock, own threads) get to draw.
             SAVER=doom SAVER_HTTP=off SAVER_DUMP=/tmp/dump-doom SAVER_DUMP_FRAMES=90 \
               SAVER_DUMP_EVERY=1 SAVER_DUMP_PACED=1 DOOM_WAD="$wad" ./target/release/screensaver
             moved=$(md5sum /tmp/dump-doom/frame-000[1-8]?.ppm | sort -u -k1,1 | wc -l)
             [ "$moved" -gt 1 ] || { echo "doom: frames are all identical"; exit 1; }
+            SAVER=micropolis SAVER_HTTP=off SAVER_DUMP=/tmp/dump-mp SAVER_DUMP_FRAMES=90 \
+              SAVER_DUMP_EVERY=1 SAVER_DUMP_PACED=1 MICROPOLIS_YEAR_SECS=1 \
+              ./target/release/screensaver
+            moved=$(md5sum /tmp/dump-mp/frame-000[1-8]?.ppm | sort -u -k1,1 | wc -l)
+            [ "$moved" -gt 1 ] || { echo "micropolis: frames are all identical"; exit 1; }
             ls -l target/release/screensaver
           '
 
@@ -200,16 +216,16 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          target: doom
+          target: gpl
           platforms: linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=doom
-          cache-to: type=gha,mode=max,scope=doom
+          cache-from: type=gha,scope=gpl
+          cache-to: type=gha,mode=max,scope=gpl
 
       - name: digest
         if: steps.build.outputs.digest != ''
         run: |
-          echo "ghcr.io/northisup/afterglow@${{ steps.build.outputs.digest }} (-doom)" \
+          echo "ghcr.io/northisup/afterglow@${{ steps.build.outputs.digest }} (-gpl, -doom)" \
             | tee -a "$GITHUB_STEP_SUMMARY"

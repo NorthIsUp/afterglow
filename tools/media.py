@@ -50,14 +50,23 @@ WARMUP = {
     "chess": 10,
     "tetris": 30,
     "maze-chase": 6,
+    "micropolis": 30,
 }
 DEFAULT_WARMUP = 2
 
-# Savers only a `--features doom` build has. Rendered only when named
-# (`mise run media doom`), never in the tour of the default image, and dumped
-# paced: their engines run on the wall clock, so an unpaced dump would be a
-# second of play stretched over the clip.
-FEATURED = {"doom"}
+# Savers only the GPL build (`--features doom,micropolis`) has, with what each
+# needs. Rendered only when named (`mise run media doom`), never in the tour of
+# the default image, and dumped paced: their engines run on the wall clock, so
+# an unpaced dump would be a second of play stretched over the clip. The city
+# runs a year a second, so the warm-up grows it and the clip shows it growing.
+FEATURED = {
+    "doom": {},
+    "micropolis": {
+        "MICROPOLIS_YEAR_SECS": "1",
+        "MICROPOLIS_SEED": "23",
+        "MICROPOLIS_BUNDLED_PCT": "0",
+    },
+}
 
 # Savers whose engines think on the wall clock in the default build: dumped
 # paced for the same reason, with what they need to show some play in a clip.
@@ -72,12 +81,12 @@ def savers() -> list[str]:
     return list(dict.fromkeys(names))
 
 
-def doom_build() -> tuple[Path, dict[str, str]]:
-    """The doom binary, in its own target dir so the default one stays MIT,
-    and the Freedoom WAD it plays."""
-    target = ROOT / "target/doom"
+def gpl_build() -> tuple[Path, dict[str, str]]:
+    """The GPL binary, in its own target dir so the default one stays MIT,
+    and the Freedoom WAD doom plays."""
+    target = ROOT / "target/gpl"
     subprocess.run(
-        ["cargo", "build", "--release", "--locked", "--features", "doom",
+        ["cargo", "build", "--release", "--locked", "--features", "doom,micropolis",
          "--target-dir", str(target)],
         cwd=ROOT, check=True,
     )
@@ -178,7 +187,7 @@ def main() -> int:
     if unknown:
         sys.exit(f"not in the README's saver index: {sorted(unknown)}")
     tour = [] if names else want
-    doom = doom_build() if FEATURED & set(want) else None
+    gpl = gpl_build() if set(FEATURED) & set(want) else None
     out.mkdir(parents=True, exist_ok=True)
     clips: dict[str, list[np.ndarray]] = {}
 
@@ -186,8 +195,8 @@ def main() -> int:
 
         def one(name: str) -> None:
             if name in FEATURED:
-                assert doom
-                frames = capture(doom[0], name, Path(scratch), doom[1])
+                assert gpl
+                frames = capture(gpl[0], name, Path(scratch), {**gpl[1], **FEATURED[name]})
             else:
                 frames = capture(binary, name, Path(scratch), PACED.get(name, {}))
             mode = gif(frames, out / f"{name}.gif")

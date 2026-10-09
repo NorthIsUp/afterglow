@@ -120,6 +120,8 @@ mod lissajous;
 mod marble;
 mod matrix;
 mod maze;
+#[cfg(feature = "micropolis")]
+mod micropolis;
 mod mirror;
 mod moire;
 mod plasma;

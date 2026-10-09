@@ -41,6 +41,26 @@ run         = 'tools/doom-bench/many.sh {{arg(name="episode")}} {{arg(name="tria
 description = "Run clippy on the Doom build"
 run         = "cargo clippy --release --locked --all-targets --features doom -- -D warnings"
 
+[tasks.build-gpl]
+description = "Build release with Doom and Micropolis compiled in, the -gpl image's binary (GPL as a whole)"
+run         = "cargo build --release --locked --features doom,micropolis"
+
+[tasks.test-micropolis]
+description = "Run tests with Micropolis compiled in (needs a C++ compiler)"
+run         = "cargo test --release --locked --features micropolis"
+
+[tasks.clippy-gpl]
+description = "Run clippy on the GPL build"
+run         = "cargo clippy --release --locked --all-targets --features doom,micropolis -- -D warnings"
+
+[tasks.bench-micropolis]
+description = "Grow a city headless at full speed and print the mayor's year-by-year numbers"
+usage       = '''
+arg "[seed]" default="5" help="terrain and mayor seed"
+arg "[years]" default="100" help="city years to run"
+'''
+run         = 'MP_SEED={{arg(name="seed")}} MP_YEARS={{arg(name="years")}} cargo test --release --locked --features micropolis micropolis::tests::bench -- --ignored --nocapture'
+
 [tasks.lint]
 description = "Run linters"
 run         = "hk check"

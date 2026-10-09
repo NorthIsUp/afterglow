@@ -11,10 +11,11 @@ capped at 120°. The view runs the full height of the screen, with the status
 bar drawn over it in the middle. A switch to `doom` starts a new random map, and
 so does finishing one, dying on one, or `DOOM_MAP_SECS` on the same map.
 
-**Only in the `-doom` image** (`ghcr.io/northisup/afterglow:latest-doom`,
-`:sha-<commit>-doom`). That build compiles in
-[doomgeneric](https://github.com/ozkl/doomgeneric), which is GPL-2.0, so the
-`-doom` binary and image are GPL as a whole. The default image is MIT and has no
+**Only in the GPL image** (`ghcr.io/northisup/afterglow:latest-gpl`,
+`:sha-<commit>-gpl`; the older `-doom` tags are the same image). That build
+compiles in [doomgeneric](https://github.com/ozkl/doomgeneric), which is
+GPL-2.0-or-later, and [Micropolis](micropolis.md), which is GPL-3.0, so the
+binary and image are GPL-3.0 as a whole. The default image is MIT and has no
 Doom in it. See [`THIRD_PARTY.md`](../../THIRD_PARTY.md). Build it with
 `cargo build --release --features doom`, which needs a C compiler, and point
 `DOOM_WAD` at an IWAD. `tools/freedoom.sh` fetches Freedoom Phase 1.
@@ -133,7 +134,7 @@ Source: [`src/doom/`](../../src/doom/mod.rs),
   (default 0: Hor+ for the box's shape, capped at 120°; 1..59 counts as 60). A
   fixed field of view leaves the vertical one to follow, Vert- or Vert+, so
   nothing is scaled.
-- `DOOM_WAD`: path to the IWAD (default `/freedoom1.wad`, where the `-doom`
+- `DOOM_WAD`: path to the IWAD (default `/freedoom1.wad`, where the GPL
   image puts it). Any Doom or Doom II IWAD works. If it can't be read, the saver
   shows static.
 - `DOOM_MAP_SECS`: the longest one map runs before a new random one, in

@@ -32,6 +32,10 @@ miniz_oxide = "0.9"
 # with it is GPL as a whole, and it needs a C compiler. The `-doom` image is
 # this build; the default image never sees the C.
 doom = ["dep:cc"]
+# Micropolis, the open-source SimCity (GPL-3.0 with EA's additional terms),
+# compiled in from MicropolisCore. Same deal as doom, but C++: the GPL image
+# is the build with both.
+micropolis = ["dep:cc"]
 
 [build-dependencies]
 cc = { version = "1", optional = true, features = ["parallel"] }
