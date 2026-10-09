@@ -10,19 +10,19 @@
 //! keeps an ordered dither so its slopes read as smooth surfaces. Each cell is
 //! one dot, in the palette colour nearest its hue.
 //!
-//! `desert-night-wide` is the same scene recomposed for a 3.2:1 panel. The
-//! camera's view widens over the same dune field; the acacia and the galaxy's
-//! core move 60 columns right with it, the town 50, and the milky way sweeps
-//! further so its arch spans the whole sky.
+//! At any size the camera keeps its scale and the frame decides how much dune
+//! field it sees: wider panels widen the view, keeping the acacia and the
+//! galaxy's core right of centre, push the town out left and sweep the milky
+//! way further so its arch spans the sky; narrower ones pan the camera so the
+//! acacia stays whole near the right edge; taller ones add sky above and
+//! nearer sand below, and steepen the arch so it climbs the extra sky.
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, hash, js_hypot, js_round, mix, noise, smooth, unit};
-use super::{Fit, Piece, hex};
+use super::{hex, Piece};
 use crate::grid::Cell;
 
-const H: usize = 100;
 const K: f64 = 0.62;
-const HZ: f64 = 64.0; // eye level, in rows
 const CAM: f64 = 6.0;
 const HMAX: f64 = 16.0; // no dune is taller
 
@@ -122,11 +122,13 @@ struct Star {
     ph: f64,
 }
 
-/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+/// Where things sit in a `w x h` frame. Upstream's 200x100 is the anchor
+/// every value moves from, so there it is exact.
 struct Layout {
-    name: &'static str,
     w: usize,
-    anchor: f64,
+    h: usize,
+    /// Eye level, in rows.
+    hz: f64,
     /// The camera's centre column.
     cx: f64,
     /// The far glow, just under the horizon.
@@ -143,36 +145,97 @@ struct Layout {
     meteor_x: [f64; 2],
 }
 
-const ORIGINAL: Layout = Layout {
-    name: "desert-night",
-    w: 200,
-    anchor: 0.35,
-    cx: 100.0,
-    town: [30.0, 66.0],
-    core: [152.0, 38.0],
-    arc: [50.0, 209.8, 199.8],
-    arc_s: [-1.035, 0.8],
-    acacia: 150,
-    meteor_x: [199.0, 140.0],
-};
+/// The arch's radius.
+const ARC_R: f64 = 199.8;
 
-const WIDE: Layout = Layout {
-    name: "desert-night-wide",
-    w: 320,
-    anchor: 0.5,
-    cx: 160.0,
-    town: [80.0, 66.0],
-    core: [212.0, 38.0],
-    arc: [110.0, 209.8, 199.8],
-    arc_s: [-1.035, 1.12],
-    acacia: 210,
-    meteor_x: [319.0, 260.0],
-};
+/// How far round from `a0` an arch centred at `c` runs before it leaves a
+/// frame by its west or top edge.
+fn arc_sweep(c: [f64; 2], a0: f64) -> f64 {
+    let west = -((-2.0 - c[0]) / ARC_R).clamp(-1.0, 1.0).acos();
+    let top = ((-2.0 - c[1]) / ARC_R).clamp(-1.0, 1.0).asin();
+    a0 - west.max(top)
+}
 
-pub type DesertNight = Scene<false>;
-pub type DesertNightWide = Scene<true>;
+impl Layout {
+    fn new(w: usize, h: usize) -> Self {
+        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
+        // at square; `tall` is the rows past upstream's 100.
+        let (wf, tall) = (w as f64, h as f64 - 100.0);
+        let wide = (wf - 200.0) / 120.0;
+        let narrow = clamp((200.0 - wf) / 100.0);
+        let grow = |at: f64, by_wide: f64, by_narrow: f64| {
+            if wf >= 200.0 {
+                at + by_wide * wide
+            } else {
+                at - by_narrow * narrow
+            }
+        };
+        // Two thirds of the extra rows are sky: the milky way is the subject.
+        let sky = (tall * 0.6).round();
+        // The acacia and the core hold 50 columns right of the camera, so
+        // narrowing pans the camera left to keep the tree in frame.
+        let cx = grow(100.0, 60.0, 78.0);
+        let core = [cx + 52.0, 38.0 + sky];
+        // A portrait frame turns the arch up so it climbs the extra sky.
+        let a0 = -1.035 + 0.45 * clamp(tall / 78.0);
+        let arc = [
+            50.0 + ((core[0] - ARC_R * a0.cos()) - (152.0 - ARC_R * (-1.035f64).cos())),
+            209.8 + ((core[1] - ARC_R * a0.sin()) - (38.0 - ARC_R * (-1.035f64).sin())),
+            ARC_R,
+        ];
+        let sweep = arc_sweep([arc[0], arc[1]], a0) - arc_sweep([50.0, 209.8], -1.035);
+        Self {
+            w,
+            h,
+            hz: 64.0 + sky,
+            cx,
+            town: [grow(30.0, 50.0, 15.0), 66.0 + sky],
+            core,
+            arc,
+            arc_s: [a0, 0.8 + sweep],
+            acacia: (cx + 50.0) as usize,
+            meteor_x: [wf - 1.0, wf - 60.0],
+        }
+    }
 
-pub struct Scene<const IS_WIDE: bool> {
+    /// Meteor 0 is already falling; meteor n starts somewhere in its 7 second
+    /// slot. `[start, x0, y0, dx, dy, speed]`.
+    fn meteor(&self, n: usize) -> [f64; 6] {
+        let nf = n as f64;
+        let start = if n == 0 {
+            -0.35
+        } else {
+            7.0 * (nf - 1.0) + 2.5 + hash(nf, 71.0) * 2.5
+        };
+        let x0 = if n == 0 {
+            self.meteor_x[0]
+        } else {
+            30.0 + hash(nf, 72.0) * self.meteor_x[1]
+        };
+        let y0 = if n == 0 {
+            4.0
+        } else {
+            4.0 + hash(nf, 73.0) * 18.0
+        };
+        // each one heads across the sky rather than straight off its nearer edge
+        let a = if n == 0 {
+            2.65
+        } else {
+            (if x0 > self.w as f64 / 2.0 { 2.6 } else { 0.55 }) + (hash(nf, 75.0) - 0.5) * 0.4
+        };
+        [
+            start,
+            x0,
+            y0,
+            a.cos(),
+            a.sin(),
+            52.0 + hash(nf, 76.0) * 30.0,
+        ]
+    }
+}
+
+pub struct DesertNight {
+    l: Layout,
     dots: Dots,
     mat: Vec<u8>,
     s_r: Vec<f32>,
@@ -195,56 +258,9 @@ pub struct Scene<const IS_WIDE: bool> {
     floor: Vec<f32>,
 }
 
-impl<const IS_WIDE: bool> Scene<IS_WIDE> {
-    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
-    const W: usize = Self::L.w;
-    const N: usize = Self::W * H;
-
-    /// Meteor 0 is already falling; meteor n starts somewhere in its 7 second
-    /// slot. `[start, x0, y0, dx, dy, speed]`.
-    fn meteor(n: usize) -> [f64; 6] {
-        let nf = n as f64;
-        let start = if n == 0 {
-            -0.35
-        } else {
-            7.0 * (nf - 1.0) + 2.5 + hash(nf, 71.0) * 2.5
-        };
-        let x0 = if n == 0 {
-            Self::L.meteor_x[0]
-        } else {
-            30.0 + hash(nf, 72.0) * Self::L.meteor_x[1]
-        };
-        let y0 = if n == 0 {
-            4.0
-        } else {
-            4.0 + hash(nf, 73.0) * 18.0
-        };
-        // each one heads across the sky rather than straight off its nearer edge
-        let a = if n == 0 {
-            2.65
-        } else {
-            (if x0 > Self::L.cx { 2.6 } else { 0.55 }) + (hash(nf, 75.0) - 0.5) * 0.4
-        };
-        [
-            start,
-            x0,
-            y0,
-            a.cos(),
-            a.sin(),
-            52.0 + hash(nf, 76.0) * 30.0,
-        ]
-    }
-}
-
-impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
-    const NAME: &'static str = Self::L.name;
-    const COLS: usize = Self::W;
-    const ROWS: usize = H;
+impl Piece for DesertNight {
+    const NAME: &'static str = "desert-night";
     const FPS: u32 = 15;
-    const CELL: usize = 1;
-    const FIT: Fit = Fit::Cover {
-        anchor: Self::L.anchor,
-    };
     const GROUND: u32 = hex("#04060c");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[
@@ -259,28 +275,31 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         hex("#0d0f1a"), hex("#151827"),
     ];
 
-    fn new() -> Self {
+    fn new(cols: usize, rows: usize) -> Self {
+        let lay = Layout::new(cols, rows);
+        let (w, h, hz) = (lay.w, lay.h, lay.hz);
+        let n = w * h;
         // the town's light comes in low from ahead and to the left
         let l = unit([-0.8, 0.32, 0.5]);
         // the galaxy's cool fill, from up and to the right
         let g = unit([0.6, 0.5, 0.4]);
 
         // --- the dunes, raymarched once --------------------------------------
-        let mut mat = vec![SKY; Self::N];
-        let mut depth = vec![0f32; Self::N];
-        let (mut s_r, mut s_g, mut s_b) = (vec![0f32; Self::N], vec![0f32; Self::N], vec![0f32; Self::N]);
-        let mut crest = vec![0f32; Self::N];
-        let mut top = vec![H as i16; Self::W];
-        for r in 0..H {
-            let v = ((HZ - (r as f64 + 0.5)) / 100.0) * K;
+        let mut mat = vec![SKY; n];
+        let mut depth = vec![0f32; n];
+        let (mut s_r, mut s_g, mut s_b) = (vec![0f32; n], vec![0f32; n], vec![0f32; n]);
+        let mut crest = vec![0f32; n];
+        let mut top = vec![h as i16; w];
+        for r in 0..h {
+            let v = ((hz - (r as f64 + 0.5)) / 100.0) * K;
             for (x, col_top) in top.iter_mut().enumerate() {
                 let xf = x as f64;
-                let u = ((xf + 0.5 - Self::L.cx) / 100.0) * K;
+                let u = ((xf + 0.5 - lay.cx) / 100.0) * K;
                 let z = march(u, v);
                 if z == 0.0 {
                     continue;
                 }
-                let k = r * Self::W + x;
+                let k = r * w + x;
                 mat[k] = SAND;
                 depth[k] = z as f32;
                 if (r as i16) < *col_top {
@@ -289,9 +308,9 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 let (px, py) = (u * z, CAM + v * z);
                 let e = 0.2;
                 let hx = (dunes(px + e, z) - dunes(px - e, z)) / (2.0 * e);
-                let hz = (dunes(px, z + e) - dunes(px, z - e)) / (2.0 * e);
-                let nl = js_hypot(&[hx, 1.0, hz]);
-                let (nx, ny, nz) = (-hx / nl, 1.0 / nl, -hz / nl);
+                let gz = (dunes(px, z + e) - dunes(px, z - e)) / (2.0 * e);
+                let nl = js_hypot(&[hx, 1.0, gz]);
+                let (nx, ny, nz) = (-hx / nl, 1.0 / nl, -gz / nl);
                 let mut lit = (nx * l[0] + ny * l[1] + nz * l[2]).max(0.0);
                 if lit > 0.0 {
                     // a soft shadow: how close the ray to the light passes over the sand
@@ -321,7 +340,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     0.55 + 0.45 * smooth(0.2, 0.72, ph)
                 };
                 let near = 0.72 + 0.28 * smooth(5.0, 25.0, z);
-                let reach = (0.55 + 0.45 * (-(xf - Self::L.town[0]).abs() / 90.0).exp())
+                let reach = (0.55 + 0.45 * (-(xf - lay.town[0]).abs() / 90.0).exp())
                     * fall
                     * near
                     * smooth(300.0, 120.0, z);
@@ -343,7 +362,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 // distance thins the light into the horizon's haze
                 let haze =
                     clamp(1.0 - (-z / 260.0).exp()) * mix(0.7, 0.92, smooth(120.0, 300.0, z));
-                let hg = (-(xf - Self::L.town[0]).abs() / 40.0).exp() * 0.18;
+                let hg = (-(xf - lay.town[0]).abs() / 40.0).exp() * 0.18;
                 cr = mix(cr, 0.07 + hg, haze);
                 cg = mix(cg, 0.085 + hg * 0.6, haze);
                 cb = mix(cb, 0.15 + hg * 0.3, haze);
@@ -362,10 +381,10 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         }
 
         // --- the acacia, on the crest under the galaxy's core -----------------
-        let mut bark = vec![0f32; Self::N]; // warm light from the core caught on the canopy's top
+        let mut bark = vec![0f32; n]; // warm light from the core caught on the canopy's top
         {
-            let ac = Self::L.acacia as f64;
-            let base = f64::from(top[Self::L.acacia]);
+            let ac = lay.acacia as f64;
+            let base = f64::from(top[lay.acacia]);
             let canopy_top = base - 16.0;
             // an umbrella: a low lumpy dome on top, thinning to the tips, tufts below
             const SPAN: f64 = 17.0;
@@ -395,9 +414,9 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             ];
             let r0 = (canopy_top - 3.0).max(0.0) as usize;
             // upstream's typed arrays drop writes past the last row
-            let r1 = (base as usize + 1).min(H - 1);
+            let r1 = (base as usize + 1).min(h - 1);
             for r in r0..=r1 {
-                for x in Self::L.acacia - 26..=Self::L.acacia + 26 {
+                for x in lay.acacia.saturating_sub(26)..=(lay.acacia + 26).min(w - 1) {
                     let (px, py) = (x as f64 + 0.5, r as f64 + 0.5);
                     let mut on = canopy(x as f64, px, py);
                     for &([ax, ay], [bx, by], w) in &limbs {
@@ -409,18 +428,18 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                         }
                     }
                     if on {
-                        mat[r * Self::W + x] = TREE;
+                        mat[r * w + x] = TREE;
                     }
                 }
             }
             // the canopy's upper edge, rimmed by the bulge behind it
-            for r in 1..H {
-                for x in 0..Self::W {
-                    let k = r * Self::W + x;
-                    if mat[k] != TREE || mat[k - Self::W] != SKY {
+            for r in 1..h {
+                for x in 0..w {
+                    let k = r * w + x;
+                    if mat[k] != TREE || mat[k - w] != SKY {
                         continue;
                     }
-                    let (dx, dy) = (x as f64 + 0.5 - Self::L.core[0], (r as f64 - Self::L.core[1]) * 1.3);
+                    let (dx, dy) = (x as f64 + 0.5 - lay.core[0], (r as f64 - lay.core[1]) * 1.3);
                     bark[k] = (0.25 + 0.75 * (-(dx * dx + dy * dy).sqrt() / 18.0).exp()) as f32;
                 }
             }
@@ -428,43 +447,43 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
 
         // --- the town's lights, a few pinpricks along the far horizon ---------
         let mut lamps: Vec<[f64; 3]> = Vec::with_capacity(5);
-        let town = Self::L.town[0] as usize;
-        for x in town - 9..=town + 9 {
+        let town = lay.town[0] as usize;
+        for x in town.saturating_sub(9)..=(town + 9).min(w - 1) {
             if lamps.len() >= 5 {
                 break;
             }
             let xf = x as f64;
             let r = top[x] as usize;
-            if r >= H || depth[r * Self::W + x] < 140.0 || hash(xf, 91.0) > 0.45 {
+            if r >= h || depth[r * w + x] < 140.0 || hash(xf, 91.0) > 0.45 {
                 continue;
             }
-            if lamps.iter().any(|l| (l[0] as usize % Self::W).abs_diff(x) < 2) {
+            if lamps.iter().any(|l| (l[0] as usize % w).abs_diff(x) < 2) {
                 continue;
             }
             lamps.push([
-                (r * Self::W + x) as f64,
+                (r * w + x) as f64,
                 hash(xf, 92.0) * 6.28,
                 0.7 + hash(xf, 93.0) * 1.4,
             ]);
         }
 
         // --- the sky: gradient, the town's glow and the milky way ------------
-        let (mut k_r, mut k_g, mut k_b) = (vec![0f32; Self::N], vec![0f32; Self::N], vec![0f32; Self::N]);
-        let mut air = vec![0f32; Self::N];
-        let mut band = vec![0f32; Self::N];
-        for r in 0..H {
-            for xi in 0..Self::W {
+        let (mut k_r, mut k_g, mut k_b) = (vec![0f32; n], vec![0f32; n], vec![0f32; n]);
+        let mut air = vec![0f32; n];
+        let mut band = vec![0f32; n];
+        for r in 0..h {
+            for xi in 0..w {
                 let x = xi as f64;
-                let k = r * Self::W + xi;
+                let k = r * w + xi;
                 let y = r as f64 + 0.5;
-                let v = clamp(y / HZ);
+                let v = clamp(y / hz);
                 // a saturated navy, so the dither's specks read as colour
                 let mut cr = 0.02 + 0.03 * v * v;
                 let mut cg = 0.035 + 0.045 * v * v;
                 let mut cb = 0.1 + 0.08 * v * v;
                 // the town: an amber dome rising from below the horizon, its warmth
                 // taking over from the navy rather than greying it
-                let (tx, ty) = (x + 0.5 - Self::L.town[0], (y - Self::L.town[1]) * 1.9);
+                let (tx, ty) = (x + 0.5 - lay.town[0], (y - lay.town[1]) * 1.9);
                 let td = (tx * tx + ty * ty).sqrt();
                 let glow = (-td / 16.0).exp() * 0.4 + (-td / 60.0).exp() * 0.22;
                 let cool = 1.0 - 0.85 * clamp((-td / 22.0).exp() * 1.5);
@@ -481,9 +500,9 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     * cool
                     * along) as f32;
                 // the milky way, along an arc from the core up and over to the west
-                let (ax, ay) = (x + 0.5 - Self::L.arc[0], y - Self::L.arc[1]);
-                let d = (ax * ax + ay * ay).sqrt() - Self::L.arc[2];
-                let s_raw = (Self::L.arc_s[0] - ay.atan2(ax)) / Self::L.arc_s[1]; // 0 at the core end
+                let (ax, ay) = (x + 0.5 - lay.arc[0], y - lay.arc[1]);
+                let d = (ax * ax + ay * ay).sqrt() - lay.arc[2];
+                let s_raw = (lay.arc_s[0] - ay.atan2(ax)) / lay.arc_s[1]; // 0 at the core end
                 let s = clamp(s_raw);
                 // the band ends at the core
                 let end = if s_raw < 0.0 {
@@ -497,19 +516,15 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     1.0
                 };
                 let w = 9.0 + 8.0 * (1.0 - s).powf(1.4);
-                // (wide: the lanes stretch with the longer sweep)
-                let lane_s = if IS_WIDE {
-                    s * 9.0 * Self::L.arc_s[1] / 0.8
-                } else {
-                    s * 9.0
-                };
+                // the lanes stretch with a longer sweep
+                let lane_s = s * (9.0 * (lay.arc_s[1] / 0.8));
                 let lane0 = (noise(lane_s, 3.3, 0.0) - 0.5) * w * 0.5 * smooth(0.0, 0.25, s);
                 let mut b = (-(d / w).powi(2)).exp();
                 let clump = fbm(x * 0.09, y * 0.09, 4);
                 b *= 0.35 + 1.1 * smooth(0.3, 0.75, clump);
                 b *= (0.55 + 0.55 * (1.0 - s)) * end;
                 // the core's bulge
-                let (cx, cy) = (x + 0.5 - Self::L.core[0], (y - Self::L.core[1]) * 1.3);
+                let (cx, cy) = (x + 0.5 - lay.core[0], (y - lay.core[1]) * 1.3);
                 let cd = (cx * cx + cy * cy).sqrt();
                 let core = (-cd / 6.0).exp() * 0.5 + (-cd / 22.0).exp() * 0.25;
                 b += core;
@@ -538,11 +553,11 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         }
 
         // per-cell dither and floor: random in open sky, half ordered in the band
-        let mut dith = vec![0f32; Self::N];
-        let mut floor0 = vec![0f32; Self::N];
-        for r in 0..H {
-            for x in 0..Self::W {
-                let k = r * Self::W + x;
+        let mut dith = vec![0f32; n];
+        let mut floor0 = vec![0f32; n];
+        for r in 0..h {
+            for x in 0..w {
+                let k = r * w + x;
                 let bay = bayer(r, x);
                 if mat[k] == SKY {
                     // the band and the glow low down get a wider, half-ordered dither, so
@@ -562,9 +577,9 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
 
         // --- stars: thick in the band, a few bright ones everywhere -----------
         let mut stars = Vec::new();
-        for r in 0..HZ as usize + 2 {
-            for xi in 0..Self::W {
-                let k = r * Self::W + xi;
+        for r in 0..hz as usize + 2 {
+            for xi in 0..w {
+                let k = r * w + xi;
                 if mat[k] != SKY {
                     continue;
                 }
@@ -574,7 +589,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     continue;
                 }
                 let m = hash(x * 5.0 + 1.0, rf * 3.0 + 7.0).powf(12.0);
-                let bright = (0.2 + 0.95 * m) * smooth(HZ + 1.0, HZ - 6.0, rf + 0.5);
+                let bright = (0.2 + 0.95 * m) * smooth(hz + 1.0, hz - 6.0, rf + 0.5);
                 let c = hash(x * 11.0, rf * 17.0 + 5.0);
                 let tint = if c < 0.2 {
                     [0.78, 0.86, 1.0]
@@ -594,6 +609,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         }
 
         Self {
+            l: lay,
             dots: Dots::new(Self::PALETTE),
             mat,
             s_r,
@@ -609,14 +625,15 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             dith,
             floor0,
             stars,
-            f_r: vec![0f32; Self::N],
-            f_g: vec![0f32; Self::N],
-            f_b: vec![0f32; Self::N],
-            floor: vec![0f32; Self::N],
+            f_r: vec![0f32; n],
+            f_g: vec![0f32; n],
+            f_b: vec![0f32; n],
+            floor: vec![0f32; n],
         }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
+        let (w, h, hz) = (self.l.w, self.l.h, self.l.hz);
         self.f_r.copy_from_slice(&self.k_r);
         self.f_g.copy_from_slice(&self.k_g);
         self.f_b.copy_from_slice(&self.k_b);
@@ -624,10 +641,10 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let (fr, fg, fb, floor) = (&mut self.f_r, &mut self.f_g, &mut self.f_b, &mut self.floor);
         let bump = |v: &mut f32, d: f64| *v = (f64::from(*v) + d) as f32;
         // the airglow drifts slowly along the horizon
-        let air0 = (HZ * 0.3).floor() as usize;
-        for r in air0..HZ as usize + 2 {
-            for x in 0..Self::W {
-                let k = r * Self::W + x;
+        let air0 = (hz * 0.3).floor() as usize;
+        for r in air0..hz as usize + 2 {
+            for x in 0..w {
+                let k = r * w + x;
                 if self.mat[k] != SKY {
                     continue;
                 }
@@ -638,7 +655,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 bump(&mut fb[k], a * 1.2);
             }
         }
-        for k in 0..Self::N {
+        for k in 0..w * h {
             let m = self.mat[k];
             if m == SAND {
                 fr[k] = self.s_r[k];
@@ -685,7 +702,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let n = ((t - 2.5) / 7.0).floor() + 1.0;
         let first = (n - 1.0).max(0.0) as usize;
         for i in first..=(n + 1.0) as usize {
-            let [start, x0, y0, dx, dy, speed] = Self::meteor(i);
+            let [start, x0, y0, dx, dy, speed] = self.l.meteor(i);
             let age = t - start;
             if !(0.0..=0.9).contains(&age) {
                 continue;
@@ -699,10 +716,10 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 j += 1.0;
                 let px = js_round(hx - dx * f * len);
                 let py = js_round(hy - dy * f * len * 0.75);
-                if px < 0.0 || px >= Self::W as f64 || py < 0.0 || py >= H as f64 {
+                if px < 0.0 || px >= w as f64 || py < 0.0 || py >= h as f64 {
                     continue;
                 }
-                let k = py as usize * Self::W + px as usize;
+                let k = py as usize * w + px as usize;
                 if self.mat[k] != SKY {
                     continue;
                 }
@@ -714,11 +731,11 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             }
         }
 
-        let hf = H as f64;
-        for r in 0..H {
+        let hf = h as f64;
+        for r in 0..h {
             let edge = smooth(hf + 1.0, hf - 12.0, r as f64 + 0.5);
-            for x in 0..Self::W {
-                let k = r * Self::W + x;
+            for x in 0..w {
+                let k = r * w + x;
                 let rgb = [f64::from(fr[k]), f64::from(fg[k]), f64::from(fb[k])];
                 let fl = f64::from(floor[k]);
                 let peak = rgb[0].max(rgb[1]).max(rgb[2]).max(1e-4);

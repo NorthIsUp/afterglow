@@ -6,27 +6,28 @@
 //! Its dither is its own (Bayer at 0.4 plus hashed noise) and its colours go
 //! through a soft-knee tone curve first; the rest is [`Dots::ink`].
 //!
-//! `kyoto-dusk-wide` is the same dusk recomposed for a 3.2:1 panel. The cherry
-//! tree and lantern keep the left; the far bank runs on with a temple hall
-//! beside the pagoda, the hills rise further east, and the moon moves out with
-//! the frame.
+//! At any size the cherry tree and lantern keep the left and the pagoda the
+//! far bank: wider panels run the bank on with a temple hall beside the
+//! pagoda, the hills further east and the moon out with the frame; narrower
+//! ones pull the tree's limbs in and the pagoda toward it, the moon going
+//! over to the spire's left when there is no sky right of it; taller ones add
+//! sky above and pond below.
+
+mod plans;
+
+use plans::{hall, hill_b, lantern, pagoda, town};
 
 use super::halftone::{Dots, BAYER};
 use super::math::{clamp, fbm, hash, js_round, mix, noise, smooth};
-use super::{Fit, Piece, hex};
+use super::{hex, Piece};
 use crate::font;
 use crate::grid::Cell;
 
-const H: usize = 100;
-/// The far bank of the pond, where the pagoda stands.
+/// The far bank of the pond, where the pagoda stands, on upstream's grid.
 const SHORE: f64 = 80.0;
-/// The pagoda's axis.
-/// The lantern's axis, foot and scale.
-const LX: f64 = 53.0;
+/// The lantern's foot and scale.
 const LB: f64 = 98.0;
 const LS: f64 = 1.8;
-/// Its lit opening.
-const LAMP: [f64; 2] = [LX, LB - (LB - 83.0) * LS];
 
 const SKY: u8 = 0;
 const HILL: u8 = 1;
@@ -53,175 +54,6 @@ fn seg(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> (f64, f64) {
     ((ex * ex + ey * ey).sqrt(), k)
 }
 
-/// Where each roof's eave sits.
-const EAVE: [f64; 5] = [68.5, 58.0, 48.5, 40.0, 32.5];
-/// Each roof's half-width.
-const ROOF: [f64; 5] = [14.5, 13.4, 12.3, 11.2, 10.1];
-const BODY: [f64; 5] = [6.4, 5.9, 5.4, 4.9, 4.4];
-
-/// The pagoda, in cells about its axis: a shade code or 0 for air. 1 body,
-/// 2 roof top, 3 roof underside, 4 roof rim, 5 spire, 6 lit doorway.
-fn pagoda(dx: f64, y: f64) -> u8 {
-    let ax = dx.abs();
-    // stone base
-    if (76.0..SHORE + 0.5).contains(&y) {
-        return u8::from(ax <= 9.5 - if y < 77.0 { 1.0 } else { 0.0 });
-    }
-    for i in 0..5 {
-        let (e, r) = (EAVE[i], ROOF[i]);
-        // a roof: thin at its upturned tips, rising in a shallow concave curve to the body
-        let u = ax / r;
-        if u <= 1.0 {
-            let lift = 3.5 * u * u * u * u;
-            let bottom = e - lift + 0.6;
-            let top = e - lift - 1.2 - 3.6 * (1.0 - u).powf(1.7);
-            if y >= top && y < bottom {
-                if y < top + 0.9 {
-                    return 4;
-                }
-                if y > bottom - 1.0 {
-                    return 3;
-                }
-                return 2;
-            }
-        }
-        // the storey beneath this roof, up from the roof below it (or the base)
-        let floor = if i == 0 { 76.0 } else { EAVE[i - 1] - 3.6 };
-        if y >= e + 0.6 && y < floor && ax <= BODY[i] {
-            if i == 0 && ax <= 1.0 && y > 72.0 && y < 75.5 {
-                return 6;
-            }
-            // a railed balcony under each roof
-            if y < e + 2.0 && ax <= BODY[i] + 1.2 {
-                return 3;
-            }
-            return 1;
-        }
-        if i > 0 && y >= e + 0.6 && y < e + 2.0 && ax <= BODY[i] + 1.2 {
-            return 3;
-        }
-    }
-    // the spire: a mast with nine rings and a flame-shaped finial
-    let top = EAVE[4] - 1.2 - 3.6 - 0.2;
-    if y < top && y >= 9.0 {
-        if y >= top - 1.5 {
-            return if ax <= 2.4 { 3 } else { 0 }; // the roof box
-        }
-        if y >= 15.0 && y < top - 1.5 {
-            let ring = ((y - 15.0) / 1.2).floor() as i32 & 1;
-            return if ax <= if ring != 0 { 1.4 } else { 0.55 } {
-                5
-            } else {
-                0
-            };
-        }
-        if y >= 12.0 {
-            return if ax <= 1.3 - (y - 12.0) * 0.2 { 5 } else { 0 };
-        }
-        return if ax <= 0.6 { 5 } else { 0 };
-    }
-    0
-}
-
-/// The main hall beside the pagoda, in the pagoda's shade codes: a low body of
-/// lit shoji under one deep hipped roof.
-fn hall(dx: f64, y: f64) -> u8 {
-    let ax = dx.abs();
-    if (77.5..SHORE + 0.5).contains(&y) {
-        return u8::from(ax <= 13.0 - if y < 78.5 { 1.0 } else { 0.0 });
-    }
-    let (e, r) = (70.5, 16.5);
-    let u = ax / r;
-    if u <= 1.0 {
-        let lift = 2.6 * u * u * u * u;
-        let bottom = e - lift + 0.6;
-        let top = e - lift - 1.2 - 5.4 * (1.0 - u).powf(1.3);
-        if y >= top.max(e - 6.2) && y < bottom {
-            if y < top.max(e - 6.2) + 0.9 {
-                return 4;
-            }
-            if y > bottom - 1.0 {
-                return 3;
-            }
-            return 2;
-        }
-    }
-    if y >= e + 0.6 && y < 77.5 && ax <= 10.5 {
-        if y < e + 1.8 {
-            return 3;
-        }
-        // shoji between the posts, lit from inside
-        let bay = ((dx + 10.5) / 3.0).floor();
-        if ax <= 9.5 && y > 72.6 && y < 76.4 && (dx + 10.5) % 3.0 > 0.9 && hash(bay, 23.0) > 0.35 {
-            return 6;
-        }
-        return 1;
-    }
-    0
-}
-
-/// The stone lantern in its plan: 1 stone, 2 lit opening, 3 roof, 0 air.
-fn lantern(dx: f64, y: f64) -> u8 {
-    let ax = dx.abs();
-    if (93.5..LB).contains(&y) {
-        return u8::from(ax <= 4.2 - if y < 94.5 { 0.8 } else { 0.0 }); // foot
-    }
-    if (87.0..93.5).contains(&y) {
-        return u8::from(ax <= 1.4); // post
-    }
-    if (85.5..87.0).contains(&y) {
-        return u8::from(ax <= 3.6 - if y < 86.2 { 0.6 } else { 0.0 }); // platform
-    }
-    if (80.0..85.5).contains(&y) {
-        if ax <= 1.7 && (80.8..84.8).contains(&y) {
-            return 2; // lit opening
-        }
-        return u8::from(ax <= 2.9);
-    }
-    if (76.5..80.0).contains(&y) {
-        // the roof, flaring out with upturned corners
-        let u = (80.0 - y) / 3.5;
-        let hw = 5.6 - 4.1 * u.powf(0.8) + if y > 79.2 { 0.6 } else { 0.0 };
-        return if ax <= hw { 3 } else { 0 };
-    }
-    if (73.5..76.5).contains(&y) {
-        // finial
-        return if ax <= 1.3 - (y - 75.0).abs() * 0.25 || ax <= 0.5 {
-            3
-        } else {
-            0
-        };
-    }
-    0
-}
-
-/// The lantern drawn a size up from its plan, standing on the bank.
-fn lantern_at(xc: f64, y: f64) -> u8 {
-    lantern((xc - LX) / LS, LB - (LB - y) / LS)
-}
-
-fn hill_b(x: f64) -> f64 {
-    77.0 - 2.5 * fbm(x * 0.04 + 9.0, 2.0, 4, 0.0)
-}
-
-/// Low tiled roofs along the far bank, a few lit.
-fn town(x: f64) -> f64 {
-    let i = ((x + 3.0) / 11.0).floor();
-    let f = (x + 3.0) / 11.0 - i;
-    // a hipped roof: a short level ridge, sloping ends, a gap between houses
-    let h = 2.0 + hash(i, 5.0) * 2.5;
-    let e = (f - 0.5).abs() * 2.0;
-    if e > 0.86 {
-        SHORE
-    } else {
-        SHORE - 1.0 - h + (e - 0.35).max(0.0) * 6.0
-    }
-}
-
-fn bank_x(y: f64) -> f64 {
-    38.0 + (y - SHORE) * 2.3 + 4.0 * fbm(y * 0.2, 4.0, 2, 0.0)
-}
-
 fn cdens(x: f64, y: f64) -> f64 {
     let (c0, c1) = (C0 as f64, C1 as f64);
     fbm(x * 0.014, y * 0.13, 4, CW as f64 * 0.014)
@@ -240,10 +72,20 @@ struct Petal {
     tum: f64,
 }
 
-/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+/// Where things sit in a `w x h` frame. Upstream's 200x100 is the anchor
+/// every value moves from, so there it is exact.
 struct Layout {
-    name: &'static str,
     w: usize,
+    h: usize,
+    /// Rows of sky added above the far bank, and how far the near bank (the
+    /// tree, the lantern) moves down to stay on the bottom row.
+    sky: f64,
+    fg: f64,
+    /// The far bank of the pond.
+    shore: f64,
+    /// The near bank's columns draw in toward the trunk on a narrow panel:
+    /// [scale, shift], both about the trunk's top.
+    fg_squeeze: [f64; 2],
     /// The pagoda's axis.
     px: f64,
     /// The temple hall's axis.
@@ -255,34 +97,121 @@ struct Layout {
     west_cloud: f64,
     /// Where the far hills rise from low in the west to full height.
     hills: [f64; 2],
+    /// Where the town along the far bank starts, behind the tree.
+    town_from: f64,
+    /// The lantern's axis, and its lit opening.
+    lx: f64,
+    lamp: [f64; 2],
 }
 
-const ORIGINAL: Layout = Layout {
-    name: "kyoto-dusk",
-    w: 200,
-    px: 141.0,
-    hall: None,
-    moon: [176, 17],
-    west: [80.0, 120.0],
-    west_cloud: 90.0,
-    hills: [70.0, 175.0],
-};
+/// The trunk's top: the near bank draws in about it.
+const PIVOT: f64 = 31.0;
 
-const WIDE: Layout = Layout {
-    name: "kyoto-dusk-wide",
-    w: 320,
-    px: 226.0,
-    hall: Some(166.0),
-    moon: [284, 17],
-    west: [90.0, 170.0],
-    west_cloud: 140.0,
-    hills: [90.0, 270.0],
-};
+impl Layout {
+    fn new(w: usize, h: usize) -> Self {
+        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
+        // at square.
+        let (wf, tall) = (w as f64, h as f64 - 100.0);
+        let wide = (wf - 200.0) / 120.0;
+        let narrow = clamp((200.0 - wf) / 100.0);
+        let grow = |at: f64, by_wide: f64, by_narrow: f64| {
+            if wf >= 200.0 {
+                at + by_wide * wide
+            } else {
+                at - by_narrow * narrow
+            }
+        };
+        let sky = (tall * 0.25).round();
+        let px = grow(141.0, 85.0, 57.0);
+        // right of the pagoda while there is sky for it, else left of the spire
+        let gap = wf - (px + 14.5);
+        let moon = if wf >= 200.0 {
+            [176.0 + 108.0 * wide, 17.0 + 0.6 * sky]
+        } else if gap >= 14.0 {
+            [px + 14.5 + gap / 2.0, 17.0 + 0.6 * sky]
+        } else {
+            [px - 22.0, 8.0 + 0.8 * sky]
+        };
+        let mut l = Self {
+            w,
+            h,
+            sky,
+            fg: tall,
+            shore: SHORE + sky,
+            fg_squeeze: [1.0 - 0.5 * narrow, -10.0 * narrow],
+            px,
+            hall: (wf >= 290.0).then_some(px - 60.0),
+            moon: moon.map(|v| v.round() as i32),
+            west: [grow(80.0, 10.0, 40.0), grow(120.0, 50.0, 60.0)],
+            west_cloud: grow(90.0, 50.0, 45.0),
+            hills: [grow(70.0, 20.0, 35.0), grow(175.0, 95.0, 75.0)],
+            town_from: 70.0,
+            lx: 53.0,
+            lamp: [0.0; 2],
+        };
+        l.town_from = l.fg_x(70.0);
+        l.lx = l.fg_x(53.0);
+        l.lamp = [l.lx, LB - (LB - 83.0) * LS + l.fg];
+        l
+    }
 
-pub type KyotoDusk = Scene<false>;
-pub type KyotoDuskWide = Scene<true>;
+    /// Upstream's column `x` on the near bank, drawn in on a narrow panel.
+    fn fg_x(&self, x: f64) -> f64 {
+        let [s, shift] = self.fg_squeeze;
+        if s == 1.0 {
+            x
+        } else {
+            PIVOT + (x - PIVOT) * s + shift
+        }
+    }
 
-pub struct Scene<const IS_WIDE: bool> {
+    fn sky_at(&self, x: f64, y: f64) -> [f64; 3] {
+        let v = clamp(y / self.shore);
+        // indigo overhead, through violet, to rose and peach low in the west (left)
+        let west = (-(x - self.west[0]).abs() / self.west[1]).exp();
+        let mut a = smooth(0.0, 0.5, v);
+        let (mut r, mut g, mut b) = (mix(0.07, 0.22, a), mix(0.07, 0.14, a), mix(0.25, 0.38, a));
+        a = smooth(0.42, 0.86, v);
+        (r, g, b) = (mix(r, 0.52, a), mix(g, 0.32, a), mix(b, 0.58, a));
+        a = smooth(0.78, 0.98, v) * (0.55 + 0.45 * west);
+        (r, g, b) = (mix(r, 1.0, a), mix(g, 0.62, a), mix(b, 0.48, a));
+        let band = (-(y - 74.0 - self.sky).abs() / 4.0).exp() * west * 0.18;
+        r += band;
+        g += band * 0.66;
+        b += band * 0.45;
+        // a faint unevenness, so no stretch of sky is one flat tone
+        let veil = 0.86 + 0.28 * fbm(x * 0.035, y * 0.09, 3, 0.0);
+        r *= veil;
+        g *= veil;
+        b *= veil;
+        // the moon's halo
+        let (dx, dy) = (x - f64::from(self.moon[0]), y - f64::from(self.moon[1]));
+        let d = (dx * dx + dy * dy).sqrt();
+        let halo = (-d / 5.0).exp() * 0.24 + (-d / 16.0).exp() * 0.07;
+        [r + halo * 0.75, g + halo * 0.72, b + halo]
+    }
+
+    /// Low in the west where the glow is, rising behind the pagoda and the town.
+    fn hill_a(&self, x: f64) -> f64 {
+        77.5 + self.sky
+            - (3.0 + 13.0 * smooth(self.hills[0], self.hills[1], x))
+                * (0.3 + 1.1 * fbm(x * 0.022 + 3.0, 1.0, 4, 0.0))
+    }
+
+    /// The near bank's edge on row `y`.
+    fn bank_x(&self, y: f64) -> f64 {
+        let y = y - self.fg;
+        self.fg_x(38.0 + (y - SHORE) * 2.3 + 4.0 * fbm(y * 0.2, 4.0, 2, 0.0))
+    }
+
+    /// The lantern drawn a size up from its plan, standing on the bank.
+    fn lantern_at(&self, xc: f64, y: f64) -> u8 {
+        lantern((xc - self.lx) / LS, LB - (LB - (y - self.fg)) / LS)
+    }
+}
+
+pub struct KyotoDusk {
+    l: Layout,
     dots: Dots,
     mat: Vec<u8>,
     r: Vec<f32>,
@@ -315,50 +244,9 @@ pub struct Scene<const IS_WIDE: bool> {
     floater_ink: Cell,
 }
 
-impl<const IS_WIDE: bool> Scene<IS_WIDE> {
-    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
-    const W: usize = Self::L.w;
-    const N: usize = Self::W * H;
-
-    fn sky_at(x: f64, y: f64) -> [f64; 3] {
-        let v = clamp(y / SHORE);
-        // indigo overhead, through violet, to rose and peach low in the west (left)
-        let west = (-(x - Self::L.west[0]).abs() / Self::L.west[1]).exp();
-        let mut a = smooth(0.0, 0.5, v);
-        let (mut r, mut g, mut b) = (mix(0.07, 0.22, a), mix(0.07, 0.14, a), mix(0.25, 0.38, a));
-        a = smooth(0.42, 0.86, v);
-        (r, g, b) = (mix(r, 0.52, a), mix(g, 0.32, a), mix(b, 0.58, a));
-        a = smooth(0.78, 0.98, v) * (0.55 + 0.45 * west);
-        (r, g, b) = (mix(r, 1.0, a), mix(g, 0.62, a), mix(b, 0.48, a));
-        let band = (-(y - 74.0).abs() / 4.0).exp() * west * 0.18;
-        r += band;
-        g += band * 0.66;
-        b += band * 0.45;
-        // a faint unevenness, so no stretch of sky is one flat tone
-        let veil = 0.86 + 0.28 * fbm(x * 0.035, y * 0.09, 3, 0.0);
-        r *= veil;
-        g *= veil;
-        b *= veil;
-        // the moon's halo
-        let (dx, dy) = (x - f64::from(Self::L.moon[0]), y - f64::from(Self::L.moon[1]));
-        let d = (dx * dx + dy * dy).sqrt();
-        let halo = (-d / 5.0).exp() * 0.24 + (-d / 16.0).exp() * 0.07;
-        [r + halo * 0.75, g + halo * 0.72, b + halo]
-    }
-
-    /// Low in the west where the glow is, rising behind the pagoda and the town.
-    fn hill_a(x: f64) -> f64 {
-        77.5 - (3.0 + 13.0 * smooth(Self::L.hills[0], Self::L.hills[1], x)) * (0.3 + 1.1 * fbm(x * 0.022 + 3.0, 1.0, 4, 0.0))
-    }
-}
-
-impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
-    const NAME: &'static str = Self::L.name;
-    const COLS: usize = Self::W;
-    const ROWS: usize = H;
+impl Piece for KyotoDusk {
+    const NAME: &'static str = "kyoto-dusk";
     const FPS: u32 = 15;
-    const CELL: usize = 1;
-    const FIT: Fit = Fit::Cover { anchor: 0.25 };
     const GROUND: u32 = hex("#0b0a16");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[
@@ -375,13 +263,16 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         hex("#2b3a6a"), hex("#3e4f86"),
     ];
 
-    fn new() -> Self {
-        let mut mat = vec![SKY; Self::N];
-        let mut rv = vec![0f32; Self::N];
-        let mut gv = vec![0f32; Self::N];
-        let mut bv = vec![0f32; Self::N];
-        let mut floor = vec![0.12f32; Self::N];
-        let mut warmth = vec![0f32; Self::N];
+    fn new(cols: usize, rows: usize) -> Self {
+        let l = Layout::new(cols, rows);
+        let (w, h, shore) = (l.w, l.h, l.shore);
+        let (n, hf) = (w * h, h as f64);
+        let mut mat = vec![SKY; n];
+        let mut rv = vec![0f32; n];
+        let mut gv = vec![0f32; n];
+        let mut bv = vec![0f32; n];
+        let mut floor = vec![0.12f32; n];
+        let mut warmth = vec![0f32; n];
 
         // the cherry tree's skeleton: [ax, ay, bx, by, w0, w1]
         #[rustfmt::skip]
@@ -448,23 +339,30 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             }
         }
 
+        for b in &mut branches {
+            [b[0], b[1], b[2], b[3]] = [l.fg_x(b[0]), b[1] + l.fg, l.fg_x(b[2]), b[3] + l.fg];
+        }
+        for c in &mut clusters {
+            [c[0], c[1]] = [l.fg_x(c[0]), c[1] + l.fg];
+        }
+
         // build the static picture
-        for r in 0..H {
-            for x in 0..Self::W {
-                let k = r * Self::W + x;
+        for r in 0..h {
+            for x in 0..w {
+                let k = r * w + x;
                 let y = r as f64 + 0.5;
                 let xc = x as f64 + 0.5;
                 let (mut m, mut fl, mut warm) = (SKY, 0.12, 0.0);
                 let (mut cr, mut cg, mut cb) = (0.0, 0.0, 0.0);
-                if y < SHORE {
-                    [cr, cg, cb] = Self::sky_at(xc, y);
+                if y < shore {
+                    [cr, cg, cb] = l.sky_at(xc, y);
                     fl = 0.04;
                     // distant hills in haze, then a nearer ridge
-                    let ha = Self::hill_a(xc);
+                    let ha = l.hill_a(xc);
                     if y >= ha {
                         // the Higashiyama hills, flat and violet in the haze
                         m = HILL;
-                        let s = Self::sky_at(xc, ha);
+                        let s = l.sky_at(xc, ha);
                         let d = smooth(ha, ha + 8.0, y);
                         // wooded slopes: clumps of trees in the haze
                         let tex = fbm(xc * 0.3, y * 0.45, 3, 0.0);
@@ -478,18 +376,18 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                             mix(cb, s[2], lip),
                         );
                     }
-                    let hb = hill_b(xc);
+                    let hb = hill_b(xc) + l.sky;
                     if y >= hb {
                         m = HILL;
                         let tex = fbm(xc * 0.3, y * 0.3, 3, 0.0);
                         (cr, cg, cb) = (0.1 + 0.05 * tex, 0.07 + 0.03 * tex, 0.17 + 0.05 * tex);
                         // mist settling along the water
-                        let mist = smooth(hb + 1.0, SHORE, y) * 0.5;
+                        let mist = smooth(hb + 1.0, shore, y) * 0.5;
                         (cr, cg, cb) =
                             (mix(cr, 0.7, mist), mix(cg, 0.44, mist), mix(cb, 0.58, mist));
                     }
-                    let tw = town(xc);
-                    if y >= tw && xc > 70.0 {
+                    let tw = town(xc) + l.sky;
+                    if y >= tw && xc > l.town_from {
                         m = TOWN;
                         (cr, cg, cb) = (0.08, 0.06, 0.14);
                         // the roof ridges catch the sky
@@ -499,17 +397,18 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                         }
                         // a few lit shoji under the eaves
                         let wi = (xc / 4.0).floor();
-                        if y > SHORE - 1.6
-                            && y < SHORE - 0.5
+                        if y > shore - 1.6
+                            && y < shore - 0.5
                             && (xc % 4.0) < 1.2
                             && hash(wi, 7.0) > 0.74
                         {
                             (cr, cg, cb, fl) = (1.0, 0.66, 0.32, 0.3);
                         }
                     }
-                    let (p, dx) = match (pagoda(xc - Self::L.px, y), Self::L.hall) {
-                        (0, Some(hx)) => (hall(xc - hx, y), xc - hx),
-                        (p, _) => (p, xc - Self::L.px),
+                    let yu = y - l.sky;
+                    let (p, dx) = match (pagoda(xc - l.px, yu), l.hall) {
+                        (0, Some(hx)) => (hall(xc - hx, yu), xc - hx),
+                        (p, _) => (p, xc - l.px),
                     };
                     if p != 0 {
                         m = PAGODA;
@@ -532,18 +431,18 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                             _ => (cr, cg, cb, fl) = (0.7, 0.42, 0.24, 0.2),
                         }
                     }
-                } else if xc < bank_x(y) {
+                } else if xc < l.bank_x(y) {
                     // the near bank where the lantern stands
                     m = BANK;
                     let tex = fbm(xc * 0.3, y * 0.5, 3, 0.0);
                     (cr, cg, cb) = (0.08 + 0.05 * tex, 0.08 + 0.05 * tex, 0.1 + 0.05 * tex);
                     let (xf, rf) = (x as f64, r as f64);
                     // fallen petals on the moss
-                    if hash(xf * 7.0, rf * 3.0) > 0.975 - 0.015 * smooth(SHORE + 4.0, H as f64, y) {
+                    if hash(xf * 7.0, rf * 3.0) > 0.975 - 0.015 * smooth(shore + 4.0, hf, y) {
                         (cr, cg, cb, fl) = (0.42, 0.22, 0.3, 0.06);
                     }
                     // the stone lip of the pond
-                    if xc > bank_x(y) - 2.6 {
+                    if xc > l.bank_x(y) - 2.6 {
                         let s = 0.85 + 0.3 * hash(xf * 3.0, rf * 5.0);
                         (cr, cg, cb, fl) = (0.45 * s, 0.38 * s, 0.46 * s, 0.1);
                     }
@@ -562,18 +461,18 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let (rr, rg, rb) = (rv.clone(), gv.clone(), bv.clone());
 
         // the stone lantern
-        for r in 45..H {
-            for x in (LX as usize - 14)..=(LX as usize + 14) {
+        for r in 45 + l.fg as usize..h {
+            for x in (l.lx as usize - 14)..=(l.lx as usize + 14) {
                 let y = r as f64 + 0.5;
                 let xc = x as f64 + 0.5;
-                let l = lantern_at(xc, y);
-                if l == 0 {
+                let lt = l.lantern_at(xc, y);
+                if lt == 0 {
                     continue;
                 }
-                let k = r * Self::W + x;
-                let py = LB - (LB - y) / LS;
-                let pdx = (xc - LX) / LS;
-                if l == 2 {
+                let k = r * w + x;
+                let py = LB - (LB - (y - l.fg)) / LS;
+                let pdx = (xc - l.lx) / LS;
+                if lt == 2 {
                     mat[k] = FLAME;
                     // hottest at the heart of the firebox
                     let c = (-(pdx * pdx * 0.5 + (py - 82.8) * (py - 82.8) * 0.35)).exp();
@@ -585,7 +484,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     mat[k] = STONE;
                     // dark granite, its top surfaces catching the last of the sky
                     let g = 0.8 + 0.4 * hash(x as f64 * 5.0, r as f64 * 3.0);
-                    let edge = if lantern_at(xc, y - 1.0) == 0 {
+                    let edge = if l.lantern_at(xc, y - 1.0) == 0 {
                         1.0
                     } else {
                         0.0
@@ -594,7 +493,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     gv[k] = ((0.04 + 0.14 * edge) * g) as f32;
                     bv[k] = ((0.08 + 0.2 * edge) * g) as f32;
                     // the roof's underside and the platform take the flame's light
-                    let under = (l == 3 && py > 78.6) || (85.5..86.4).contains(&py);
+                    let under = (lt == 3 && py > 78.6) || (85.5..86.4).contains(&py);
                     if under {
                         let f = (-(py - 82.8).abs() / 3.0).exp() * 0.75;
                         rv[k] = (f64::from(rv[k]) + f) as f32;
@@ -603,14 +502,15 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     }
                     floor[k] = 0.02;
                 }
-                warmth[k] = if l == 2 { 0.0 } else { 0.75 };
+                warmth[k] = if lt == 2 { 0.0 } else { 0.75 };
             }
         }
 
         // the cherry tree
-        for r in 0..H {
-            for x in 0..130 {
-                let k = r * Self::W + x;
+        let reach = (l.fg_x(130.0).ceil() as usize).min(w);
+        for r in 0..h {
+            for x in 0..reach {
+                let k = r * w + x;
                 let y = r as f64 + 0.5;
                 let xc = x as f64 + 0.5;
                 // blossom density: soft clouds, broken up by noise into clumps
@@ -659,7 +559,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     );
                     b = mix(b, 0.12, smooth(0.3, 1.1, up));
                     // the lower crown sits in its own shade
-                    b *= 1.0 - 0.3 * smooth(28.0, 48.0, y);
+                    b *= 1.0 - 0.3 * smooth(28.0, 48.0, y - l.fg);
                     rv[k] = (0.34 + 0.64 * b) as f32;
                     gv[k] = (0.08 + 0.62 * b * b) as f32;
                     bv[k] = (0.2 + 0.5 * b) as f32;
@@ -670,12 +570,12 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         }
 
         // the lantern's light: how far each cell sits from the lit opening
-        let mut glow = vec![0f32; Self::N];
-        for r in 0..H {
-            for x in 0..Self::W {
-                let k = r * Self::W + x;
-                let dx = x as f64 + 0.5 - LAMP[0];
-                let dy = (r as f64 + 0.5 - LAMP[1]) * 1.1;
+        let mut glow = vec![0f32; n];
+        for r in 0..h {
+            for x in 0..w {
+                let k = r * w + x;
+                let dx = x as f64 + 0.5 - l.lamp[0];
+                let dy = (r as f64 + 0.5 - l.lamp[1]) * 1.1;
                 let d = (dx * dx + dy * dy).sqrt();
                 glow[k] = ((-d / 4.0).exp() * 0.6
                     + (-d / 11.0).exp() * 0.32
@@ -687,8 +587,8 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 }
                 // and a pool of light on the moss round its foot
                 if m == BANK {
-                    let px = (x as f64 + 0.5 - LX) / 20.0;
-                    let py = (r as f64 + 0.5 - LB + 3.0) / 8.0;
+                    let px = (x as f64 + 0.5 - l.lx) / 20.0;
+                    let py = (r as f64 + 0.5 - (LB + l.fg) + 3.0) / 8.0;
                     glow[k] = (f64::from(glow[k]) + (-(px * px + py * py)).exp() * 0.6) as f32;
                 }
             }
@@ -696,11 +596,12 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
 
         // a few faint stars in the indigo
         let mut stars = Vec::new();
-        for i in 0..400 {
-            let i = f64::from(i);
-            let x = (hash(i, 91.0) * Self::W as f64).floor() as usize;
-            let r = (hash(i, 92.0) * 40.0).floor() as usize;
-            let k = r * Self::W + x;
+        let high = shore - 40.0;
+        for i in 0..400 * w * high as usize / 8000 {
+            let i = i as f64;
+            let x = (hash(i, 91.0) * w as f64).floor() as usize;
+            let r = (hash(i, 92.0) * high).floor() as usize;
+            let k = r * w + x;
             if mat[k] == SKY && hash(i, 93.0) > 0.72 {
                 stars.push((k, hash(i, 94.0) * 6.28, 0.6 + hash(i, 95.0) * 1.6));
             }
@@ -712,6 +613,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let mut clit = vec![0f32; CW * (C1 - C0)];
         for r in C0..C1 {
             for x in 0..CW {
+                // on upstream's rows: the band moves down with the shore
                 let (xf, y) = (x as f64, r as f64 + 0.5);
                 let d = cdens(xf, y);
                 ccov[(r - C0) * CW + x] = smooth(0.56, 0.7, d) as f32;
@@ -720,12 +622,12 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         }
 
         // petals: most of them near the tree, thinning out downwind
-        let petals = (0..50)
+        let petals = (0..50 * n / 20_000)
             .map(|i| {
-                let i = f64::from(i);
+                let i = i as f64;
                 Petal {
                     x: hash(i, 101.0).powf(2.2) * 140.0,
-                    y: hash(i, 102.0) * (H as f64 + 20.0),
+                    y: hash(i, 102.0) * (hf + 20.0),
                     vx: 3.0 + hash(i, 103.0) * 4.0,
                     vy: 1.6 + hash(i, 104.0) * 2.2,
                     sw: 1.0 + hash(i, 105.0) * 2.0,
@@ -735,20 +637,20 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 }
             })
             .collect();
-        let floaters = (0..26)
+        let floaters = (0..26 * w / 200)
             .map(|i| {
-                let i = f64::from(i);
+                let i = i as f64;
                 [
-                    hash(i, 111.0) * Self::W as f64,
-                    SHORE + 3.0 + hash(i, 112.0) * 20.0,
+                    hash(i, 111.0) * w as f64,
+                    shore + 3.0 + hash(i, 112.0) * (hf - shore),
                     0.3 + hash(i, 113.0) * 0.5,
                 ]
             })
             .collect();
 
-        let dith = (0..Self::N)
+        let dith = (0..n)
             .map(|k| {
-                (BAYER[((k / Self::W) & 3) * 4 + ((k % Self::W) & 3)] * 0.4
+                (BAYER[((k / w) & 3) * 4 + ((k % w) & 3)] * 0.4
                     + (hash(k as f64, 77.0) - 0.5) * 0.5) as f32
             })
             .collect();
@@ -776,6 +678,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let floater_ink = ink(&mut dots, 2, [0.95, 0.72, 0.8]);
 
         Self {
+            l,
             dots,
             mat,
             r: rv,
@@ -794,10 +697,10 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             floaters,
             dith,
             tone,
-            pr: vec![0f32; Self::N],
-            pg: vec![0f32; Self::N],
-            pb: vec![0f32; Self::N],
-            pmask: vec![false; Self::N],
+            pr: vec![0f32; n],
+            pg: vec![0f32; n],
+            pb: vec![0f32; n],
+            pmask: vec![false; n],
             moon_ink,
             star_dim,
             star_bright,
@@ -806,7 +709,10 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        let (wf, hf, cw) = (Self::W as f64, H as f64, CW as f64);
+        let l = &self.l;
+        let (w, wf, hf, cw) = (l.w, l.w as f64, l.h as f64, CW as f64);
+        let (shore, band0, band1) = (l.shore, C0 + l.sky as usize, C1 + l.sky as usize);
+        let (west, west_cloud) = (l.west[0], l.west_cloud);
         // the flame breathes, with now and then a gutter
         let flick = 0.82
             + 0.1 * (t * 7.3).sin() * (t * 3.1 + 1.0).sin()
@@ -827,7 +733,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             if x < 0.0 || x >= wf || r < 0.0 || r >= hf {
                 continue;
             }
-            let k = r as usize * Self::W + x as usize;
+            let k = r as usize * w + x as usize;
             // tumbling, catching light; dim against the dark bank and water
             let dim = if self.mat[k] == POND || self.mat[k] == BANK {
                 0.6
@@ -842,10 +748,10 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             self.pmask[k] = true;
         }
 
-        for r in 0..H {
+        for r in 0..l.h {
             let y = r as f64 + 0.5;
-            for x in 0..Self::W {
-                let k = r * Self::W + x;
+            for x in 0..w {
+                let k = r * w + x;
                 let m = self.mat[k];
                 let xf = x as f64;
                 let (mut cr, mut cg, mut cb);
@@ -853,31 +759,31 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 let mut fade = 1.0;
                 if m == POND {
                     // the far side, upside down, shaken by small ripples
-                    let depth = (y - SHORE) / (hf - SHORE);
+                    let depth = (y - shore) / (hf - shore);
                     let wob = (y * 1.7 - t * 2.0 + (xf * 0.13 + t * 0.6).sin() * 1.4).sin()
                         * (0.05 + 0.8 * depth);
                     let sx = js_round(xf + wob).clamp(0.0, wf - 1.0);
-                    let w = noise(xf * 0.14 + t * 0.2, y * 1.1 - t * 0.8, 0.0);
+                    let wv = noise(xf * 0.14 + t * 0.2, y * 1.1 - t * 0.8, 0.0);
                     // ripples also tip the image up and down, so level lines break
                     // (drawn a little stretched, so the pagoda's lower roofs land in the pond)
                     let sr =
-                        js_round(SHORE - 1.0 - (r as f64 - SHORE) * 1.35 + (w - 0.5) * 3.0 * depth)
-                            .clamp(0.0, SHORE - 1.0);
-                    let j = sr as usize * Self::W + sx as usize;
+                        js_round(shore - 1.0 - (r as f64 - shore) * 1.35 + (wv - 0.5) * 3.0 * depth)
+                            .clamp(0.0, shore - 1.0);
+                    let j = sr as usize * w + sx as usize;
                     // crisp and bright right under the bank, darker further out
-                    let lit = mix(0.95, 0.6, smooth(SHORE + 1.0, SHORE + 6.0, y)) * (0.8 + 0.4 * w);
+                    let lit = mix(0.95, 0.6, smooth(shore + 1.0, shore + 6.0, y)) * (0.8 + 0.4 * wv);
                     cr = f64::from(self.rr[j]) * lit * 0.9;
                     cg = f64::from(self.rg[j]) * lit * 0.92;
                     cb = f64::from(self.rb[j]) * lit + 0.03;
-                    let glint = smooth(0.74, 0.95, w) * 0.06;
+                    let glint = smooth(0.74, 0.95, wv) * 0.06;
                     cr += glint;
                     cg += glint * 0.8;
                     cb += glint;
                     // the lantern's light laid on the water as a broken warm streak
-                    let sl = (-(xf + 0.5 - LX - 9.0 - (y - SHORE) * 0.25).abs()
+                    let sl = (-(xf + 0.5 - l.lx - 9.0 - (y - shore) * 0.25).abs()
                         / (3.5 + depth * 3.0))
                         .exp()
-                        * smooth(0.45, 0.8, w)
+                        * smooth(0.45, 0.8, wv)
                         * 1.0
                         * flick;
                     cr += sl;
@@ -888,13 +794,13 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     cr = f64::from(self.r[k]);
                     cg = f64::from(self.g[k]);
                     cb = f64::from(self.b[k]);
-                    if m == SKY && (C0..C1).contains(&r) {
+                    if m == SKY && (band0..band1).contains(&r) {
                         let sx = xf + cdrift;
                         let ixf = sx.floor();
                         let fx = sx - ixf;
                         let ix = ixf as usize;
-                        let i0 = (r - C0) * CW + ix % CW;
-                        let i1 = (r - C0) * CW + (ix + 1) % CW;
+                        let i0 = (r - band0) * CW + ix % CW;
+                        let i1 = (r - band0) * CW + (ix + 1) % CW;
                         let (c0, c1) = (f64::from(self.ccov[i0]), f64::from(self.ccov[i1]));
                         let c = c0 + (c1 - c0) * fx;
                         if c > 0.01 {
@@ -902,8 +808,8 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                             let l = l0 + (l1 - l0) * fx;
                             // brighter undersides toward the west and the horizon
                             let sun = l
-                                * (0.45 + 0.55 * smooth(C0 as f64, C1 as f64, y))
-                                * (0.6 + 0.4 * (-(xf - Self::L.west[0]).abs() / Self::L.west_cloud).exp());
+                                * (0.45 + 0.55 * smooth(band0 as f64, band1 as f64, y))
+                                * (0.6 + 0.4 * (-(xf - west).abs() / west_cloud).exp());
                             let a = c * 0.85;
                             cr = mix(cr, mix(0.2, 1.0, sun), a);
                             cg = mix(cg, mix(0.12, 0.58, sun), a);
@@ -944,14 +850,15 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             }
         }
         // the moon: a thin crescent, lit on the side toward the set sun
-        for r in Self::L.moon[1] - 6..=Self::L.moon[1] + 6 {
-            for x in Self::L.moon[0] - 6..=Self::L.moon[0] + 6 {
-                let dx = f64::from(x) + 0.5 - f64::from(Self::L.moon[0]);
-                let dy = f64::from(r) + 0.5 - f64::from(Self::L.moon[1]);
+        let [mx, my] = l.moon;
+        for r in my - 6..=my + 6 {
+            for x in mx - 6..=mx + 6 {
+                let dx = f64::from(x) + 0.5 - f64::from(mx);
+                let dy = f64::from(r) + 0.5 - f64::from(my);
                 let inside = dx * dx + dy * dy < 5.2 * 5.2;
                 let (ex, ey) = (dx - 2.2, dy + 1.6); // the shadowed disc, offset up and right
                 if inside && ex * ex + ey * ey > 4.9 * 4.9 {
-                    out[r as usize * Self::W + x as usize] = self.moon_ink;
+                    out[r as usize * w + x as usize] = self.moon_ink;
                 }
             }
         }
@@ -973,13 +880,14 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             if r >= hf {
                 continue;
             }
-            // x can round up to Self::W, which upstream's flat index wraps onto
-            // the next row's first cell
-            let k = r as usize * Self::W + x as usize;
-            if k >= Self::N || self.mat[k] != POND {
+            // x can round up to w, which upstream's flat index wraps onto the
+            // next row's first cell
+            let k = r as usize * w + x as usize;
+            if k >= self.mat.len() || self.mat[k] != POND {
                 continue;
             }
             out[k] = self.floater_ink;
         }
     }
 }
+

@@ -1,6 +1,6 @@
 //! The scenes' slow camera, Ken Burns style: every shot a slow push in or pull
 //! out with a gentle pan, eased at both ends, and every few shots a pull back
-//! to the whole picture or the plain cover view. `ASCII_REST_TOUR_CUTS`
+//! to the whole picture. `ASCII_REST_TOUR_CUTS`
 //! instead cuts between framings and drifts slowly within each.
 //!
 //! Zoom is cell size, never resampling. Every view draws one picture cell per
@@ -19,7 +19,7 @@
 
 use super::halftone::COVER;
 use super::title::Title;
-use super::{fit_w, Camera, Fit, Piece};
+use super::{Camera, Piece};
 use crate::font;
 use crate::grid::{Cell, Grid};
 use crate::next_rand;
@@ -28,7 +28,7 @@ use crate::surface::Panel;
 /// The dither's period: blocks this size average it away.
 const BLOCK: usize = 4;
 
-/// The least a close-up magnifies the cover view's cell.
+/// The least a close-up magnifies the whole picture's cell.
 const MIN_ZOOM: f64 = 1.25;
 
 /// A shot's length as a share of `ASCII_REST_TOUR_SHOT_SECS`, drawn uniformly.
@@ -84,11 +84,10 @@ impl Knobs {
     }
 }
 
-/// A [`Fit::Cover`] piece's camera, and the mirror's view of the same
-/// picture.
+/// A scene's camera, and the mirror's view of the same picture.
 pub(super) struct Touring {
     tour: Tour,
-    /// The cover view's geometry showing what the panel shows: a zoom step is
+    /// The untoured geometry showing what the panel shows: a zoom step is
     /// a new geometry, and re-describing the mirror for each would reconnect
     /// every viewer a dozen times a shot. So the cells follow the tour and the
     /// grid never does.
@@ -101,46 +100,42 @@ impl Touring {
     pub(super) fn new<P: Piece>(
         panel: &Panel,
         aspect: usize,
+        pic: (usize, usize),
         base: View,
         fps: u32,
         k: Knobs,
     ) -> Self {
         Self {
-            tour: Tour::new::<P>(panel, aspect, base, fps, k),
-            mirror: Camera::new::<P>(panel, aspect, base, (base.w, base.w), false),
+            tour: Tour::new::<P>(panel, aspect, pic, base, fps, k),
+            mirror: Camera::new::<P>(panel, aspect, pic, base, (base.w, base.w), false),
             followed: None,
         }
     }
 
     /// The narrowest and widest cell any view uses, for sizing buffers once.
     pub(super) fn widths(&self) -> (usize, usize) {
-        (self.tour.min_w, self.tour.max_w)
+        (self.tour.base.w as usize, self.tour.max_w)
     }
 
     /// Advance the tour a frame and, on a frame the piece drew, point the
     /// panel's camera where it says. Every move repaints the whole panel, and
     /// between the piece's frames nothing else changes: moving there too
     /// would double the cost of motion the eye reads at the picture's rate.
-    pub(super) fn steer<P: Piece>(&mut self, pic: &[Cell], cam: &mut Camera, drew: bool) {
+    pub(super) fn steer(&mut self, pic: &[Cell], cam: &mut Camera, drew: bool) {
         let v = self.tour.step(pic);
         if drew && v != cam.view {
-            cam.aim::<P>(&self.tour.panel, self.tour.aspect, v);
+            cam.aim(&self.tour.panel, self.tour.aspect, v);
         }
     }
 
-    /// What `cam` shows of `pic`, on the cover view's grid, under the title if
+    /// What `cam` shows of `pic`, on the untoured grid, under the title if
     /// there is one. Only called while someone is watching.
-    pub(super) fn mirror<P: Piece>(
-        &mut self,
-        pic: &[Cell],
-        cam: &Camera,
-        title: Option<&Title>,
-    ) -> &Grid {
+    pub(super) fn mirror(&mut self, pic: &[Cell], cam: &Camera, title: Option<&Title>) -> &Grid {
         if self.followed != Some(cam.view) {
             self.mirror.follow(cam);
             self.followed = Some(cam.view);
         }
-        self.mirror.draw::<P>(pic);
+        self.mirror.draw(pic);
         if let Some(t) = title {
             t.stamp(&mut self.mirror.grid);
         }
@@ -152,7 +147,6 @@ impl Touring {
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Kind {
     Base,
-    Full,
     Close,
 }
 
@@ -169,13 +163,10 @@ struct Shot {
 pub struct Tour {
     panel: Panel,
     aspect: usize,
-    /// The picture, in cells, and its cell height in cell widths.
+    /// The picture, in cells.
     cols: usize,
     rows: usize,
-    cell: usize,
     base: Shot,
-    full: Shot,
-    min_w: usize,
     max_w: usize,
     max_zoom: f64,
     from: Shot,
@@ -202,13 +193,18 @@ pub struct Tour {
 
 impl Tour {
     /// `base` is the view `Play` draws without a tour; the tour starts there.
-    pub fn new<P: Piece>(panel: &Panel, aspect: usize, base: View, fps: u32, k: Knobs) -> Self {
-        let (cols, rows, cell) = (P::COLS, P::ROWS, P::CELL);
-        let full_w = fit_w(panel, aspect, cols, rows, cell, Fit::Contain);
+    pub fn new<P: Piece>(
+        panel: &Panel,
+        aspect: usize,
+        (cols, rows): (usize, usize),
+        base: View,
+        fps: u32,
+        k: Knobs,
+    ) -> Self {
         let max_zoom = f64::from(k.max_zoom_pct) / 100.0;
         let max_w = base.w.max((base.w as f64 * max_zoom).round() as usize);
         let (bcols, brows) = (cols.div_ceil(BLOCK), rows.div_ceil(BLOCK));
-        let s = Grid::shape(panel, base.w, base.w * cell, aspect);
+        let s = Grid::shape(panel, base.w, base.w, aspect);
         let base = Shot {
             w: base.w as f64,
             cx: base.x0 as f64 + s.cols as f64 / 2.0,
@@ -220,15 +216,7 @@ impl Tour {
             aspect,
             cols,
             rows,
-            cell,
             base,
-            full: Shot {
-                w: full_w as f64,
-                cx: cols as f64 / 2.0,
-                cy: rows as f64 / 2.0,
-                kind: Kind::Full,
-            },
-            min_w: full_w.min(base.w as usize),
             max_w,
             max_zoom,
             from: base,
@@ -248,12 +236,6 @@ impl Tour {
             mean: vec![[0.0; 3]; bcols * brows],
             weight: vec![0.0; bcols * brows],
         }
-    }
-
-    /// The whole picture, padded with ground.
-    #[cfg(test)]
-    pub fn full(&self) -> View {
-        self.view(self.full)
     }
 
     /// Advance one frame and say what to draw. `pic` is the frame on screen,
@@ -300,13 +282,15 @@ impl Tour {
     }
 
     fn pick(&mut self) -> Shot {
-        if self.wide_in == 0 || self.max_w <= self.base.w as usize {
+        if self.max_w <= self.base.w as usize {
+            return self.base;
+        }
+        // Every few close-ups a pull back to the whole picture, which is
+        // where they set off from.
+        if self.to.kind == Kind::Base {
             self.wide_in = 2 + next_rand(&mut self.rng) % 3;
-            return match self.to.kind {
-                Kind::Base => self.full,
-                Kind::Close if next_rand(&mut self.rng) & 1 == 0 => self.full,
-                Kind::Full | Kind::Close => self.base,
-            };
+        } else if self.wide_in == 0 {
+            return self.base;
         }
         self.wide_in -= 1;
         // A close-up next to the last one is a twitch, not a shot.
@@ -358,9 +342,6 @@ impl Tour {
     /// `s` moved a little: a slightly closer framing a short way off, for a
     /// cut to drift through.
     fn drift(&mut self, s: Shot) -> Shot {
-        if s.kind == Kind::Full {
-            return s;
-        }
         let w = (s.w * (1.0 + 0.08 * self.unit())).min(self.max_w as f64);
         let (gc, gr) = self.extent(w);
         let cx = s.cx + (self.unit() - 0.5) * gc * 0.15;
@@ -375,7 +356,7 @@ impl Tour {
         let (a, b) = (self.view(self.from), self.view(self.to));
         let steps = a.w.abs_diff(b.w) as f64;
         let w = a.w.min(b.w) as f64;
-        let h = w * self.cell as f64 * self.aspect as f64 / 100.0;
+        let h = w * self.aspect as f64 / 100.0;
         let pan = ((self.to.cx - self.from.cx) * w)
             .abs()
             .max(((self.to.cy - self.from.cy) * h).abs());
@@ -401,7 +382,7 @@ impl Tour {
 
     /// The panel's size in picture cells at cell width `w`.
     fn extent(&self, w: f64) -> (f64, f64) {
-        let h = w * self.cell as f64 * self.aspect as f64 / 100.0;
+        let h = w * self.aspect as f64 / 100.0;
         (self.panel.w as f64 / w, self.panel.h as f64 / h)
     }
 
@@ -458,8 +439,8 @@ impl Tour {
     /// picture placed to the pixel so `s`'s centre is the panel's — or as
     /// near as the picture's edges allow, or centred when it is the smaller.
     fn view(&self, s: Shot) -> View {
-        let w = (s.w.round() as usize).clamp(self.min_w, self.max_w);
-        let g = Grid::shape(&self.panel, w, w * self.cell, self.aspect);
+        let w = (s.w.round() as usize).clamp(self.base.w as usize, self.max_w);
+        let g = Grid::shape(&self.panel, w, w, self.aspect);
         // Where picture cell 0 lands, then the grid cell under the panel's
         // corner and how far into it the corner is.
         let place = |len: usize, cell: usize, c: f64, span: usize| {
@@ -545,33 +526,30 @@ fn draw(u: f64, n: usize, w: impl Fn(usize) -> f32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ascii_rest::tests::SHAPES;
     use crate::ascii_rest::Play;
     use crate::grid::with_test_aspect;
     use crate::saver::Saver;
     use crate::surface::Surface;
     use crate::testalloc::allocs_during;
 
-    /// A cover scene of any size whose every cell moves.
-    struct Probe<const C: usize, const R: usize>;
+    /// A scene of any size whose every cell moves.
+    struct Probe(usize);
 
-    impl<const C: usize, const R: usize> Piece for Probe<C, R> {
+    impl Piece for Probe {
         const NAME: &'static str = "probe";
-        const COLS: usize = C;
-        const ROWS: usize = R;
         const FPS: u32 = 15;
-        const CELL: usize = 1;
         const PALETTE: &'static [u32] = &[0x00_0000, 0xFF_FFFF, 0xFF_8000];
         const GROUND: u32 = 0x10_2030;
-        const FIT: Fit = Fit::Cover { anchor: 0.3 };
 
-        fn new() -> Self {
-            Self
+        fn new(cols: usize, _: usize) -> Self {
+            Self(cols)
         }
 
         fn frame(&mut self, t: f64, out: &mut [Cell]) {
             let k = (t * 15.0) as usize;
             for (i, c) in out.iter_mut().enumerate() {
-                let (x, y) = (i % C, i / C);
+                let (x, y) = (i % self.0, i / self.0);
                 let dot = crate::font::HALFTONE[(x / 3 + y / 2 + k) % 4];
                 *c = Cell::new(dot, ((x * y + k) % 3) as u16);
             }
@@ -588,9 +566,12 @@ mod tests {
         }
     }
 
-    /// The view `Play` starts a `P` on.
-    fn base_of<P: Piece>(panel: &Panel, aspect: usize) -> View {
-        with_test_aspect(aspect, || Play::<P>::with_tour(panel, 30, None).cam.view)
+    /// The picture `Play` gives a scene on `panel`, and the view it starts on.
+    fn base_of(panel: &Panel, aspect: usize) -> ((usize, usize), View) {
+        with_test_aspect(aspect, || {
+            let cam = Play::<Probe>::with_tour(panel, 30, None).cam;
+            ((cam.cols, cam.rows), cam.view)
+        })
     }
 
     /// Where picture cell 0 lands on the panel, in pixels, along each axis.
@@ -603,22 +584,19 @@ mod tests {
 
     /// Every view on any panel and any picture: inside its width limits, the
     /// picture covering the panel where it is the larger and centred where it
-    /// is the smaller. And over a long run the whole picture and close-ups
-    /// both come up, in either style.
-    fn every_view_frames<P: Piece>(cuts: bool) {
-        for (pw, ph, aspect) in [(1920, 1080, 180), (1920, 1080, 100), (1280, 400, 100)] {
-            let (cols, rows) = (P::COLS, P::ROWS);
+    /// is the smaller. And over a long run pull backs to the whole picture
+    /// and close-ups both come up, in either style.
+    fn every_view_frames(cuts: bool) {
+        for (pw, ph, aspect) in SHAPES {
             let panel = Panel::new(pw, ph, pw);
-            let base = base_of::<P>(&panel, aspect);
+            let ((cols, rows), base) = base_of(&panel, aspect);
             let pic: Vec<Cell> = (0..cols * rows)
                 .map(|i| Cell::new(font::HALFTONE[i * 7 % 4], (i % 3) as u16))
                 .collect();
-            let mut t = Tour::new::<P>(&panel, aspect, base, 30, Knobs { cuts, ..knobs(7) });
-            let (lo, hi) = (t.min_w, t.max_w);
-            let full = t.full();
-            let s = Grid::shape(&panel, full.w, full.w, aspect);
-            assert!(s.cols >= cols && s.rows >= rows, "full view crops");
-            let (mut saw_full, mut saw_close) = (false, false);
+            let k = Knobs { cuts, ..knobs(7) };
+            let mut t = Tour::new::<Probe>(&panel, aspect, (cols, rows), base, 30, k);
+            let (lo, hi) = (base.w, t.max_w);
+            let (mut saw_back, mut saw_close) = (false, false);
             for _ in 0..30 * 300 {
                 let v = t.step(&pic);
                 let case = format!("{pw}x{ph}@{aspect} {cols}x{rows} cuts {cuts} {v:?}");
@@ -634,39 +612,38 @@ mod tests {
                         assert_eq!(o, (span - pic) / 2, "{case}: not centred");
                     }
                 }
-                saw_full |= v == full;
+                saw_back |= saw_close && v.w == base.w;
                 saw_close |= v.w > base.w;
             }
-            assert!(saw_full && saw_close, "{pw}x{ph} {cols}x{rows} cuts {cuts}");
+            assert!(saw_back && saw_close, "{pw}x{ph} {cols}x{rows} cuts {cuts}");
         }
     }
 
     #[test]
     fn every_view_frames_the_picture() {
         for cuts in [false, true] {
-            every_view_frames::<Probe<200, 100>>(cuts);
-            every_view_frames::<Probe<320, 100>>(cuts);
-            every_view_frames::<Probe<37, 23>>(cuts);
+            every_view_frames(cuts);
         }
     }
 
     /// Ken Burns at the default shot length on pine: never still for longer
-    /// than 3.5 s — a settle and the ease's slow ends, at the whole picture
-    /// where only zoom can move — zoom one pixel of cell width
+    /// than 4 s — a settle and the ease's slow end over the last half pixel
+    /// of a pull back, at the whole picture where nothing else can move —
+    /// zoom one pixel of cell width
     /// at a time, and between zoom steps the picture glides a few pixels a
     /// frame at most, rather than jumping a cell.
     #[test]
     fn the_camera_glides_and_never_rests_for_long() {
         let panel = Panel::new(1920, 1080, 1920);
-        let base = base_of::<Probe<200, 100>>(&panel, 180);
-        let pic: Vec<Cell> = (0..200 * 100)
+        let (pic_size, base) = base_of(&panel, 180);
+        let pic: Vec<Cell> = (0..pic_size.0 * pic_size.1)
             .map(|i| Cell::new(font::HALFTONE[(i / 7) % 4], (i % 3) as u16))
             .collect();
         let k = Knobs {
             shot_secs: 20,
             ..knobs(5)
         };
-        let mut t = Tour::new::<Probe<200, 100>>(&panel, 180, base, 30, k);
+        let mut t = Tour::new::<Probe>(&panel, 180, pic_size, base, 30, k);
         let mut last = t.step(&pic);
         let (mut still, mut longest, mut glides, mut zooms) = (0, 0, 0, 0);
         for n in 0..30 * 600 {
@@ -689,7 +666,7 @@ mod tests {
             }
             last = v;
         }
-        assert!(longest * 2 <= 30 * 7, "still for {longest} frames");
+        assert!(longest <= 30 * 4, "still for {longest} frames");
         assert!(
             glides > 30 * 60 && zooms > 20,
             "{glides} glides, {zooms} zooms"
@@ -716,7 +693,7 @@ mod tests {
             dx: 0,
             dy: 0,
         };
-        let mut t = Tour::new::<Probe<200, 100>>(&panel, 180, base, 30, knobs(3));
+        let mut t = Tour::new::<Probe>(&panel, 180, (cols, rows), base, 30, knobs(3));
         t.measure(&pic);
         let (mut hits, mut n) = (0, 0);
         for _ in 0..400 {
@@ -738,16 +715,18 @@ mod tests {
     /// render of the view the tour chose, through every zoom step, pixel pan
     /// and pull back. A geometry change or shift that left stale cells or
     /// margins, or under-reported them, fails here.
-    fn panel_is_the_tours_view<P: Piece>(pw: usize, ph: usize, aspect: usize) {
+    fn panel_is_the_tours_view(pw: usize, ph: usize, aspect: usize) {
+        type P = Probe;
         with_test_aspect(aspect, || {
             let panel = Panel::new(pw, ph, pw);
             let mut play = Play::<P>::with_tour(&panel, 30, Some(knobs(11)));
+            let pic = (play.cam.cols, play.cam.rows);
             let mut buf = vec![0xDEAD_BEEFu32; panel.buf_len()];
             let mut hw = buf.clone();
             let mut fresh = vec![0u32; panel.buf_len()];
             let home = play.cam.view;
             let (mut moves, mut last) = (0, play.cam.view);
-            let (mut wide, mut close, mut shifted) = (false, false, false);
+            let (mut close, mut shifted) = (false, false);
             for n in 0..3000 {
                 let mut s = Surface::new(&mut buf, &panel);
                 play.render(&mut s);
@@ -764,9 +743,9 @@ mod tests {
                 if v != last || n % 25 == 0 {
                     moves += usize::from(v != last);
                     last = v;
-                    let mut cam = Camera::new::<P>(&panel, aspect, v, (v.w, v.w), true);
-                    cam.aim::<P>(&panel, aspect, v);
-                    cam.draw::<P>(&play.pic);
+                    let mut cam = Camera::new::<P>(&panel, aspect, pic, v, (v.w, v.w), true);
+                    cam.aim(&panel, aspect, v);
+                    cam.draw(&play.pic);
                     cam.grid
                         .flush(&mut Surface::new(&mut fresh, &panel), P::PALETTE);
                     assert!(fresh == buf, "{case}: panel is not {v:?}");
@@ -777,13 +756,12 @@ mod tests {
                         "{case}: grid() is not what was drawn"
                     );
                 }
-                wide |= v.w < home.w;
                 close |= v.w > home.w;
                 shifted |= v.dx > 0 && v.dy > 0;
             }
             assert!(
-                moves > 20 && wide && close && shifted,
-                "{} {pw}x{ph}: {moves} moves, wide {wide} close {close} shifted {shifted}",
+                moves > 20 && close && shifted,
+                "{} {pw}x{ph}: {moves} moves, close {close} shifted {shifted}",
                 P::NAME
             );
         });
@@ -791,9 +769,9 @@ mod tests {
 
     #[test]
     fn the_panel_is_always_the_tours_view() {
-        panel_is_the_tours_view::<Probe<200, 100>>(1920, 1080, 180);
-        panel_is_the_tours_view::<Probe<320, 100>>(1920, 1080, 180);
-        panel_is_the_tours_view::<Probe<37, 23>>(1280, 400, 100);
+        panel_is_the_tours_view(1920, 1080, 180);
+        panel_is_the_tours_view(1080, 1920, 100);
+        panel_is_the_tours_view(1024, 768, 100);
     }
 
     /// Shots, measuring, reshapes, shifts and the mirror all draw on buffers
@@ -802,9 +780,9 @@ mod tests {
     fn touring_never_allocates() {
         with_test_aspect(180, || {
             let panel = Panel::new(1920, 1080, 1920);
-            let mut play = Play::<Probe<200, 100>>::with_tour(&panel, 30, Some(knobs(11)));
+            let mut play = Play::<Probe>::with_tour(&panel, 30, Some(knobs(11)));
             let mut buf = vec![0u32; panel.buf_len()];
-            let mut frame = |play: &mut Play<Probe<200, 100>>| {
+            let mut frame = |play: &mut Play<Probe>| {
                 let mut s = Surface::new(&mut buf, &panel);
                 play.render(&mut s);
                 play.mirror();
@@ -829,8 +807,8 @@ mod tests {
     fn the_mirrors_geometry_is_the_untoured_savers() {
         with_test_aspect(180, || {
             let panel = Panel::new(1920, 1080, 1920);
-            let mut on = Play::<Probe<200, 100>>::with_tour(&panel, 30, Some(knobs(11)));
-            let mut off = Play::<Probe<200, 100>>::with_tour(&panel, 30, None);
+            let mut on = Play::<Probe>::with_tour(&panel, 30, Some(knobs(11)));
+            let mut off = Play::<Probe>::with_tour(&panel, 30, None);
             let (mut a, mut b) = (vec![0u32; panel.buf_len()], vec![0u32; panel.buf_len()]);
             let home = off.cam.view;
             let mut moved = false;
@@ -842,20 +820,20 @@ mod tests {
                 assert_eq!(m.shape_of(), o.shape_of(), "frame {n}: mirror geometry");
                 assert_eq!(m.shift_of(), (0, 0));
             }
-            assert!(moved, "the tour never left the cover view");
+            assert!(moved, "the tour never left the whole picture");
         });
     }
 
     /// Each mirror cell is the panel's cell under its centre, through every
-    /// close-up, pixel pan and pull back — the whole picture's bars included.
+    /// close-up, pixel pan and pull back.
     #[test]
     fn the_mirror_shows_what_the_panel_shows() {
         with_test_aspect(180, || {
             let panel = Panel::new(1920, 1080, 1920);
-            let mut play = Play::<Probe<200, 100>>::with_tour(&panel, 30, Some(knobs(11)));
+            let mut play = Play::<Probe>::with_tour(&panel, 30, Some(knobs(11)));
             let mut buf = vec![0u32; panel.buf_len()];
             let home = play.cam.view;
-            let (mut close, mut wide) = (0, 0);
+            let mut close = 0;
             for n in 0..3000 {
                 play.render(&mut Surface::new(&mut buf, &panel));
                 let v = play.cam.view;
@@ -880,31 +858,23 @@ mod tests {
                         assert_eq!(got, want, "frame {n} {v:?}: mirror cell {mx},{my}");
                     }
                 }
-                if v.w > home.w {
-                    close += 1;
-                }
-                let c = m.cells();
-                let bar = (0..ms.rows).all(|y| c[y * ms.cols] == Cell::CLEAR)
-                    || c[..ms.cols].iter().all(|&x| x == Cell::CLEAR);
-                if v.w < home.w && bar {
-                    wide += 1;
-                }
+                close += usize::from(v.w > home.w);
             }
-            assert!(close > 0 && wide > 0, "close {close} wide {wide}");
+            assert!(close > 0, "no close-up");
         });
     }
 
     /// The caption changes the panel only inside its own corner block, never
     /// the picture the piece drew, and costs no allocation per frame — on the
-    /// cover view and through every tour step and shift.
+    /// untoured view and through every tour step and shift.
     #[test]
     fn a_title_touches_only_its_corner() {
         with_test_aspect(180, || {
-            type P = Play<Probe<200, 100>>;
+            type P = Play<Probe>;
             let panel = Panel::new(1920, 1080, 1920);
             let mut on = P::with_tour(&panel, 30, Some(knobs(11)));
             let mut off = P::with_tour(&panel, 30, Some(knobs(11)));
-            on.title = Some(Title::new("night-coast", 1, Probe::<200, 100>::PALETTE));
+            on.title = Some(Title::new("night-coast", 1, Probe::PALETTE));
             let (mut a, mut b) = (vec![0u32; panel.buf_len()], vec![0u32; panel.buf_len()]);
             let frame = |on: &mut P, off: &mut P, a: &mut [u32], b: &mut [u32]| {
                 on.render(&mut Surface::new(a, &panel));

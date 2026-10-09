@@ -18,11 +18,11 @@ use crate::marble::Marble;
 use crate::matrix::Matrix;
 use crate::mirror::{self, Mirror};
 use crate::moire::Moire;
-use crate::next_rand;
 use crate::plasma::Plasma;
 use crate::podracer::Podracer;
 use crate::pov::Pov;
 use crate::rain::Rain;
+use crate::rotate::Rotate;
 use crate::sakura::Sakura;
 use crate::satori::Satori;
 use crate::speeder::Speeder;
@@ -87,7 +87,10 @@ type Build = fn(&Panel, u32) -> Box<dyn Saver>;
 // A macro only so the ascii.rest rows come from `ascii_rest::each_piece`, the
 // one list of ports, instead of a second copy here.
 macro_rules! savers {
-    ($($m:ident::{$($(#[$no:ident])? $t:ident),+}),* $(,)?) => {
+    (
+        scenes: [$($sm:ident::$st:ident),* $(,)?],
+        text: [$($tm:ident::$tt:ident),* $(,)?] $(,)?
+    ) => {
         const SAVERS: &[(&str, Build)] = &[
         ("ascii", |p, _| Box::new(Fire::ascii(p))),
         ("blocks", |p, _| Box::new(Fire::blocks(p))),
@@ -119,7 +122,20 @@ macro_rules! savers {
         ("hardrain", |p, fps| Box::new(HardRain::new(p, fps))),
         ("zot", |p, fps| Box::new(Zot::new(p, fps))),
         ("plasma", |p, fps| Box::new(Plasma::new(p, fps))),
-            $($((crate::ascii_rest::$m::$t::NAME, crate::ascii_rest::builder!($($no)? $m::$t)),)+)*
+            $((
+                crate::ascii_rest::$sm::$st::NAME,
+                crate::ascii_rest::Play::<crate::ascii_rest::$sm::$st>::build,
+            ),)*
+            $((
+                crate::ascii_rest::$tm::$tt::NAME,
+                crate::ascii_rest::Fill::<crate::ascii_rest::$tm::$tt>::build,
+            ),)*
+        ];
+
+        /// Each port's name and its section: the scenes, or the text pieces.
+        const PIECES: &[(&str, usize)] = &[
+            $((crate::ascii_rest::$sm::$st::NAME, SCENES),)*
+            $((crate::ascii_rest::$tm::$tt::NAME, ASCII_REST),)*
         ];
     };
 }
@@ -132,7 +148,7 @@ const SCENES: usize = 0;
 const ASCII_REST: usize = 1;
 
 /// The section of every saver that is not an ascii.rest port. Ports sort
-/// themselves by kind — see `PIECE_CELL` — so a new port needs no row here,
+/// themselves by kind — see `PIECES` — so a new port needs no row here,
 /// and a new saver missing from here fails `every_saver_is_in_one_group`.
 const SECTIONS: &[(&str, usize)] = &[
     ("ascii", 2),
@@ -167,43 +183,15 @@ const SECTIONS: &[(&str, usize)] = &[
     ("plasma", 4),
 ];
 
-macro_rules! piece_cells {
-    ($($m:ident::{$($(#[$no:ident])? $t:ident),+}),* $(,)?) => {
-        /// Each port's name and cell shape: 1 is a halftone scene, 2 text.
-        const PIECE_CELL: &[(&str, usize)] = &[
-            $($((crate::ascii_rest::$m::$t::NAME, crate::ascii_rest::$m::$t::CELL),)+)*
-        ];
-    };
-}
-crate::ascii_rest::each_piece!(piece_cells);
-
 /// Index into `GROUPS` of a row. A table walk, so for the HTTP thread and the
 /// rotation boundary only — never per frame.
 pub fn group_at(i: usize) -> usize {
     let name = SAVERS[i].0;
-    if let Some((_, cell)) = PIECE_CELL.iter().find(|(n, _)| *n == name) {
-        return if *cell == 1 { SCENES } else { ASCII_REST };
-    }
-    SECTIONS
+    PIECES
         .iter()
+        .chain(SECTIONS)
         .find(|(n, _)| *n == name)
         .map_or(GROUPS.len() - 1, |(_, g)| *g)
-}
-
-/// The full-width twin of a scene, if it has one: `night-coast` ->
-/// `night-coast-wide`. The page lists the pair once, with an `expanded`
-/// toggle between them; both stay rows here so rotation and `SAVER` keep
-/// reaching either.
-pub fn wide_of(name: &str) -> Option<&'static str> {
-    let wide = format!("{name}-wide");
-    row_of(&wide).map(name_at)
-}
-
-/// The other half of a scene's pair, either way round, for the rotation
-/// toggle: the page lists the pair as one row, so one toggle covers both.
-pub fn twin_of(name: &str) -> Option<&'static str> {
-    row_of(name)?;
-    wide_of(name).or_else(|| name.strip_suffix("-wide").and_then(row_of).map(name_at))
 }
 
 /// How many savers there are, for `Rotate`'s bag. A const because the bag is a
@@ -228,17 +216,39 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 /// Position in `SAVERS`, or None for a name no saver answers to. The one place
 /// a user-supplied name is validated — `make` cannot report a bad name.
 ///
-/// A character piece also answers to `<name>-wide`, the twin it had before it
-/// drew at any size, so a deployment or bookmark naming one still lands on it.
+/// A name in `WIDE_ALIASES` also answers to its old `<name>-wide`.
 pub fn index_of(name: &str) -> Option<usize> {
     row_of(name).or_else(|| {
         let piece = name.strip_suffix("-wide")?;
-        PIECE_CELL
-            .iter()
-            .any(|&(n, cell)| n == piece && cell == 2)
-            .then(|| row_of(piece))?
+        WIDE_ALIASES.contains(&piece).then(|| row_of(piece))?
     })
 }
+
+/// The savers that had a `-wide` twin before they drew at any size, so a
+/// deployment or bookmark naming the twin still lands on the saver.
+const WIDE_ALIASES: &[&str] = &[
+    "alpine-dawn",
+    "aurora",
+    "aurora-fjord",
+    "deep-reef",
+    "desert-night",
+    "double-pendulum",
+    "earthrise",
+    "fractal-tree",
+    "kyoto-dusk",
+    "lighthouse",
+    "marine-drive",
+    "misty-forest",
+    "night-coast",
+    "ocean-sunset",
+    "reaction-diffusion",
+    "storm-plains",
+    "synthwave",
+    "taj-dawn",
+    "tv-static",
+    "varanasi-ghats",
+    "vinyl",
+];
 
 /// Position in `SAVERS` of exactly `name`, no aliases.
 fn row_of(name: &str) -> Option<usize> {
@@ -248,150 +258,6 @@ fn row_of(name: &str) -> Option<usize> {
 pub fn make(name: &str, panel: &Panel, fps: u32) -> Box<dyn Saver> {
     let (_, build) = index_of(name).map_or(SAVERS[0], |i| SAVERS[i]);
     build(panel, fps)
-}
-
-/// Automatic rotation: move to another saver every N seconds.
-///
-/// The interval is the MIRROR's, not this struct's: `SAVER_ROTATE_SECS` is only
-/// the startup value and `POST /rotate` moves it while the pod runs. What lives
-/// here is the deadline that interval implies, re-derived whenever the mirror's
-/// control word changes under it.
-///
-/// Zero — the default — is off, so a deployment that does not ask for this
-/// behaves exactly as it did. Out of range falls back to the default rather
-/// than clamping, which is `env_num`'s contract everywhere else.
-///
-/// Order is a SHUFFLED BAG: every row, in random order, none repeated until all
-/// of them have been shown. Not a walk down `SAVERS` — the objection to a walk
-/// stands and is not being ignored here. A walk is predictable in the wrong way
-/// (the same saver always follows the same saver forever, and the three toaster
-/// variants are adjacent in the table, so a walk shows them back to back to
-/// back); a bag is reshuffled every cycle, so neither is true of it. What the
-/// bag adds over the plain roll this used to do is coverage: "rotate through
-/// ALL the savers" was the ask, and an independent roll each time takes ~95
-/// turns to show you all 25 (coupon collector) where the bag takes exactly 25 —
-/// eight hours versus two at a five-minute interval.
-///
-/// "Never the same saver twice in a row" stays a property of the code rather
-/// than a probability, which is the standard the old roll held itself to. Inside
-/// a bag it is free (the entries are distinct); across the boundary between two
-/// bags it is `refill`'s one swap.
-///
-/// Uniform turns for every saver, deliberately: the cheap ones do not get
-/// longer ones. That trades one number for a table of per-saver seconds to
-/// solve a problem nobody has — the expensive savers hold the target fps on
-/// this panel, so there is nothing to compensate for.
-struct Rotate {
-    every: Duration,
-    /// The control word `every` was decoded from. A `!=` against this is how a
-    /// live change is noticed without a lock — see `Mirror::set_rotate_secs`.
-    seen: u64,
-    next: Instant,
-    rng: u32,
-    /// The rows still to be shown this cycle, in `bag[..left]`, drawn from the
-    /// top. Sized once from the table and shuffled in place, so a refill
-    /// allocates nothing — it lands on a rotation boundary, which is already a
-    /// saver rebuild, but the frame path is no place to grow a Vec.
-    bag: [usize; NSAVERS],
-    left: usize,
-}
-
-impl Rotate {
-    fn new(now: Instant) -> Self {
-        // Seeded off the clock so a restart does not replay the same order.
-        // Same trick sakura grows its tree from.
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0x5EED_1234, |d| d.subsec_nanos() ^ d.as_secs() as u32);
-        Self::seeded(now, seed ^ std::process::id().wrapping_mul(0x9E37_79B9))
-    }
-
-    /// Starts with no interval at all: the first `due` adopts whatever the
-    /// mirror holds, which is the `SAVER_ROTATE_SECS` main put there.
-    fn seeded(now: Instant, seed: u32) -> Self {
-        Self {
-            every: Duration::ZERO,
-            seen: 0,
-            next: now,
-            rng: seed,
-            // Empty, so the first rotation fills it knowing what is on screen.
-            bag: [0; NSAVERS],
-            left: 0,
-        }
-    }
-
-    /// The row to move to, or None when rotation is off or this saver's turn is
-    /// not up yet. `now` is the frame's OWN clock read and `ctl` the mirror's
-    /// rotation word, both handed down rather than taken here: with rotation
-    /// off this is two compares per frame and no clock read at all, and with it
-    /// on it is no more than that. See CLAUDE.md on the frame loop.
-    fn due(
-        &mut self,
-        now: Instant,
-        cur: usize,
-        ctl: u64,
-        pooled: impl Fn(usize) -> bool,
-    ) -> Option<usize> {
-        // Someone moved the interval since the last frame. Adopt it and give
-        // what is on screen a full turn at the NEW length — the same restart a
-        // click gets, and for the same reason: five minutes asked for at 4:59
-        // into a turn must mean five minutes, not one second. The counter in
-        // the word's high half is what makes re-posting the same number count.
-        if ctl != self.seen {
-            self.seen = ctl;
-            self.every = Duration::from_secs(mirror::ctl_secs(ctl));
-            self.restart(now);
-        }
-        if self.every.is_zero() || now < self.next {
-            return None;
-        }
-        self.restart(now);
-        // Rows out of the pool are skipped, not removed: the bag still covers
-        // every pooled row once per cycle, and a pool change takes effect on
-        // the next draw. Two passes because the first can empty the bag
-        // without a hit; a pool with nothing in it but `cur` stays put.
-        for _ in 0..2 {
-            while self.left > 0 {
-                self.left -= 1;
-                let i = self.bag[self.left];
-                if i != cur && pooled(i) {
-                    return Some(i);
-                }
-            }
-            self.refill(cur)?;
-        }
-        None
-    }
-
-    /// Every row, shuffled, none of them repeated until the bag empties.
-    /// Fisher-Yates in place: no allocation, and no re-rolling of the whole
-    /// shuffle to satisfy the boundary rule below. None for a one-row table,
-    /// which has nowhere to go.
-    fn refill(&mut self, cur: usize) -> Option<()> {
-        let top = NSAVERS.checked_sub(1).filter(|t| *t > 0)?;
-        for (i, slot) in self.bag.iter_mut().enumerate() {
-            *slot = i;
-        }
-        for i in (1..NSAVERS).rev() {
-            self.bag
-                .swap(i, next_rand(&mut self.rng) as usize % (i + 1));
-        }
-        // The top of the bag is drawn first, so it is the row that would follow
-        // `cur` immediately — the one place a bag can show the same saver twice
-        // in a row. Swapping it with any other entry fixes that by construction
-        // and keeps the bag a permutation; re-shuffling until it comes out
-        // right would make it a probability again.
-        if self.bag[top] == cur {
-            self.bag.swap(top, next_rand(&mut self.rng) as usize % top);
-        }
-        self.left = NSAVERS;
-        Some(())
-    }
-
-    /// Give whatever is on screen now a full turn.
-    fn restart(&mut self, now: Instant) {
-        self.next = now + self.every;
-    }
 }
 
 /// The frame loop every host runs: the saver, which one the mirror has
@@ -478,7 +344,7 @@ impl Driver {
         let cur = mirror::sel_index(self.selected);
         if let Some(i) = self
             .rot
-            .due(now, cur, mirror.rotate_ctl(), |i| mirror.pickable(i))
+            .due(now, cur, mirror.rotate_ctl(), |i| mirror.in_rotation(i))
         {
             mirror.select_at(i);
         }
@@ -837,29 +703,17 @@ mod tests {
             t0.elapsed()
         );
     }
-    /// A character piece's old `-wide` name still reaches it, and nothing
+    /// Every former pair's old `-wide` name still reaches it, and nothing
     /// else gains a `-wide` that never existed. The alias is not a row.
     #[test]
-    fn a_character_piece_answers_to_its_old_wide_name() {
-        for n in [
-            "aurora",
-            "synthwave",
-            "tv-static",
-            "vinyl",
-            "lighthouse",
-            "fractal-tree",
-            "reaction-diffusion",
-            "double-pendulum",
-        ] {
+    fn a_former_pair_answers_to_its_old_wide_name() {
+        assert_eq!(WIDE_ALIASES.len(), 21);
+        for n in WIDE_ALIASES {
             let wide = format!("{n}-wide");
             assert_eq!(index_of(&wide), index_of(n), "{wide}");
             assert!(index_of(n).is_some(), "{n}");
             assert!(!names().any(|x| x == wide), "{wide} is a row");
         }
-        assert_eq!(
-            index_of("night-coast-wide").map(name_at),
-            Some("night-coast-wide")
-        );
         assert_eq!(index_of("plasma-wide"), None);
         assert_eq!(index_of("matrix-wide"), None);
     }
@@ -871,7 +725,7 @@ mod tests {
     fn every_saver_is_in_one_group() {
         for (i, name) in names().enumerate() {
             let in_table = SECTIONS.iter().filter(|(n, _)| *n == name).count();
-            let is_port = PIECE_CELL.iter().any(|(n, _)| *n == name);
+            let is_port = PIECES.iter().any(|(n, _)| *n == name);
             assert_eq!(
                 in_table + usize::from(is_port),
                 1,
@@ -884,12 +738,7 @@ mod tests {
             assert!(*g >= 2 && *g < GROUPS.len(), "{n} in a port group");
         }
         assert_eq!(group_at(index_of("night-coast").unwrap()), SCENES);
-        assert_eq!(group_at(index_of("night-coast-wide").unwrap()), SCENES);
         assert_eq!(group_at(index_of("vinyl").unwrap()), ASCII_REST);
-        assert_eq!(wide_of("night-coast"), Some("night-coast-wide"));
-        assert_eq!(wide_of("aurora"), None);
-        assert_eq!(twin_of("aurora-wide"), None);
-        assert_eq!(wide_of("plasma"), None);
     }
 
     /// The pool narrows rotation without breaking its rules: only pooled rows,
@@ -1004,57 +853,13 @@ mod tests {
         });
         assert_eq!(n, 0);
         assert!(few(cur));
-        // And the Driver's predicate, pairs included, allocates nothing either.
+        // And the Driver's predicate allocates nothing either.
         let m = Mirror::new(15);
         let mut picked = 0;
         let n = crate::testalloc::allocs_during(|| {
-            picked = (0..NSAVERS).filter(|&i| m.pickable(i)).count();
+            picked = (0..NSAVERS).filter(|&i| m.in_rotation(i)).count();
         });
         assert_eq!(n, 0);
-        // One half of every pair: its `-wide`.
-        let pairs = names().filter(|n| n.ends_with("-wide")).count();
-        assert_eq!(picked, NSAVERS - pairs);
-        for (i, n) in names().enumerate().filter(|(_, n)| n.ends_with("-wide")) {
-            assert!(m.pickable(i), "{n}");
-        }
-    }
-
-    /// A scene's pair takes one turn, and which half is the viewer's
-    /// `expanded` choice: the `-wide` by default, the original once it is
-    /// clicked, the `-wide` again once that is. Rotation moving on does not
-    /// change it.
-    #[test]
-    fn rotation_shows_the_half_of_a_pair_that_expanded_chose() {
-        let mirror = Mirror::new(15);
-        let t0 = Instant::now();
-        mirror.set_rotate_secs(1);
-        assert!(mirror.select("dvd"));
-        let (mut d, panel) = driver(&mirror, t0, 11);
-        let place = |n: &str| (panel, make(n, &panel, 30));
-        for n in names().filter(|n| !["dvd", "night-coast", "night-coast-wide"].contains(n)) {
-            mirror.set_in_rotation(n, false);
-        }
-        let mut turns = |from: u64| {
-            (from..from + 6)
-                .map(|s| {
-                    d.switch(t0 + Duration::from_secs(s), &mirror, place);
-                    d.saver().name()
-                })
-                .collect::<Vec<_>>()
-        };
-        let wide =
-            |shown: &[&str]| shown.contains(&"night-coast-wide") && !shown.contains(&"night-coast");
-        let narrow =
-            |shown: &[&str]| shown.contains(&"night-coast") && !shown.contains(&"night-coast-wide");
-        let shown = turns(1);
-        assert!(wide(&shown), "default {shown:?}");
-
-        assert!(mirror.select("night-coast"));
-        let shown = turns(10);
-        assert!(narrow(&shown), "after picking the original {shown:?}");
-
-        assert!(mirror.select("night-coast-wide"));
-        let shown = turns(20);
-        assert!(wide(&shown), "after picking the wide {shown:?}");
+        assert_eq!(picked, NSAVERS);
     }
 }

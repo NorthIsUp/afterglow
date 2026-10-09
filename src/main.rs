@@ -54,8 +54,7 @@
 //!   saver already showing, and a `/select` gives the saver it picked a full
 //!   interval before rotation moves on again.
 //! * `SAVER_ROTATE_EXCLUDE` — comma-separated savers rotation never picks
-//!   (default none; a scene takes its `-wide` twin with it, and a character
-//!   piece's old `-wide` name is the piece). The startup set
+//!   (default none; a port's old `-wide` name is the port). The startup set
 //!   only: the mirror page's toggles move it live. A click still shows them.
 //! * `SAVER_FPS`      — target frames/sec, 1..=120 (default 30)
 //! * `SAVER_PANEL_MM`   — the panel's visible width in mm, 0 (default) = unknown.
@@ -122,6 +121,7 @@ mod plasma;
 mod podracer;
 mod pov;
 mod rain;
+mod rotate;
 mod sakura;
 mod satori;
 mod saver;
@@ -303,9 +303,6 @@ fn main() {
     // cfg.saver again. An unrecognised name is refused here and leaves the
     // selection at row 0 — the same fallback `make` has always had, now reached
     // through the one validation point instead of a second path beside it.
-    //
-    // By index, not `select`: the startup saver is the deployment's, not a
-    // viewer's pick, so it does not move a scene's `expanded` choice.
     if let Some(i) = saver::index_of(&cfg.saver) {
         mirror.select_at(i);
     } else {

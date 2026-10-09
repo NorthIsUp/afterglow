@@ -319,7 +319,6 @@
   <section id="cfg">
     <h3>saver</h3>
     <span id="cfgname"></span>
-    <label id="wide" hidden><input id="wideon" type="checkbox" /> expanded</label>
     <div id="knobs"></div>
   </section>
   <section>
@@ -450,30 +449,24 @@
   // The click's effect, before the server has said anything.
   function showPicked(name) {
     markCurrent(name);
-    document.getElementById("cfgname").textContent = label(shown(name));
-    status.textContent = "switching to " + label(shown(name)) + "\u2026";
+    document.getElementById("cfgname").textContent = label(name);
+    status.textContent = "switching to " + label(name) + "\u2026";
   }
 
   // ── SAVER LIST ───────────────────────────────────────────────────────
   //
-  // Sections and the scene/-wide pairing come from /meta, not from here: the
-  // table lives beside the savers in Rust, so a new saver shows up in the
-  // right place without touching this page. A scene with a full-width twin is
-  // listed once; `expanded` in the bar picks which of the two draws.
+  // Sections come from /meta, not from here: the table lives beside the
+  // savers in Rust, so a new saver shows up in the right place without
+  // touching this page.
   const list = document.getElementById("list");
   const filter = document.getElementById("filter");
   let items = []; // [{name, row, button, rot, group}] in list order
   let cursor = -1; // index into the VISIBLE items, for the arrow keys
-  let base = {}; // "night-coast-wide" -> "night-coast"
-
-  const shown = (n) => base[n] || n;
   const label = (n) => n.replace(/-/g, " ");
 
   // Each row: a toggle for whether rotation may pick it, then the name, which
-  // selects it. A scene's toggle covers its -wide twin too — the server keeps
-  // the pair together — so rotation may show either.
+  // selects it.
   function buildList(m) {
-    base = Object.fromEntries(Object.entries(m.wide).map(([b, w]) => [w, b]));
     items = [];
     list.replaceChildren(
       ...m.groups.flatMap((g) => {
@@ -497,13 +490,9 @@
     applyFilter();
   }
 
-  // The row a click on `name` asks for: the half its pair is set to.
   function pick(name) {
     closeDrawer();
-    // The server's choice, not this tab's: every pair starts expanded, and a
-    // pick on any browser moves it for all of them.
-    const wide = meta.wide[name];
-    select(wide && meta.expanded.includes(wide) ? wide : name);
+    select(name);
   }
 
   function visible() {
@@ -533,7 +522,7 @@
     for (const it of items) it.button.classList.remove("cursor");
     if (!v.length) return (cursor = -1);
     if (reset) {
-      const cur = v.findIndex((it) => meta && it.name === shown(meta.saver));
+      const cur = v.findIndex((it) => meta && it.name === meta.saver);
       cursor = filter.value.trim() || cur < 0 ? 0 : cur;
       if (!filter.value.trim()) return;
     } else cursor = Math.max(0, Math.min(v.length - 1, cursor + d));
@@ -561,11 +550,11 @@
 
   function markCurrent(name = meta.saver) {
     for (const it of items) {
-      const on = it.name === shown(name);
+      const on = it.name === name;
       it.button.setAttribute("aria-current", String(on));
       if (on) it.row.scrollIntoView({ block: "nearest" });
     }
-    document.getElementById("drawername").textContent = label(shown(name));
+    document.getElementById("drawername").textContent = label(name);
   }
 
   const drawer = document.getElementById("drawer");
@@ -595,23 +584,13 @@
   // validates against the constructor's own range, and rebuilds the saver
   // when it reads that key, which ends this stream like any switch.
   const knobs = document.getElementById("knobs");
-  const wideBox = document.getElementById("wide");
-  const wideOn = document.getElementById("wideon");
   let cfgFor = null; // the epoch the knobs were fetched for
-
-  wideOn.onchange = () => {
-    const b = shown(meta.saver);
-    select(wideOn.checked ? meta.wide[b] : b);
-  };
 
   async function loadConfig(force) {
     if (!force && cfgFor === meta.epoch) return;
     cfgFor = meta.epoch;
     const name = meta.saver;
-    document.getElementById("cfgname").textContent = label(shown(name));
-    const pair = meta.wide[shown(name)];
-    wideBox.hidden = !pair;
-    wideOn.checked = !!pair && name === pair;
+    document.getElementById("cfgname").textContent = label(name);
     const res = await fetch("/config?saver=" + encodeURIComponent(name), { cache: "no-store" });
     if (!res.ok || name !== meta.saver) return;
     showKnobs(name, await res.json());

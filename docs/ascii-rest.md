@@ -5,8 +5,10 @@ MIT, by @bas3line), ported line for line to `src/ascii_rest/`. Upstream a piece
 is `frame(t) -> string` over a fixed grid; here it writes cells, and a generic
 saver does the rest — the clock, upstream's own frame rate (a 15 fps scene
 shades 15 times a second at `SAVER_FPS=30`), placement, the ground colour and
-the flush: `Play<P: Piece>` for a scene's fixed picture, `Fill<P: Canvas>` for
-a character piece drawn at the panel's size. A port is only its drawing code.
+the flush: `Play<P: Piece>` for a halftone scene, `Fill<P: Canvas>` for a
+character piece. Both are composed for the panel they land on, landscape
+through square to portrait, rather than fitted or cropped. A port is only its
+drawing code.
 
 - **Scenes** (`cell: 1`, a palette) share `halftone::Dots`: the 4x4 ordered
   dither, the " ·•●" dot glyphs (drawn round on a square-glass cell, sized to
@@ -16,11 +18,7 @@ a character piece drawn at the panel's size. A port is only its drawing code.
   glyph table as `font::TEXT`.
 
 Pictures are drawn 1:1, one piece cell per grid cell, never resampled: that
-would smear the dither. Scenes fill the panel and crop the overflow, keeping a
-band of rows chosen per scene (`Fit::Cover { anchor }`) so the horizon, the moon
-or the Taj's dome stays in frame; on pine's 3.2:1 glass that is about 60% of
-each scene's height. Character pieces are not fitted at all: they are composed
-for the panel's own grid (below).
+would smear the dither.
 
 Every port is checked cell for cell against upstream's own output — glyph and
 palette index, four frames each, stateful pieces stepped through every tick
@@ -39,13 +37,30 @@ Cost: night-coast measures 2.3x matrix per panel frame.
 ## Scenes
 
 ascii.rest's thirteen halftone scenes — landscapes shaded cell by cell and drawn as dots whose size is their brightness. Each has its own page, linked from the
-[README](../README.md#asciirest-halftone-scenes).
+[README](../README.md#asciirest-halftone-scenes), saying how it recomposes.
+
+A scene is a `Piece`, built by `Piece::new(cols, rows)` at the panel's shape:
+the cell is sized so the panel's shorter side is upstream's 100 cells, so pine's
+3.2:1 glass gets 320x100, a 16:9 panel about 178x100 and a portrait one 100 wide
+and as tall as it is. Where whole pixels cannot place the last row or two, the
+picture is that much taller and centred. Each scene places its horizon, subject,
+sky and sea from that shape through a `Layout` whose every value moves from
+upstream's: at upstream's 200x100 it is upstream's layout exactly, and the old
+3.2:1 `-wide` recompositions are its other anchor. The golden test builds each
+scene at 200x100 and holds it to upstream cell for cell; an exercise test runs
+it on every panel shape from pine's 3.2:1 through 16:9, 4:3, square and portrait
+down to 128px: it covers the grid, reaches both sides, moves, and never
+allocates.
+
+Each scene had a `-wide` twin before it drew at any size; `<name>-wide` is
+still accepted wherever a saver is named (`SAVER`, `/select`,
+`SAVER_ROTATE_EXCLUDE`, `/config?saver=`) and means the scene.
 
 ### Knobs
 
-- `ASCII_REST_TOUR` (0..1, default 0, the fixed cover view; 1 is the slow camera)
+- `ASCII_REST_TOUR` (0..1, default 0, the whole picture held still; 1 is the slow camera)
 - `ASCII_REST_TOUR_SHOT_SECS` (4..600, default 20, each shot drawn from 75%..150% of it; a shot with little to move ends sooner)
-- `ASCII_REST_TOUR_MAX_ZOOM_PCT` (100..600, default 250, of the cover view's cell)
+- `ASCII_REST_TOUR_MAX_ZOOM_PCT` (100..600, default 250, of the whole picture's cell)
 - `ASCII_REST_TOUR_CUTS` (0..1, default 0; 1 cuts between framings and drifts slowly within each, instead of one continuous move)
 - `ASCII_REST_TOUR_SEED` (0 = roll one from the clock and pid; any other value reproduces the tour exactly)
 - `ASCII_REST_TITLE` (0..1, default 0) — the scene's name (`night coast`) in the
@@ -60,11 +75,10 @@ the title switches to one glyph per cell, as a character piece's always is.
 
 ## The scene tour
 
-Off by default: a scene holds its cover view. With `ASCII_REST_TOUR=1` the camera moves Ken Burns style. Each shot is a slow
+Off by default: a scene holds still. With `ASCII_REST_TOUR=1` the camera moves Ken Burns style. Each shot is a slow
 push in or pull out with a gentle pan, 15-30 seconds at the default, eased at
 both ends with a half-second settle, and the next shot carries on from where
-it ended. Every third to fifth shot pulls back to the cover view or to the
-whole picture, ground-colour bars and all. A pan covers at most half the
+it ended. Every third to fifth shot pulls back to the whole picture. A pan covers at most half the
 panel. Close-ups go where the picture has something in it: each shot scores
 the frame on screen in 4x4-cell blocks (the dither's period) by contrast with
 their neighbours and by brightness, aims at a block drawn by that score (the
@@ -72,39 +86,25 @@ moon, the lamp, the dome), and plays down anything the last three close-ups
 showed.
 
 Zoom is cell size, so every picture cell is still one grid cell and the dots
-just get bigger: up to 2.5x the cover cell. The cell width steps a pixel at a
+just get bigger: up to 2.5x the whole picture's cell. The cell width steps a pixel at a
 time, evenly through the shot, and each step re-places the picture so the
 shot's focus stays put. The pan is pixel-precise: the grid is drawn shifted
 by the part of a cell the camera has passed, with the partial cells at the
 edges clipped, and a column and row of bleed past the panel's edge to slide
 in. A shot with few zoom steps and little pan is cut short so it never sits
-still for long. Near the whole picture only zoom can move, and its steps are
-a fifth of the picture each, so that is where the camera pauses longest,
-about three seconds.
+still for long. At the whole picture nothing can pan, so the eased end of a
+pull back is where the camera pauses longest, up to about four seconds.
 
 Every move repaints the whole panel, so the camera moves only on frames the
 piece draws (15 a second for the scenes): between them nothing else changes,
 and moving there too would double the cost. Over 100 s on pine's geometry
 night-coast measures 1.56x matrix, against 1.23x untoured and 1.43x with
 `ASCII_REST_TOUR_CUTS=1`. The terminal host and the web mirror show the tour
-too. The mirror keeps the cover view's grid — each zoom step is a new
+too. The mirror keeps the whole picture's grid — each zoom step is a new
 geometry, and re-describing the mirror for each would reconnect every viewer
 a dozen times a shot — and fills it with the panel's cell under each of its
-cells' centres, pixel shift included, the whole picture's bars too. The
+cells' centres, pixel shift included. The
 mapping is redone only when the view moves, and only while someone watches.
-
-## `-wide` variants
-
-The same thirteen scenes recomposed at 320x100 (3.2:1), so they fill pine's glass uncropped. Knobs: as the scenes.
-The mirror page lists each scene once, with an `expanded` toggle between the two; the pair opens on the `-wide`, in rotation too, until someone unticks it.
-
-**`-wide` variants** are this repo's own: a scene recomposed on a 320x100 grid
-so it fills pine's 3.2:1 glass with nothing cropped, rather than stretched. Each
-shares its original's module: one `Scene<IS_WIDE>` drawn from a `Layout` (width,
-sun, landmarks, extra peaks and props), with an `ORIGINAL` that keeps upstream's
-literals and a `WIDE` beside it. The original stays golden-exact; the wide one
-is marked `#[no_upstream]` in `each_piece!`, so it gets no `golden` test — there
-is no upstream output to compare against.
 
 ## Character pieces
 
@@ -122,8 +122,8 @@ knob (`LIGHTHOUSE_COLOR`, `TV_STATIC_COLOR`, …, default on) switches back to
 upstream's one ink on black. Its `Canvas::UPSTREAM` lists the knob values that
 draw upstream's picture, and built with those at upstream's grid it must match
 upstream cell for cell: the golden test runs against the same code the panel
-does. `#[fill]` in `each_piece!` gives a piece that golden test, a check that
-the `UPSTREAM` knobs really change the picture, and an exercise test on every
+does. The `text` list in `each_piece!` gives a piece that golden test, a check
+that the `UPSTREAM` knobs really change the picture, and an exercise test on every
 panel shape from pine's 3.2:1 through 16:9, 4:3, square and portrait down to
 128px: it moves, reaches both sides on a landscape panel, and never allocates.
 

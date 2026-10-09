@@ -7,19 +7,24 @@
 //! The cloud is built as a height field (heaped domes, a flat anvil, pouches
 //! hanging under it) and lit from its surface normals.
 //!
-//! `storm-plains-wide` is the same evening on a 3.2:1 canvas: the farm keeps its
-//! corner, the storm stands 50 columns further east, and the anvil streams on
-//! across the extra width trailing thinner rain.
+//! At any size the farm keeps the western corner and the storm stands whole
+//! east of it: wider panels move the storm east and stream the anvil on across
+//! the extra sky, trailing thinner rain; narrower ones draw the storm in over
+//! the farm and the farm toward the edge; taller ones add sky above and wheat
+//! below.
+
+mod cloud;
+mod lightning;
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, js_round, mix, noise, smooth};
-use super::{Fit, Piece, hex};
+use super::{hex, Piece};
 use crate::font;
 use crate::grid::Cell;
+use cloud::{anvil_bot, shelf_bot, shelf_on, shelf_top, tower_c, tower_hw, Cloud};
+use lightning::{bolts, flash_at, flicker_at, Bolt};
 
-const H: usize = 100;
-const HF: f64 = H as f64;
-/// The horizon.
+/// The horizon, in upstream's rows.
 const HZ: usize = 64;
 const HZF: f64 = HZ as f64;
 /// Just below the horizon, behind the farmhouse.
@@ -45,8 +50,8 @@ const LX: f64 = -0.72;
 const LY: f64 = -0.3;
 const LZ: f64 = 0.62;
 /// Farmhouse walls from x 40 to 54, eaves at row 58.
-const HX0: usize = 40;
-const HX1: usize = 54;
+const HX0: i64 = 40;
+const HX1: i64 = 54;
 const HW0: f64 = 58.0;
 const PUMP_X: f64 = 66.0;
 /// The wheat's vanishing column.
@@ -60,40 +65,6 @@ const FL: f64 = 1.6;
 /// `meta.palette.indexOf("#8c6230")`.
 const STALK: u16 = 24;
 
-fn dome(dx: f64, dy: f64, r: f64) -> f64 {
-    let q = 1.0 - dx * dx - dy * dy;
-    if q > 0.0 {
-        r * q.sqrt()
-    } else {
-        0.0
-    }
-}
-
-/// Distance from (px, py) to the segment a-b.
-fn seg_dist(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
-    let (dx, dy) = (bx - ax, by - ay);
-    let l = dx * dx + dy * dy;
-    let k = clamp(((px - ax) * dx + (py - ay) * dy) / if l != 0.0 { l } else { 1.0 });
-    let (ex, ey) = (px - ax - dx * k, py - ay - dy * k);
-    (ex * ex + ey * ey).sqrt()
-}
-
-fn tower_c(y: f64) -> f64 {
-    138.0 + (BASE - y) * 0.14
-}
-
-fn tower_hw(y: f64) -> f64 {
-    23.0 - (BASE - y) * 0.08
-}
-
-fn anvil_top(x: f64) -> f64 {
-    7.5 + 2.5 * smooth(150.0, 210.0, x) + 3.0 * smooth(112.0, 58.0, x)
-}
-
-fn anvil_bot(x: f64) -> f64 {
-    21.0 - 9.0 * smooth(124.0, 62.0, x) - 7.0 * smooth(152.0, 210.0, x)
-}
-
 fn glow_sun(x: f64, y: f64) -> f64 {
     let (dx, dy) = (x - SUN[0], y - SUN[1]);
     (-(dx / 48.0).powi(2) - (dy / 10.0).powi(2)).exp() * 0.9
@@ -104,107 +75,68 @@ fn ground(x: f64) -> f64 {
     HZF + 3.0 - 1.2 * smooth(20.0, 70.0, x) * smooth(110.0, 70.0, x)
 }
 
-/// The shelf: a flat dark lip of cloud along the storm's leading edge.
-fn shelf_top(x: f64) -> f64 {
-    BASE - 2.4 + 1.2 * (noise(x * 0.2, 8.1, 0.0) - 0.5)
-}
-
-fn shelf_bot(x: f64) -> f64 {
-    BASE + 2.4 + 1.8 * (fbm(x * 0.12, 8.7, 2, 0.0) - 0.5)
-        - 2.0 * smooth(184.0, 199.0, x)
-        - 2.0 * smooth(114.0, 104.0, x)
-}
-
-fn shelf_on(x: f64) -> f64 {
-    smooth(103.0, 112.0, x) * smooth(199.0, 190.0, x)
-}
-
 /// The road: from the yard to the bottom edge, a leading line.
-fn road_c(p: f64) -> f64 {
-    57.0 + 62.0 * p.powf(1.25)
+/// `reach`: how far east it runs by the bottom edge.
+fn road_c(p: f64, reach: f64) -> f64 {
+    57.0 + reach * p.powf(1.25)
 }
 
 fn road_w(p: f64) -> f64 {
     0.6 + 12.0 * p
 }
 
-/// One lightning segment: [ax, ay, bx, by, depth].
-type Seg = [f64; 5];
-
-fn walk(i: f64, mut x: f64, mut y: f64, len: f64, lean: f64, depth: f64, segs: &mut Vec<Seg>) {
-    let mut s = 0.0;
-    while s < len && y < HZF + 2.0 {
-        let nx = x + (hash(i * 97.0 + s, depth * 13.0 + 41.0) - 0.5) * 3.2 + lean;
-        let ny = y + 0.9 + hash(i * 31.0 + s, depth + 42.0) * 1.3;
-        segs.push([x, y, nx, ny, depth]);
-        if depth == 0.0 && hash(i * 7.0 + s, 43.0) > 0.84 {
-            walk(
-                i,
-                nx,
-                ny,
-                3.0 + hash(s, i) * 5.0,
-                (hash(s, i + 9.0) - 0.5) * 2.4,
-                1.0,
-                segs,
-            );
-        }
-        (x, y) = (nx, ny);
-        s += 1.0;
-    }
-}
-
-struct Bolt {
-    x: f64,
-    field: Vec<f32>,
-}
-
-#[derive(Clone, Copy)]
-struct Flash {
-    i: f64,
-    bolt: Option<usize>,
-    cx: f64,
-    cy: f64,
-    bolt_on: f64,
-    inside: f64,
-}
-
-/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+/// Where things sit in a `w x h` frame. Upstream's 200x100 is the anchor
+/// every value moves from, so there it is exact. The sky and the land are
+/// drawn in upstream's rows, `top` rows down; the storm in its own columns,
+/// `x - sd`; the farm in its own, `x - fd`. Shifts of zero leave `x` exact.
 struct Layout {
-    name: &'static str,
     w: usize,
-    /// How far east the storm stands from the original's: it is drawn in its own
-    /// coordinates, `x - sd`. Zero for the original, and `x - 0.0` is `x` exactly.
+    h: usize,
+    top: usize,
+    /// The horizon's row in the frame.
+    hz: usize,
+    /// How far east the storm stands from upstream's.
     sd: f64,
-    /// Where the shelterbelt on the horizon gives out, in the storm's coordinates.
+    /// How far east the farm stands from upstream's, in whole columns so its
+    /// walls and panes stay on the cells upstream draws them on.
+    fd: i64,
+    /// Where the shelterbelt on the horizon gives out, in the storm's columns.
     belt_end: [f64; 2],
     /// The stars: the columns they show in, and where they would fade out.
     stars: (usize, f64),
-    /// Thinner rain trailing from the anvil, across the extra width.
-    anvil_rain: bool,
+    /// How far east the road runs from the yard to the bottom edge.
+    road: f64,
+    /// Thinner rain trailing from the anvil across a wider frame's extra
+    /// sky, at this strength.
+    trail: f64,
 }
 
-const ORIGINAL: Layout = Layout {
-    name: "storm-plains",
-    w: 200,
-    sd: 0.0,
-    belt_end: [196.0, 186.0],
-    stars: (100, 130.0),
-    anvil_rain: false,
-};
+impl Layout {
+    fn new(w: usize, h: usize) -> Self {
+        let wf = w as f64;
+        let wide = (wf - 200.0) / 120.0;
+        let narrow = clamp((200.0 - wf) / 100.0);
+        // the old 3.2:1 recomposition stood the storm 50 columns east; a
+        // square one brings it in over the farm, which steps toward the edge
+        let sd = if wf >= 200.0 { 50.0 * wide } else { -69.0 * narrow };
+        let top = (h - 100) / 2;
+        Self {
+            w,
+            h,
+            top,
+            hz: HZ + top,
+            sd,
+            fd: -(14.0 * narrow).round() as i64,
+            belt_end: [wf - sd - 4.0, wf - sd - 14.0],
+            stars: ((100.0 + sd).max(0.0) as usize, 130.0 + 1.3 * sd),
+            road: 62.0 - 20.0 * narrow,
+            trail: 0.5 * clamp(wide),
+        }
+    }
+}
 
-const WIDE: Layout = Layout {
-    name: "storm-plains-wide",
-    w: 320,
-    sd: 50.0,
-    belt_end: [296.0, 286.0],
-    stars: (150, 195.0),
-    anvil_rain: true,
-};
-
-pub type StormPlains = Scene<false>;
-pub type StormPlainsWide = Scene<true>;
-
-pub struct Scene<const IS_WIDE: bool> {
+pub struct StormPlains {
+    l: Layout,
     dots: Dots,
     sr: Vec<f32>,
     sg: Vec<f32>,
@@ -236,100 +168,9 @@ pub struct Scene<const IS_WIDE: bool> {
     bolts: Vec<Bolt>,
 }
 
-impl<const IS_WIDE: bool> Scene<IS_WIDE> {
-    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
-    const W: usize = Self::L.w;
-    /// The height-field grid's columns, two cells of margin either side.
-    const SX: usize = Self::W + 4;
-
-    /// A fixed schedule of flashes, some carrying a bolt.
-    fn flash_at(t: f64, bolts: &[Bolt]) -> Option<Flash> {
-        let n = (t / PERIOD).floor();
-        if n > 0.0 && hash(n, 50.0) < 0.25 {
-            return None; // some periods stay dark
-        }
-        let start = if n == 0.0 {
-            -0.08
-        } else {
-            n * PERIOD + 0.2 + hash(n, 51.0) * 1.6
-        };
-        let l = t - start;
-        if !(0.0..=0.9).contains(&l) {
-            return None;
-        }
-        // a stroke and its restrikes, each a sharp rise and a fast decay
-        let mut i = 0.0;
-        let strikes = [0.0, 0.09 + hash(n, 52.0) * 0.06, 0.32 + hash(n, 53.0) * 0.2];
-        for (j, &s) in strikes.iter().enumerate() {
-            if l >= s {
-                let (tau, a) = if j == 0 {
-                    (0.09, 1.0)
-                } else {
-                    (0.06, 0.7 - j as f64 * 0.15)
-                };
-                i += (-(l - s) / tau).exp() * a;
-            }
-        }
-        let bolt = (n == 0.0 || hash(n, 54.0) > 0.55).then_some((n % 4.0) as usize);
-        let (cx, cy) = match bolt {
-            Some(b) => (bolts[b].x, BASE - 8.0),
-            None => (115.0 + Self::L.sd + hash(n, 55.0) * 45.0, 14.0 + hash(n, 56.0) * 24.0),
-        };
-        Some(Flash {
-            i: i.min(1.3),
-            bolt,
-            cx,
-            cy,
-            bolt_on: if bolt.is_some() && l < 0.5 {
-                (i * 1.4).min(1.0)
-            } else {
-                0.0
-            },
-            inside: 0.0,
-        })
-    }
-
-    /// Between the big flashes, the storm keeps flickering inside itself.
-    fn flicker_at(t: f64) -> Option<Flash> {
-        let n0 = (t / FL).floor();
-        let mut n = n0;
-        while n >= n0 - 1.0 && n >= 0.0 {
-            let l = t - (n * FL + 0.35 + hash(n, 70.0) * 0.75);
-            if (0.0..=0.6).contains(&l) {
-                let mut i = 0.0;
-                let pulses = [0.0, 0.08 + hash(n, 71.0) * 0.1, 0.26 + hash(n, 72.0) * 0.18];
-                for (j, &p) in pulses.iter().enumerate() {
-                    if l >= p {
-                        let a = match j {
-                            1 => 0.7,
-                            2 => 0.45,
-                            _ => 1.0,
-                        };
-                        i += (-(l - p) / 0.07).exp() * a;
-                    }
-                }
-                return Some(Flash {
-                    i: i.min(1.0) * (0.25 + 0.2 * hash(n, 73.0)),
-                    bolt: None,
-                    cx: 120.0 + Self::L.sd + hash(n, 74.0) * 38.0,
-                    cy: 15.0 + hash(n, 75.0) * 25.0,
-                    bolt_on: 0.0,
-                    inside: 1.0,
-                });
-            }
-            n -= 1.0;
-        }
-        None
-    }
-}
-
-impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
-    const NAME: &'static str = Self::L.name;
-    const COLS: usize = Self::W;
-    const ROWS: usize = H;
+impl Piece for StormPlains {
+    const NAME: &'static str = "storm-plains";
     const FPS: u32 = 15;
-    const CELL: usize = 1;
-    const FIT: Fit = Fit::Cover { anchor: 0.4 };
     const GROUND: u32 = hex("#0b0912");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[
@@ -351,130 +192,13 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         hex("#ffe08a"), hex("#ffb84a"),
     ];
 
-    fn new() -> Self {
-        let n = Self::W * H;
-
-        // The towers are heaps of puffs: [x, y, radius, bulge toward us, flat].
-        // Each puff is a dome in the height field, so it gets its own lit side
-        // and shadow.
-        let mut puffs: Vec<[f64; 5]> = Vec::new();
-        let mut seed = 1.0;
-        let mut rnd = || {
-            let v = hash(seed, 911.0);
-            seed += 1.0;
-            v
-        };
-        let mut y = BASE - 4.5;
-        while y > 14.0 {
-            let (cx, hw) = (tower_c(y), tower_hw(y));
-            let count = js_round((hw * 2.0) / 11.0).max(2.0);
-            let mut i = 0.0;
-            while i < count {
-                let u = ((i + 0.5) / count) * 2.0 - 1.0;
-                let rr = 7.0 + rnd() * 4.0;
-                let px = cx + u * (hw - rr * 0.55) + (rnd() - 0.5) * 3.0;
-                let py = y + (rnd() - 0.5) * 2.0;
-                puffs.push([px, py, rr, 4.0 * (1.0 - u * u * 0.85).sqrt(), 1.0]);
-                i += 1.0;
-            }
-            y -= 4.4;
-        }
-        // the overshooting top, bulging out of the anvil
-        puffs.extend([
-            [141.0, 8.5, 9.0, 2.0, 0.0],
-            [133.0, 9.5, 6.0, 1.0, 0.0],
-            [149.0, 10.0, 6.0, 1.0, 0.0],
-        ]);
-        // the flanking line: younger towers stepping down to the west
-        for [cx, top, w] in [[104.0, 27.0, 9.0], [89.0, 34.0, 6.5], [77.0, 40.5, 3.8]] {
-            let mut y = BASE - w * 0.4;
-            while y > top + w * 0.6 {
-                let px = cx + (rnd() - 0.5) * w * 0.6;
-                puffs.push([px, y, w * (0.75 + rnd() * 0.2), 1.0, 1.0]);
-                y -= w * 0.75;
-            }
-            puffs.extend([
-                [cx - w * 0.35, top + w * 0.75, w * 0.62, 1.0, 1.0],
-                [cx + w * 0.3, top + w * 0.6, w * 0.7, 1.5, 1.0],
-                [cx, top + w * 0.45, w * 0.55, 2.0, 1.0],
-            ]);
-        }
-        // one continuous low base under the line, so the towers stand on something
-        let mut x = 66.0;
-        while x < 126.0 {
-            let py = BASE - 1.8 - rnd() * 1.2;
-            let pr = 3.0 + rnd() * 1.6 + 1.6 * smooth(70.0, 110.0, x);
-            puffs.push([x, py, pr, 0.4, 1.0]);
-            x += 3.2 + rnd() * 1.6;
-        }
-
-        let mut sh = vec![0f32; Self::SX * SY];
-        let mut anv = vec![0f32; Self::SX * SY]; // how much of the height is anvil
-        let mut lip = vec![0f32; Self::SX * SY]; // the anvil's sunlit top edge
-        for r in 0..SY {
-            for i in 0..Self::SX {
-                let x = i as f64 - 2.0 + 0.5 - Self::L.sd;
-                let y = r as f64 + 0.5;
-                // the towers, cut flat along the base
-                let mut tower: f64 = 0.0;
-                let cut = smooth(
-                    BASE + 1.0,
-                    BASE - 1.5,
-                    y + 1.2 * (noise(x * 0.15, 3.3, 0.0) - 0.5),
-                );
-                for &[px, py, pr, pz, flat] in &puffs {
-                    let (dx, dy) = ((x - px) / pr, (y - py) / pr);
-                    if dx * dx + dy * dy >= 1.0 {
-                        continue;
-                    }
-                    let v = (pr * 0.6 + pz)
-                        * (1.0 - dx * dx - dy * dy).sqrt()
-                        * if flat != 0.0 { cut } else { 1.0 };
-                    if v > tower {
-                        tower = v;
-                    }
-                }
-                // the anvil: flat on top, a lens in section, combed by the wind
-                let fib = fbm(x * 0.035, y * 0.2, 3, 0.0) - 0.5;
-                let top = anvil_top(x) + 2.2 * fib;
-                let bot = anvil_bot(x) - 1.5 * fib - 3.0 * (fbm(x * 0.2, 7.0, 2, 0.0) - 0.5);
-                let (mid, half) = ((top + bot) / 2.0, ((bot - top) / 2.0).max(0.5));
-                let mut anvil = dome(0.0, (y - mid) / half, (half * 0.9).min(5.0))
-                    * smooth(58.0, 72.0, x + 6.0 * fib);
-                let on_top = if anvil > 0.0 {
-                    smooth(top + 3.2, top + 0.6, y)
-                } else {
-                    0.0
-                };
-                // pouches of mammatus hanging under its western half
-                if x > 66.0 && x < 128.0 && y > bot - 2.0 && y < bot + 5.0 {
-                    let row = ((x - 66.0) / 5.2).floor();
-                    let off = row * 5.2 + 66.0 + 2.6 + (hash(row, 3.0) - 0.5) * 1.2;
-                    let py = bot + 0.6 + hash(row, 4.0) * 1.2;
-                    anvil = anvil.max(
-                        dome((x - off) / 2.7, (y - py) / 2.3, 2.2)
-                            * smooth(64.0, 76.0, x)
-                            * smooth(130.0, 116.0, x),
-                    );
-                }
-                let solid = tower;
-                let mut h = solid.max(anvil);
-                let a = if anvil > solid {
-                    smooth(0.0, 2.0, anvil - solid)
-                } else {
-                    0.0
-                };
-                // small billows on the towers; long streaks on the anvil, combed
-                // at a slight slant so they do not line up with the rows
-                let billow = fbm(x * 0.22, y * 0.24, 3, 0.0) - 0.5;
-                let sy = y * 0.18 + 0.9 * (noise(x * 0.04, 5.5, 0.0) - 0.5) + x * 0.012;
-                let streaky = fbm(x * 0.03 + 0.6 * noise(x * 0.08, y * 0.1, 0.0), sy, 3, 0.0) - 0.5;
-                h += (h / 2.5).min(1.0) * mix(3.0 * billow, 2.2 * streaky, a);
-                sh[r * Self::SX + i] = h.max(0.0) as f32;
-                anv[r * Self::SX + i] = a as f32;
-                lip[r * Self::SX + i] = (on_top * a) as f32;
-            }
-        }
+    fn new(cols: usize, rows: usize) -> Self {
+        let l = Layout::new(cols, rows);
+        let (w, h, top, hz, sd) = (l.w, l.h, l.top, l.hz, l.sd);
+        let (topf, hzf, hf, fdf) = (top as f64, hz as f64, h as f64, l.fd as f64);
+        let n = w * h;
+        let sx = w + 4;
+        let Cloud { sh, anv, lip } = Cloud::new(sx, sd);
 
         // static colour of every cell: sky, storm, land
         let (mut sr, mut sg, mut sb) = (vec![0f32; n], vec![0f32; n], vec![0f32; n]);
@@ -486,9 +210,9 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         // per-cell dither jitter, against contour lines
         let jit: Vec<f32> = (0..n)
             .map(|k| {
-                let row = k / Self::W;
-                ((hash((k % Self::W) as f64, row as f64 + 517.0) - 0.5)
-                    * if row < HZ { 0.16 } else { 0.06 }) as f32
+                let row = k / w;
+                ((hash((k % w) as f64, row as f64 + 517.0) - 0.5)
+                    * if row < hz { 0.16 } else { 0.06 }) as f32
             })
             .collect();
 
@@ -497,17 +221,21 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let pump_y = hb - 15.0;
 
         let shf = |v: f32| f64::from(v);
-        for r in 0..H {
-            for xi in 0..Self::W {
+        for r in 0..h {
+            // upstream's row: negative in a tall frame's extra sky
+            let rs = r as i64 - top as i64;
+            for xi in 0..w {
                 let x = xi as f64;
-                let k = r * Self::W + xi;
-                let y = r as f64 + 0.5;
-                if y < ground(x) {
+                let k = r * w + xi;
+                let y = r as f64 + 0.5 - topf;
+                // the farm's column, and its cell for the walls and panes
+                let (xf, xfi) = (x - fdf, xi as i64 - l.fd);
+                if y < ground(xf) {
                     // sky: indigo overhead, dusky rose lower down, amber where the sun went
-                    let v = y / HZF;
-                    let g = glow_sun(x, y);
+                    let v = (y / HZF).max(0.0);
+                    let g = glow_sun(xf, y);
                     // everything after the sun's own glow is the storm's
-                    let x = x - Self::L.sd;
+                    let x = x - sd;
                     let east = smooth(60.0, 190.0, x); // the storm side is cooler and darker
                     let v2 = v.powf(2.2);
                     let veil = 0.9 + 0.2 * fbm(x * 0.05, y * 0.09, 3, 0.0);
@@ -534,14 +262,14 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     cb = mix(cb, mix(0.075, 0.56, slot) * veil, under * 0.92);
                     dark_sky[k] = under as f32;
                     // the storm
-                    if r < SY - 1 {
+                    if (0..SY as i64 - 1).contains(&rs) {
                         let i = xi + 2;
-                        let j = r * Self::SX + i;
+                        let j = rs as usize * sx + i;
                         let h = shf(sh[j]);
                         let c = smooth(0.15, 1.6, h);
                         if c > 0.0 {
-                            let up = if r > 0 { shf(sh[j - Self::SX]) } else { 0.0 };
-                            let dn = shf(sh[j + Self::SX]);
+                            let up = if rs > 0 { shf(sh[j - sx]) } else { 0.0 };
+                            let dn = shf(sh[j + sx]);
                             let (gx, gy) =
                                 ((shf(sh[j + 1]) - shf(sh[j - 1])) / 2.0, (dn - up) / 2.0);
                             let nl = (gx * gx + gy * gy + 1.0).sqrt();
@@ -646,7 +374,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     floor_of[k] = (0.06 - 0.06 * shf(dark_sky[k]).max(shf(dark[k]))) as f32;
                 } else {
                     // land: the afterglow caught only in the far rows near the sun
-                    let g = glow_sun(x, HZF + 1.0) * (-(y - HZF) / 3.2).exp();
+                    let g = glow_sun(xf, HZF + 1.0) * (-(y - HZF) / 3.2).exp();
                     mat[k] = if y < HZF + 4.0 { PLAIN } else { FIELD };
                     sr[k] = (0.06 + 0.55 * g) as f32;
                     sg[k] = (0.045 + 0.3 * g) as f32;
@@ -655,11 +383,11 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 }
 
                 // a shelterbelt of trees on the far horizon, half lost in the rain
-                let xs = x - Self::L.sd;
+                let xs = x - sd;
                 let belt = HZF + 2.0
                     - (1.5 + 2.2 * fbm(xs * 0.3, 2.0, 2, 0.0))
                         * smooth(140.0, 150.0, xs)
-                        * smooth(Self::L.belt_end[0], Self::L.belt_end[1], xs);
+                        * smooth(l.belt_end[0], l.belt_end[1], xs);
                 let belt2 = HZF + 2.0
                     - (1.0 + 1.8 * fbm(x * 0.35, 9.0, 2, 0.0))
                         * smooth(0.0, 4.0, x)
@@ -669,33 +397,33 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 }
 
                 // the cottonwood by the house
-                let (tx, ty) = ((x + 0.5 - 31.0) / 8.5, (y - (hb - 10.0)) / 7.0);
-                let crown = tx * tx + ty * ty < 1.0 + 0.35 * (fbm(x * 0.4, y * 0.4, 2, 0.0) - 0.5);
-                if crown || ((x + 0.5 - 31.5).abs() < 1.0 && y > hb - 6.0 && y < hb + 1.0) {
+                let (tx, ty) = ((xf + 0.5 - 31.0) / 8.5, (y - (hb - 10.0)) / 7.0);
+                let crown = tx * tx + ty * ty < 1.0 + 0.35 * (fbm(xf * 0.4, y * 0.4, 2, 0.0) - 0.5);
+                if crown || ((xf + 0.5 - 31.5).abs() < 1.0 && y > hb - 6.0 && y < hb + 1.0) {
                     mat[k] = TREE;
                 }
 
                 // the farmhouse: two storeys, a gable roof, a chimney, a porch
-                if (HX0..=HX1).contains(&xi) && y >= HW0 && y < hb + 1.0 {
+                if (HX0..=HX1).contains(&xfi) && y >= HW0 && y < hb + 1.0 {
                     mat[k] = HOUSE;
                 }
-                if (HW0 - 7.0..HW0).contains(&y) && (x + 0.5 - 47.5).abs() <= 8.6 - (HW0 - y) * 1.15
+                if (HW0 - 7.0..HW0).contains(&y) && (xf + 0.5 - 47.5).abs() <= 8.6 - (HW0 - y) * 1.15
                 {
                     mat[k] = ROOF;
                 }
-                if (50..=51).contains(&xi) && (HW0 - 8.0..HW0 - 3.0).contains(&y) {
+                if (50..=51).contains(&xfi) && (HW0 - 8.0..HW0 - 3.0).contains(&y) {
                     mat[k] = ROOF;
                 }
-                if (36..HX0).contains(&xi) && y >= hb - 4.0 && y < hb - 3.0 {
+                if (36..HX0).contains(&xfi) && y >= hb - 4.0 && y < hb - 3.0 {
                     mat[k] = ROOF;
                 }
-                if xi == 36 && y >= hb - 3.0 && y < hb {
+                if xfi == 36 && y >= hb - 3.0 && y < hb {
                     mat[k] = HOUSE;
                 }
-                if (49..=51).contains(&xi) && (HW0 + 2.0..HW0 + 5.0).contains(&y) {
+                if (49..=51).contains(&xfi) && (HW0 + 2.0..HW0 + 5.0).contains(&y) {
                     mat[k] = PANE;
                 }
-                if (43..=44).contains(&xi) && (HW0 + 2.0..HW0 + 4.0).contains(&y) {
+                if (43..=44).contains(&xfi) && (HW0 + 2.0..HW0 + 4.0).contains(&y) {
                     mat[k] = PANE;
                 }
 
@@ -703,7 +431,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 let py = y - pump_y;
                 if py > 2.0 && y < hb + 0.5 {
                     let half = 0.4 + py * 0.11;
-                    let dx = x + 0.5 - PUMP_X;
+                    let dx = xf + 0.5 - PUMP_X;
                     if (dx.abs() - half).abs() < 0.55 {
                         mat[k] = PUMP;
                     }
@@ -714,15 +442,15 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             }
         }
 
-        for r in HZ + 3..H {
-            let p = (r as f64 + 0.5 - HZF) / (HF - HZF);
-            for xi in 0..Self::W {
-                let k = r * Self::W + xi;
+        for r in hz + 3..h {
+            let p = (r as f64 + 0.5 - hzf) / (hf - hzf);
+            for xi in 0..w {
+                let k = r * w + xi;
                 if mat[k] != FIELD {
                     continue;
                 }
                 let x = xi as f64;
-                if (x + 0.5 - road_c(p)).abs()
+                if (x - fdf + 0.5 - road_c(p, l.road)).abs()
                     < road_w(p) + 0.6 * (noise(x * 0.3, r as f64 * 0.3, 0.0) - 0.5)
                 {
                     mat[k] = ROAD;
@@ -732,40 +460,40 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
 
         // wheat: stalks in perspective, their columns converging on the
         // farmhouse, tall strokes up close and a fine grain toward the horizon
-        let mut wheat = vec![0f32; H * TW];
+        let mut wheat = vec![0f32; h * TW];
         let mut persp = vec![0f32; n]; // each cell's column in the wheat texture
-        for r in HZ..H {
+        for r in hz..h {
             let rf = r as f64;
-            let p = (rf + 0.5 - HZF) / (HF - HZF);
+            let p = (rf + 0.5 - hzf) / (hf - hzf);
             for u in 0..TW {
                 wheat[r * TW + u] =
                     fbm(u as f64 * 0.55, rf * (0.5 - 0.42 * p), 3, TW as f64 * 0.55) as f32;
             }
-            for x in 0..Self::W {
-                persp[r * Self::W + x] =
-                    (((x as f64 + 0.5 - VX) * 24.0) / (rf + 2.0 - HZF) + 256.0) as f32;
+            for x in 0..w {
+                persp[r * w + x] =
+                    (((x as f64 - fdf + 0.5 - VX) * 24.0) / (rf + 2.0 - hzf) + 256.0) as f32;
             }
         }
         // how much light the field holds: the sun side, the far rows, not the
         // east or the foreground, which sink into the storm's shadow
         let mut field_light = vec![0f32; n];
-        for r in HZ..H {
+        for r in hz..h {
             let y = r as f64 + 0.5;
-            let p = (y - HZF) / (HF - HZF);
-            for xi in 0..Self::W {
+            let p = (y - hzf) / (hf - hzf);
+            for xi in 0..w {
                 let x = xi as f64;
-                let sun_w = (-((x - SUN[0]) / 100.0).powi(2)).exp();
-                let east = smooth(80.0, 130.0, x - Self::L.sd + 10.0 * p);
-                let fore = 1.0 - 0.6 * smooth(HF - 22.0, HF - 2.0, y);
-                field_light[r * Self::W + xi] =
+                let sun_w = (-((x - fdf - SUN[0]) / 100.0).powi(2)).exp();
+                let east = smooth(80.0, 130.0, x - sd + 10.0 * p);
+                let fore = 1.0 - 0.6 * smooth(hf - 22.0, hf - 2.0, y);
+                field_light[r * w + xi] =
                     ((0.72 + 0.45 * sun_w) * (1.0 - 0.35 * east) * fore) as f32;
             }
         }
         // gusts: soft patches of bent, brighter wheat rolling across the field
-        let mut gust = vec![0f32; GW * (H - HZ)];
-        for r in HZ..H {
+        let mut gust = vec![0f32; GW * (h - hz)];
+        for r in hz..h {
             for u in 0..GW {
-                gust[(r - HZ) * GW + u] = smooth(
+                gust[(r - hz) * GW + u] = smooth(
                     0.4,
                     0.7,
                     fbm(u as f64 * 0.025, r as f64 * 0.16, 3, GW as f64 * 0.025),
@@ -787,15 +515,16 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
 
         // stars in the darkest part of the sky
         let mut stars = Vec::new();
-        for r in 0..28 {
-            for x in 0..Self::L.stars.0 {
-                let (xf, rf) = (x as f64, r as f64);
-                if hash(xf, rf * 5.0 + 3.0) > 0.986 && cloud[r * Self::W + x] < 0.05 {
+        for r in 0..28 + top {
+            for x in 0..l.stars.0.min(w) {
+                // upstream's row, so a tall frame's extra sky is starry too
+                let (xf, rf) = (x as f64, r as f64 - topf);
+                if hash(xf, rf * 5.0 + 3.0) > 0.986 && cloud[r * w + x] < 0.05 {
                     stars.push([
-                        (r * Self::W + x) as f64,
+                        (r * w + x) as f64,
                         hash(xf, rf) * 6.28,
                         1.0 + hash(rf, xf) * 2.5,
-                        0.85 * (1.0 - rf / 28.0) * (1.0 - xf / Self::L.stars.1),
+                        0.85 * (1.0 - rf / 28.0).min(1.0) * (1.0 - xf / l.stars.1),
                     ]);
                 }
             }
@@ -804,7 +533,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         // wheat ears right in front of us, bowing with the wind
         let mut ears = Vec::new();
         let mut x = 2.0;
-        while x < Self::W as f64 {
+        while x < w as f64 {
             ears.push([
                 x,
                 8.0 + hash(x * 3.0, 61.0) * 12.0,
@@ -821,75 +550,41 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let shafts = (0..RW)
             .map(|u| smooth(0.47, 0.57, fbm(u as f64 * 0.09375, 0.5, 2, 24.0)) as f32)
             .collect();
-        let col_phase = (0..Self::W)
+        let col_phase = (0..w)
             .map(|x| (hash(x as f64, 77.0) * 40.0) as f32)
             .collect();
-        let col_speed = (0..Self::W)
+        let col_speed = (0..w)
             .map(|x| (22.0 + hash(x as f64, 78.0) * 14.0) as f32)
             .collect();
-        let rain_top = (0..Self::W)
+        // in the frame's rows
+        let rain_top = (0..w)
             .map(|x| {
-                let x = x as f64 - Self::L.sd;
+                let x = x as f64 - sd;
                 let top = shelf_bot(x) - 1.5;
-                if Self::L.anvil_rain {
-                    mix(top, BASE - 7.0, smooth(200.0, 214.0, x)) as f32
+                if l.trail > 0.0 {
+                    (mix(top, BASE - 7.0, smooth(200.0, 214.0, x)) + topf) as f32
                 } else {
-                    top as f32
+                    (top + topf) as f32
                 }
             })
             .collect();
-        let rain_on = (0..Self::W)
+        let rain_on = (0..w)
             .map(|x| {
-                let x = x as f64 - Self::L.sd;
+                let x = x as f64 - sd;
                 // the main curtains, then thinner rain trailing from the anvil
                 let on = smooth(106.0, 118.0, x) * smooth(198.0, 186.0, x);
-                if Self::L.anvil_rain {
-                    (on + 0.5 * smooth(214.0, 226.0, x) * smooth(266.0, 252.0, x)) as f32
+                if l.trail > 0.0 {
+                    (on + l.trail * smooth(214.0, 226.0, x) * smooth(266.0, 252.0, x)) as f32
                 } else {
                     on as f32
                 }
             })
             .collect();
 
-        // lightning: a fixed schedule of flashes, some carrying a bolt
-        let bolts = (0..4)
-            .map(|i| {
-                let i = f64::from(i);
-                let mut segs = Vec::new();
-                walk(
-                    i,
-                    122.0 + Self::L.sd + hash(i, 40.0) * 34.0,
-                    BASE - 4.0,
-                    40.0,
-                    (hash(i, 44.0) - 0.5) * 0.8,
-                    0.0,
-                    &mut segs,
-                );
-                let mut field = vec![99f32; n];
-                for r in 25..HZ + 4 {
-                    for x2 in 80 + Self::L.sd as usize..Self::W {
-                        let x2f = x2 as f64;
-                        let mut m: f64 = 99.0;
-                        for &[ax, ay, bx, by, dep] in &segs {
-                            if (x2f - ax).abs() > 14.0 && (x2f - bx).abs() > 14.0 {
-                                continue;
-                            }
-                            let d = seg_dist(x2f + 0.5, r as f64 + 0.5, ax, ay, bx, by) + dep * 0.5;
-                            if d < m {
-                                m = d;
-                            }
-                        }
-                        field[r * Self::W + x2] = m as f32;
-                    }
-                }
-                Bolt {
-                    x: segs[0][0],
-                    field,
-                }
-            })
-            .collect();
+        let bolts = bolts(w, h, sd, top);
 
         Self {
+            l,
             dots: Dots::new(Self::PALETTE),
             sr,
             sg,
@@ -899,7 +594,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             dark,
             floor_of,
             jit,
-            pump_y,
+            pump_y: pump_y + topf,
             wheat,
             persp,
             field_light,
@@ -920,8 +615,12 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        let mut f = Self::flash_at(t, &self.bolts);
-        let fl = Self::flicker_at(t);
+        let l = &self.l;
+        let (w, h, top, hz) = (l.w, l.h, l.top, l.hz);
+        let (topf, hzf, hf, fdf) = (top as f64, hz as f64, h as f64, l.fd as f64);
+        let base = BASE + topf;
+        let mut f = flash_at(t, &self.bolts, l.sd, topf);
+        let fl = flicker_at(t, l.sd, topf);
         if let Some(fl) = fl {
             if f.is_none_or(|f| f.i < fl.i) {
                 f = Some(fl);
@@ -946,20 +645,20 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let (ear, touched) = (&mut self.ear, &mut self.touched);
         for &[ex, eh, ph, foot, hl] in &self.ears {
             let gi = ((ex as i64) - (g_off * 1.5).floor() as i64).rem_euclid(GW as i64) as usize;
-            let gu = f64::from(self.gust[(H - 1 - HZ) * GW + gi]);
+            let gu = f64::from(self.gust[(h - 1 - hz) * GW + gi]);
             // the inflow blows toward the storm, so every ear bows a little east
             let lean = 0.7 + 0.7 * (t * 1.7 + ph).sin() + 1.8 * gu;
             let tall = eh + hl;
             let mut i = 0.0;
             while i < tall {
-                let y = js_round(HF + foot - i);
+                let y = js_round(hf + foot - i);
                 let q = i / tall;
                 let x = js_round(ex + lean * q * q);
-                if y >= HF || x < 0.0 || x + 1.0 >= Self::W as f64 {
+                if y >= hf || x < 0.0 || x + 1.0 >= w as f64 {
                     i += 1.0;
                     continue;
                 }
-                let k = y as usize * Self::W + x as usize;
+                let k = y as usize * w + x as usize;
                 if i < eh {
                     // the stalk: a thin dark line against the field
                     if ear[k] == 0.0 {
@@ -988,7 +687,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     }
                     // a whisker of awns past the tip
                     if tip && y > 0.0 {
-                        let a = k - Self::W + usize::from(lean > 0.5);
+                        let a = k - w + usize::from(lean > 0.5);
                         if ear[a] < 0.3 {
                             ear[a] = 0.3;
                             touched.push(a);
@@ -999,12 +698,13 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             }
         }
 
-        for r in 0..H {
+        for r in 0..h {
             let y = r as f64 + 0.5;
-            let p = (y - HZF) / (HF - HZF);
-            for xi in 0..Self::W {
+            let p = (y - hzf) / (hf - hzf);
+            for xi in 0..w {
                 let x = xi as f64;
-                let k = r * Self::W + xi;
+                let xf = x - fdf;
+                let k = r * w + xi;
                 let m = self.mat[k];
                 let (mut cr, mut cg, mut cb) = (
                     f64::from(self.sr[k]),
@@ -1015,17 +715,18 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
 
                 if m == SKY {
                     let c = f64::from(self.cloud[k]);
-                    if c < 0.98 && r < HZ {
+                    if c < 0.98 && (top..hz).contains(&r) {
                         // the altostratus, lit gold toward the sun
                         let sx = x + drift;
                         let ixf = sx.floor();
                         let fx = sx - ixf;
                         let ix = ixf as usize;
-                        let s0 = f64::from(self.streak[r * CW + ix % CW]);
-                        let s1 = f64::from(self.streak[r * CW + (ix + 1) % CW]);
-                        let s = (s0 + (s1 - s0) * fx) * (1.0 - c) * smooth(105.0, 55.0, x - Self::L.sd) * 0.75;
+                        let row = (r - top) * CW;
+                        let s0 = f64::from(self.streak[row + ix % CW]);
+                        let s1 = f64::from(self.streak[row + (ix + 1) % CW]);
+                        let s = (s0 + (s1 - s0) * fx) * (1.0 - c) * smooth(105.0, 55.0, x - l.sd) * 0.75;
                         if s > 0.005 {
-                            let sun = (-((x - SUN[0]) / 80.0).powi(2)).exp();
+                            let sun = (-((xf - SUN[0]) / 80.0).powi(2)).exp();
                             cr = mix(cr, 0.5 + 0.5 * sun, s);
                             cg = mix(cg, 0.24 + 0.36 * sun, s);
                             cb = mix(cb, 0.34 + 0.06 * sun, s);
@@ -1041,7 +742,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     let on = f64::from(self.rain_on[xi]);
                     let top = f64::from(self.rain_top[xi]);
                     if on > 0.0 && y > top {
-                        let u = x + (y - BASE) * 0.42 - shaft_off;
+                        let u = x + (y - base) * 0.42 - shaft_off;
                         let ui = (u.floor() as i64).rem_euclid(RW as i64) as usize;
                         let env = f64::from(self.shafts[ui])
                             * on
@@ -1049,7 +750,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                             * (1.0 - c * 0.7);
                         if env > 0.01 {
                             // falling streaks, slanted with the shafts
-                            let col = (x + (y - BASE) * 0.42).floor() as usize % Self::W;
+                            let col = (x + (y - base) * 0.42).floor() as usize % w;
                             let fall = (y * 0.4 - t * f64::from(self.col_speed[col]) * 0.1
                                 + f64::from(self.col_phase[col])
                                 + 1000.0)
@@ -1063,7 +764,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     }
                 } else if m == FIELD || m == PLAIN {
                     let gx = (xi as i64 - (g_off * (0.5 + p)).floor() as i64).rem_euclid(GW as i64);
-                    let gu = f64::from(self.gust[(r - HZ) * GW + gx as usize]);
+                    let gu = f64::from(self.gust[(r - hz) * GW + gx as usize]);
                     let g = f64::from(self.sr[k]) - 0.06; // the gold glint just under the horizon
                     if m == FIELD {
                         // stalks lean with the gust and spring back
@@ -1080,7 +781,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                         cr = 0.04 + 0.7 * l + 0.9 * g;
                         cg = 0.03 + 0.48 * l + 0.48 * g;
                         cb = 0.035 + 0.18 * l + 0.12 * g;
-                        fade = smooth(HF + 10.0, HF - 8.0, y);
+                        fade = smooth(hf + 10.0, hf - 8.0, y);
                     } else {
                         let v = 0.75 + 0.45 * gu;
                         cr *= v;
@@ -1089,9 +790,9 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     }
                     floor = 0.05;
                 } else if m == ROAD {
-                    let sun = 0.5 + 0.5 * (-((x - SUN[0]) / 110.0).powi(2)).exp();
+                    let sun = 0.5 + 0.5 * (-((xf - SUN[0]) / 110.0).powi(2)).exp();
                     let rut =
-                        if ((x + 0.5 - road_c(p)).abs() - road_w(p) * 0.45).abs() < 0.4 + p * 0.8 {
+                        if ((xf + 0.5 - road_c(p, l.road)).abs() - road_w(p) * 0.45).abs() < 0.4 + p * 0.8 {
                             0.6
                         } else {
                             1.0
@@ -1101,11 +802,11 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                         * rut
                         * (1.0 - 0.65 * p);
                     (cr, cg, cb) = (0.08 + 0.42 * l, 0.06 + 0.3 * l, 0.07 + 0.26 * l);
-                    fade = smooth(HF + 10.0, HF - 8.0, y);
+                    fade = smooth(hf + 10.0, hf - 8.0, y);
                     floor = 0.05;
                 } else if m == BELT {
                     // far trees: dark, hazed toward the rain
-                    let h = smooth(130.0, 190.0, x - Self::L.sd);
+                    let h = smooth(130.0, 190.0, x - l.sd);
                     (cr, cg, cb) = (mix(0.07, 0.1, h), mix(0.05, 0.1, h), mix(0.1, 0.17, h));
                     floor = 0.06;
                 } else if m == TREE {
@@ -1114,7 +815,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     floor = 0.03;
                 } else if m == HOUSE || m == PUMP {
                     // back-lit by the afterglow: a dark silhouette with a warm western rim
-                    let rim = if m == HOUSE && xi == HX0 { 0.18 } else { 0.0 };
+                    let rim = if m == HOUSE && xi as i64 - l.fd == HX0 { 0.18 } else { 0.0 };
                     (cr, cg, cb) = (0.07 + rim, 0.05 + rim * 0.55, 0.09 + rim * 0.3);
                     floor = 0.03;
                 } else if m == ROOF {
@@ -1122,7 +823,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     floor = 0.03;
                 } else if m == PANE {
                     let g = 0.88 + 0.12 * (t * 2.3 + x).sin() * (t * 3.7).sin();
-                    let small = if xi < 46 { 0.6 } else { 1.0 };
+                    let small = if (xi as i64 - l.fd) < 46 { 0.6 } else { 1.0 };
                     (cr, cg, cb) = (g * small, 0.72 * g * small, 0.3 * g * small);
                     floor = 0.3;
                 }
@@ -1130,13 +831,13 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 let e = f64::from(self.ear[k]);
                 if e > 0.0 {
                     // a grain head, warm and brightest on its sunward edge
-                    let sun_w = (-((x - SUN[0]) / 120.0).powi(2)).exp();
+                    let sun_w = (-((xf - SUN[0]) / 120.0).powi(2)).exp();
                     let l = e * (0.5 + 0.5 * sun_w);
                     (cr, cg, cb, fade, floor) = (0.95 * l, 0.68 * l, 0.3 * l, 1.0, 0.1);
                 }
 
                 // the windpump's wheel, turning slowly, and its tail vane
-                let (wx, wy) = (x + 0.5 - PUMP_X, y - self.pump_y);
+                let (wx, wy) = (xf + 0.5 - PUMP_X, y - self.pump_y);
                 if wx > -4.0 && wx < 7.0 && wy > -4.0 && wy < 4.0 {
                     let wd = (wx * wx + wy * wy).sqrt();
                     if wd < 3.6
@@ -1151,7 +852,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 }
 
                 // the lit pane's glow on the yard and the wall around it
-                let (lx, ly) = (x + 0.5 - 50.5, y - (HW0 + 3.5));
+                let (lx, ly) = (xf + 0.5 - 50.5, y - (HW0 + 3.5 + topf));
                 if m != PANE && lx * lx + ly * ly < 200.0 {
                     let lg = (-(lx * lx + ly * ly * 2.0).sqrt() / 3.0).exp() * 0.5;
                     cr += lg;
@@ -1193,7 +894,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     cb += 1.0 * lw + amb;
                     if let (Some(b), true) = (f.bolt, f.bolt_on != 0.0) {
                         let d = f64::from(self.bolts[b].field[k]);
-                        if d < 12.0 && (c < 0.6 || y > BASE - 1.0) {
+                        if d < 12.0 && (c < 0.6 || y > base - 1.0) {
                             let core = smooth(1.1, 0.35, d) * f.bolt_on;
                             let glow =
                                 ((-d / 2.0).exp() * 0.55 + (-d / 7.0).exp() * 0.2) * f.bolt_on;

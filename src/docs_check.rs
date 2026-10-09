@@ -1,5 +1,4 @@
-//! Every name in `saver::SAVERS` has a page (a `-wide`, a heading on its
-//! original's). The README's saver index is the
+//! Every name in `saver::SAVERS` has a page. The README's saver index is the
 //! only way in to the per-saver docs, and a saver added to the table without a
 //! row there is undocumented with nothing to say so. lychee (hk) checks the
 //! links that exist; this checks that the link exists at all.
@@ -27,19 +26,13 @@ fn slug(heading: &str) -> String {
 fn every_saver_has_a_doc_page_linked_from_the_readme() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for name in crate::saver::names() {
-        // A `-wide` shares its original's row and page, under its own heading.
-        let (linked, anchor_of_twin) = match crate::saver::twin_of(name) {
-            Some(orig) if name.ends_with("-wide") => (orig, Some(name)),
-            _ => (name, None),
-        };
-        let needle = format!("[`{linked}`](");
+        let needle = format!("[`{name}`](");
         let at = README
             .find(&needle)
-            .unwrap_or_else(|| panic!("README.md has no [`{linked}`](…) link in its saver index"));
+            .unwrap_or_else(|| panic!("README.md has no [`{name}`](…) link in its saver index"));
         let rest = &README[at + needle.len()..];
         let target = &rest[..rest.find(')').expect("unclosed link")];
         let (file, anchor) = target.split_once('#').unwrap_or((target, ""));
-        let anchor = anchor_of_twin.unwrap_or(anchor);
         assert!(
             file.starts_with("docs/savers/"),
             "{name} links to {file}, not a docs/savers/ page"
@@ -59,10 +52,10 @@ fn every_saver_has_a_doc_page_linked_from_the_readme() {
 
 #[test]
 fn slug_matches_github() {
-    assert_eq!(slug(" `night-coast-wide`"), "night-coast-wide");
+    assert_eq!(slug(" `night-coast`"), "night-coast");
     assert_eq!(
         slug(" ascii.rest halftone scenes"),
         "asciirest-halftone-scenes"
     );
-    assert_eq!(slug(" `-wide` variants"), "-wide-variants");
+    assert_eq!(slug(" At any size"), "at-any-size");
 }

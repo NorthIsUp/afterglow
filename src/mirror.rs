@@ -136,13 +136,6 @@ pub struct Mirror {
     /// Bit per `saver::SAVERS` row, set when rotation may pick it. Read only
     /// when a turn is up, never per frame.
     rotation: [AtomicU64; saver::POOL_WORDS],
-    /// Bit per `-wide` row, set while its scene is expanded: the variant a
-    /// click last chose, and so the one rotation shows. One pair, one turn.
-    expanded: [AtomicU64; saver::POOL_WORDS],
-    /// Per row, its pair's other half and whether this row is the `-wide`
-    /// one. Built once here, so the rotation boundary on the render thread
-    /// looks it up rather than formatting a name.
-    twins: Box<[Option<(usize, bool)>]>,
     /// The selection word the render loop last built and announced, so a
     /// `/select` can answer with the saver it asked for rather than the one
     /// it replaced.
@@ -166,23 +159,6 @@ impl Mirror {
             selected: AtomicU64::new(0),
             rotate: AtomicU64::new(0),
             rotation: std::array::from_fn(|_| AtomicU64::new(u64::MAX)),
-            expanded: std::array::from_fn(|w| {
-                AtomicU64::new(
-                    (w * 64..(w * 64 + 64).min(saver::NSAVERS))
-                        .filter(|&i| {
-                            saver::name_at(i).ends_with("-wide")
-                                && saver::twin_of(saver::name_at(i)).is_some()
-                        })
-                        .fold(0, |bits, i| bits | 1 << (i % 64)),
-                )
-            }),
-            twins: saver::names()
-                .map(|n| {
-                    saver::twin_of(n)
-                        .and_then(saver::index_of)
-                        .map(|t| (t, n.ends_with("-wide")))
-                })
-                .collect(),
             applied: Mutex::new(0),
             built: Condvar::new(),
             frame: Mutex::new(Frame::default()),
@@ -220,18 +196,6 @@ impl Mirror {
         let Some(i) = saver::index_of(name) else {
             return false;
         };
-        // Picking one half of a scene's pair is the `expanded` choice, and
-        // rotation follows it. Here and not in `select_at`: rotation moving
-        // on must not change what the viewer chose.
-        if let Some((t, wide)) = self.twins[i] {
-            let w = if wide { i } else { t };
-            let bit = 1u64 << (w % 64);
-            if wide {
-                self.expanded[w / 64].fetch_or(bit, Ordering::Relaxed);
-            } else {
-                self.expanded[w / 64].fetch_and(!bit, Ordering::Relaxed);
-            }
-        }
         self.select_at(i);
         true
     }
@@ -264,37 +228,17 @@ impl Mirror {
         self.rotation[i / 64].load(Ordering::Relaxed) & (1 << (i % 64)) != 0
     }
 
-    /// Is `-wide` row `w` the half its pair shows.
-    fn pickable_half(&self, w: usize) -> bool {
-        self.expanded[w / 64].load(Ordering::Relaxed) & (1 << (w % 64)) != 0
-    }
-
-    /// May rotation pick row `i` now: in rotation, and for a pair, the half
-    /// its `expanded` choice names — the `-wide` until a viewer picks.
-    /// Allocation-free; called at the rotation boundary.
-    pub fn pickable(&self, i: usize) -> bool {
-        self.in_rotation(i)
-            && match self.twins[i] {
-                None => true,
-                Some((_, true)) => self.pickable_half(i),
-                Some((t, false)) => !self.pickable_half(t),
-            }
-    }
-
-    /// Put `name` in or out of rotation, and its `-wide` twin with it: the
-    /// page shows the pair as one row. False for a name that is not a saver.
+    /// Put `name` in or out of rotation. False for a name that is not a
+    /// saver.
     pub fn set_in_rotation(&self, name: &str, on: bool) -> bool {
         let Some(i) = saver::index_of(name) else {
             return false;
         };
-        let name = saver::name_at(i);
-        for i in std::iter::once(i).chain(saver::twin_of(name).and_then(saver::index_of)) {
-            let bit = 1 << (i % 64);
-            if on {
-                self.rotation[i / 64].fetch_or(bit, Ordering::Relaxed);
-            } else {
-                self.rotation[i / 64].fetch_and(!bit, Ordering::Relaxed);
-            }
+        let bit = 1 << (i % 64);
+        if on {
+            self.rotation[i / 64].fetch_or(bit, Ordering::Relaxed);
+        } else {
+            self.rotation[i / 64].fetch_and(!bit, Ordering::Relaxed);
         }
         true
     }
@@ -409,9 +353,8 @@ impl Mirror {
              \"panel_w\":{pw},\"panel_h\":{ph},\"pixel_aspect\":{pa},\"panel_mm\":{pmm},\
              \"cols\":{cols},\"rows\":{rows},\
              \"cell_w\":{cw},\"cell_h\":{ch},\"ground\":{ground},\
-             \"glyph_w\":{gw},\"glyph_h\":{gh},\"groups\":{groups},\"wide\":{wide},\"palette\":[",
+             \"glyph_w\":{gw},\"glyph_h\":{gh},\"groups\":{groups},\"palette\":[",
             groups = groups_json(),
-            wide = wide_json(),
             gw = font::GLYPH_W,
             gh = font::GLYPH_H,
             pw = panel.w,
@@ -556,7 +499,7 @@ fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
                 )
             }
         }
-        // In or out of rotation, by saver (its twin follows) or by group.
+        // In or out of rotation, by saver or by group.
         ("POST", "/rotation") => {
             let on = match param(&query, "on").as_deref() {
                 Some("1") => Some(true),
@@ -697,8 +640,7 @@ fn json_str(v: &str) -> String {
     out
 }
 
-/// The page's list: each group's savers in table order, a `-wide` twin left
-/// out because its scene is listed once — see `wide_json`.
+/// The page's list: each group's savers in table order.
 fn groups_json() -> String {
     let names: Vec<_> = saver::names().collect();
     let groups: Vec<String> = saver::GROUPS
@@ -708,7 +650,7 @@ fn groups_json() -> String {
             let members: Vec<String> = names
                 .iter()
                 .enumerate()
-                .filter(|&(i, n)| saver::group_at(i) == g && !is_twin(n))
+                .filter(|&(i, _)| saver::group_at(i) == g)
                 .map(|(_, n)| json_str(n))
                 .collect();
             format!(
@@ -721,37 +663,11 @@ fn groups_json() -> String {
     format!("[{}]", groups.join(","))
 }
 
-fn is_twin(name: &str) -> bool {
-    name.strip_suffix("-wide")
-        .is_some_and(|base| saver::index_of(base).is_some())
-}
-
-/// Scene -> its full-width twin, for the page's `expanded` toggle.
-fn wide_json() -> String {
-    let pairs: Vec<String> = saver::names()
-        .filter_map(|n| saver::wide_of(n).map(|w| format!("{}:{}", json_str(n), json_str(w))))
-        .collect();
-    format!("{{{}}}", pairs.join(","))
-}
-
 /// Rows out of rotation. The short list, since everything starts in.
 fn excluded_json(mirror: &Mirror) -> String {
     let names: Vec<String> = saver::names()
         .enumerate()
         .filter(|&(i, _)| !mirror.in_rotation(i))
-        .map(|(_, n)| json_str(n))
-        .collect();
-    format!("[{}]", names.join(","))
-}
-
-/// The `-wide` halves whose pair is expanded: what a click on the pair's row
-/// shows and what rotation picks. Live, since a click moves it.
-fn expanded_json(mirror: &Mirror) -> String {
-    let names: Vec<String> = saver::names()
-        .enumerate()
-        .filter(|&(i, n)| {
-            n.ends_with("-wide") && mirror.twins[i].is_some() && mirror.pickable_half(i)
-        })
         .map(|(_, n)| json_str(n))
         .collect();
     format!("[{}]", names.join(","))
@@ -768,10 +684,9 @@ fn meta_json(mirror: &Mirror) -> Option<String> {
     }
     let _ = write!(
         meta,
-        ",\"rotate_secs\":{},\"excluded\":{},\"expanded\":{}}}",
+        ",\"rotate_secs\":{},\"excluded\":{}}}",
         mirror.rotate_secs(),
-        excluded_json(mirror),
-        expanded_json(mirror)
+        excluded_json(mirror)
     );
     Some(meta)
 }
@@ -1584,7 +1499,7 @@ mod tests {
             ),
             "{body}"
         );
-        // A character piece's old `-wide` name reads the piece's knobs.
+        // A port's old `-wide` name reads the port's knobs.
         let body = req(addr, "GET /config?saver=tv-static-wide");
         assert!(body.contains(r#""key":"TV_STATIC_COLOR""#), "{body}");
 
@@ -1680,7 +1595,7 @@ mod tests {
     /// Tour knobs set from the page reach the panel: each write rebuilds the
     /// scene showing, and the rebuilt scene tours by the new values. With
     /// short shots the camera pans by the pixel and zooms to at most 250% of
-    /// the cover cell by default, past it at 600%; then the switch off, and
+    /// the untoured cell by default, past it at 600%; then the switch off, and
     /// nothing moves.
     #[test]
     fn tour_knobs_from_the_page_rebuild_the_scene_with_them() {
@@ -1744,38 +1659,8 @@ mod tests {
         }
     }
 
-    /// `/meta`'s `expanded` is the Rust default until a pick moves it: every
-    /// scene's pair starts on its `-wide`, and a pick of either half sticks.
-    /// Picking by index — rotation, and the startup `SAVER` — moves nothing.
-    /// A character piece is one row, so it is in no pair.
     #[test]
-    fn pairs_start_expanded_and_a_pick_sticks() {
-        let m = Mirror::new(15);
-        scene(&m, "matrix", 2, 2, 8, 16);
-        let expanded = || {
-            let meta = meta_json(&m).unwrap();
-            let tail = meta.rsplit_once(",\"expanded\":").unwrap().1.to_string();
-            tail
-        };
-        let e = expanded();
-        assert!(e.starts_with(r#"["alpine-dawn-wide","#), "{e}");
-        assert!(e.contains(r#""night-coast-wide""#), "{e}");
-        assert!(!e.contains("vinyl"), "{e}");
-        assert_eq!(e.matches("-wide").count(), 13, "{e}");
-
-        m.select_at(saver::index_of("night-coast").unwrap());
-        assert!(expanded().contains(r#""night-coast-wide""#));
-        assert!(m.select("night-coast"));
-        assert!(!expanded().contains("night-coast"));
-        assert!(m.select("vinyl-wide"));
-        assert_eq!(m.selected(), saver::index_of("vinyl").unwrap());
-        assert!(!expanded().contains("vinyl"));
-        assert!(m.select("night-coast-wide"));
-        assert!(expanded().contains(r#""night-coast-wide""#));
-    }
-
-    #[test]
-    fn meta_lists_groups_twins_and_the_rotation() {
+    fn meta_lists_groups_and_the_rotation() {
         let m = Mirror::new(15);
         scene(&m, "matrix", 2, 2, 8, 16);
         let addr = serve_test(&m);
@@ -1786,14 +1671,10 @@ mod tests {
             "{head}"
         );
         assert!(
-            !head.contains(r#""savers":["alpine-dawn","alpine-dawn-wide""#),
+            head.contains(r#""savers":["alpine-dawn","aurora-fjord""#),
             "{head}"
         );
-        assert!(
-            head.contains(r#""night-coast":"night-coast-wide""#),
-            "{head}"
-        );
-        assert!(!head.contains(r#""vinyl":"#), "{head}");
+        assert!(!head.contains("-wide"), "{head}");
         assert!(
             head.contains(r#"{"name":"classics","savers":["ascii","blocks","matrix""#),
             "{head}"
@@ -1801,22 +1682,15 @@ mod tests {
         let tail = |b: &str| b.rsplit_once("]],").unwrap().1.to_string();
         assert!(tail(&body).contains(r#""excluded":[]"#), "{}", tail(&body));
 
-        // A scene takes its twin with it; a group takes every member.
+        // A group takes every member.
         let body = req(addr, "POST /rotation?saver=night-coast&on=0");
         assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
-        assert!(
-            body.ends_with(r#"{"excluded":["night-coast","night-coast-wide"]}"#),
-            "{body}"
-        );
+        assert!(body.ends_with(r#"{"excluded":["night-coast"]}"#), "{body}");
         let body = req(addr, "POST /rotation?group=flights&on=0");
         assert!(body.contains(r#""warp","hypercube","pov""#), "{body}");
         let body = req(addr, "POST /rotation?group=flights&on=1");
-        assert!(
-            body.ends_with(r#"{"excluded":["night-coast","night-coast-wide"]}"#),
-            "{body}"
-        );
-        assert!(tail(&req(addr, "GET /meta"))
-            .contains(r#""excluded":["night-coast","night-coast-wide"]"#));
+        assert!(body.ends_with(r#"{"excluded":["night-coast"]}"#), "{body}");
+        assert!(tail(&req(addr, "GET /meta")).contains(r#""excluded":["night-coast"]"#));
         for bad in [
             "POST /rotation?saver=nope&on=0",
             "POST /rotation?saver=dvd&on=2",
@@ -1830,9 +1704,9 @@ mod tests {
         }
         let body = req(addr, "GET /rotation?saver=dvd&on=0");
         assert!(body.starts_with("HTTP/1.1 405 "), "{body}");
+        // A port's old `-wide` name is the port.
         req(addr, "POST /rotation?saver=night-coast-wide&on=1");
         assert!(tail(&req(addr, "GET /meta")).contains(r#""excluded":[]"#));
-        // A character piece's old `-wide` name is the piece.
         let body = req(addr, "POST /rotation?saver=vinyl-wide&on=0");
         assert!(body.ends_with(r#"{"excluded":["vinyl"]}"#), "{body}");
         req(addr, "POST /rotation?saver=vinyl&on=1");
@@ -1872,7 +1746,10 @@ mod tests {
         assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
         assert!(body.contains(r#"{"saver":"dvd","#), "{body}");
         assert!(body.contains(r#""epoch":2,"#), "{body}");
-        assert!(body.contains(r#""rotate_secs":0,"excluded":[],"expanded":["#));
+        assert!(
+            body.ends_with(r#""rotate_secs":0,"excluded":[]}"#),
+            "{body}"
+        );
     }
 
     /// No render loop (a node with no monitor): `/select` still answers, after
