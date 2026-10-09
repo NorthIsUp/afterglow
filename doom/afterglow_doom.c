@@ -32,6 +32,10 @@ static jmp_buf guard;
 static int guarded, dead;
 static uint32_t now_ms;
 static int light, started;
+// Doom's skill_t (0 = I'm Too Young To Die .. 4 = Nightmare), for the next
+// map; and whether the player is invulnerable.
+static int skill = sk_medium, god = 1;
+static int dead_tics;
 extern int dg_viewpct, dg_fov, dg_hud;
 extern int dg_palnum;
 
@@ -163,7 +167,7 @@ void DG_Autopilot(ticcmd_t *cmd) {
         if (++offlevel % 35 == 0) cmd->buttons |= BT_USE;
         if (offlevel > 35 * 15) {
             int e, m;
-            if (pick_map(&e, &m)) G_DeferedInitNew(gameskill, e, m);
+            if (pick_map(&e, &m)) G_DeferedInitNew(skill, e, m);
             offlevel = 0;
         }
         return;
@@ -172,8 +176,23 @@ void DG_Autopilot(ticcmd_t *cmd) {
     player_t *p = &players[consoleplayer];
     mobj_t *me = p->mo;
     if (!me) return;
-    p->cheats |= CF_GODMODE;
-    p->health = me->health = 100;
+    // Dead: hold on the death view for 3 s, then a new map. Doom itself would
+    // wait for a use press and replay the same map.
+    if (p->playerstate == PST_DEAD) {
+        if (++dead_tics > 35 * 3) {
+            int e, m;
+            if (pick_map(&e, &m)) G_DeferedInitNew(skill, e, m);
+            dead_tics = 0;
+        }
+        return;
+    }
+    dead_tics = 0;
+    if (god) {
+        p->cheats |= CF_GODMODE;
+        p->health = me->health = 100;
+    } else {
+        p->cheats &= ~CF_GODMODE;
+    }
     p->extralight = light;
     for (int w = 0; w < NUMWEAPONS; w++) p->weaponowned[w] = true;
     for (int a = 0; a < NUMAMMO; a++) p->ammo[a] = p->maxammo[a];
@@ -262,7 +281,7 @@ static int pick_map(int *episode, int *map) {
 
 static void reset_autopilot(void) {
     memset(visited, 0, sizeof visited);
-    stuck = still = wander = bored = offlevel = 0;
+    stuck = still = wander = bored = offlevel = dead_tics = 0;
 }
 
 // ---- the API afterglow calls; every entry is guarded ----
@@ -297,8 +316,11 @@ int dgx_init(const char *wad, uint32_t seed) {
 
 // The screen is `width` x 200, the 3D view `pct` of that width with its
 // horizontal field of view `fov` degrees (0: Hor+), and `hud` 1 to overlay
-// the status bar. Before init or after.
-void dgx_view(int width, int pct, int fov, int hud) {
+// the status bar. `skill_1to5` takes effect on the next map, `godmode` at
+// once. Before init or after.
+void dgx_view(int width, int pct, int fov, int hud, int skill_1to5, int godmode) {
+    skill = skill_1to5 < 1 ? 0 : skill_1to5 > 5 ? 4 : skill_1to5 - 1;
+    god = godmode;
     dg_screenwidth = width < ORIGWIDTH ? ORIGWIDTH : width > MAXSCREENWIDTH ? MAXSCREENWIDTH : width;
     dg_viewpct = pct;
     dg_fov = fov;
@@ -314,7 +336,7 @@ int dgx_warp(uint32_t seed, int brightness) {
     GUARD(-1);
     rng ^= seed | 1;
     light = brightness;
-    if (pick_map(&e, &m)) G_DeferedInitNew(sk_hard, e, m);
+    if (pick_map(&e, &m)) G_DeferedInitNew(skill, e, m);
     reset_autopilot();
     guarded = 0;
     return e * 100 + m;

@@ -619,11 +619,18 @@
       input = el("input", { type: "checkbox", checked: k.value === 1 });
       row.append(input, el("span", { textContent: k.label }));
     } else {
+      // A handful of steps (a skill level) reads better as a slider.
+      const slider = k.kind === "num" && k.hi - k.lo <= 10;
       input =
         k.kind === "num"
-          ? el("input", { type: "number", min: k.lo, max: k.hi, step: 1, value: k.value })
+          ? el("input", { type: slider ? "range" : "number", min: k.lo, max: k.hi, step: 1, value: k.value })
           : el("input", { type: "text", value: k.value, maxLength: 64 });
       row.append(el("span", { textContent: k.label }), input);
+      if (slider) {
+        const shown = el("span", { textContent: k.value });
+        input.oninput = () => (shown.textContent = input.value);
+        row.append(shown);
+      }
     }
     input.onchange = async () => {
       const v = k.kind === "bool" ? (input.checked ? 1 : 0) : input.value;

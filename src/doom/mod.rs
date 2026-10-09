@@ -83,6 +83,8 @@ impl Doom {
         let fov = env_num(&["DOOM_FOV"], 0, 0, 170) as i32;
         let pct = env_num(&["DOOM_WIDTH_PCT"], 100, 0, 100) as i32;
         let hud = env_num(&["DOOM_HUD"], 1, 0, 1) as i32;
+        let skill = env_num(&["DOOM_SKILL"], 3, 1, 5) as i32;
+        let god = env_num(&["DOOM_GOD"], 1, 0, 1) as i32;
         let seed = saver_seed(&["DOOM_SEED"], 1);
         let knobs = Knobs {
             map_secs,
@@ -91,6 +93,8 @@ impl Doom {
             fov: if fov == 0 { 0 } else { fov.max(60) },
             pct: if pct == 0 { 100 } else { pct.max(10) },
             hud,
+            skill,
+            god,
             seed,
         };
         Self::build(panel, &wad, &knobs)
@@ -131,6 +135,8 @@ impl Doom {
                 view_pct: k.pct,
                 fov: k.fov,
                 hud: k.hud,
+                skill: k.skill,
+                god: k.god,
                 map_every: (k.map_secs > 0).then(|| Duration::from_secs(k.map_secs)),
                 light: k.light,
             })
@@ -176,6 +182,8 @@ struct Knobs {
     fov: i32,
     pct: i32,
     hud: i32,
+    skill: i32,
+    god: i32,
     seed: u32,
 }
 
