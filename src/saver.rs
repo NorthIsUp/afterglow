@@ -3,6 +3,7 @@
 use std::time::{Duration, Instant};
 
 use crate::ascii_rest::{Canvas, Piece};
+use crate::chess::Chess;
 use crate::city::City;
 use crate::confetti::Confetti;
 use crate::doodles::Doodles;
@@ -124,6 +125,7 @@ macro_rules! savers {
         ("hardrain", |p, fps| Box::new(HardRain::new(p, fps))),
         ("zot", |p, fps| Box::new(Zot::new(p, fps))),
         ("plasma", |p, fps| Box::new(Plasma::new(p, fps))),
+        ("chess", |p, fps| Box::new(Chess::new(p, fps))),
         #[cfg(feature = "doom")]
         ("doom", |p, fps| Box::new(Doom::new(p, fps))),
             $((
@@ -185,6 +187,7 @@ const SECTIONS: &[(&str, usize)] = &[
     ("tactiles", 4),
     ("zot", 4),
     ("plasma", 4),
+    ("chess", 4),
     #[cfg(feature = "doom")]
     ("doom", 2),
 ];

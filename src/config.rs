@@ -254,6 +254,12 @@ pub fn help(key: &str) -> Option<&'static str> {
         "DOOM_LIGHT" => "extra sector light, Doom's gun flash held on; from the next map",
         "DOOM_GAMMA" => "palette brightness lift",
         "DOOM_WAD" => "path to the IWAD; a running engine keeps the one it loaded",
+        "CHESS_THINK_MS" => {
+            "an engine's thinking time per move at full strength; weaker levels use less"
+        }
+        "CHESS_GAMES" => "boards side by side; 0 fits the panel's shape (two on 3.2:1)",
+        "CHESS_LEVEL" => "both engines' strength, 1 weakest .. 5; 0 varies it game to game",
+        "CHESS_RESULT_SECS" => "seconds the result stays up before the next game",
         k if k.ends_with("_SEED") => "0 rolls a new one every build; anything else pins it",
         k if k.ends_with("_CELL_W") || k.ends_with("_CELL_H") || k.ends_with("_CELL") => {
             "cell size in framebuffer pixels"

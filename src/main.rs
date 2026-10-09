@@ -95,6 +95,7 @@
 mod ascii_rest;
 #[cfg(test)]
 mod bench;
+mod chess;
 mod city;
 mod confetti;
 mod config;
