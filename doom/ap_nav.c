@@ -19,6 +19,7 @@
 #include "autopilot.h"
 #include "doomstat.h"
 #include "info.h"
+#include "m_bbox.h"
 #include "p_local.h"
 #include "p_spec.h"
 #include "r_main.h"
@@ -34,6 +35,7 @@ enum { C_TIGHT = 1, C_TIGHTDONE = 2, C_THING = 4, C_STANDDONE = 8 };
 
 typedef struct {
     short line[HITS];
+    short post;  // a post (bar, pillar) the player's flank brushes, or -1
     unsigned char n, flags;
 } edge_t;
 
@@ -41,7 +43,7 @@ int nav_w, nav_h, nav_cs;
 static fixed_t orgx, orgy;
 static int ncells, cap;
 static short *csec;
-static unsigned char *cflags, *penalty;
+static unsigned char *cflags, *penalty, *snap;
 static signed char (*standoff)[2];  // per cell: where to stand, off its centre (127: nowhere)
 static edge_t *edges;  // 4 per cell: E, NE, N, NW
 static int *dist, *par, *gen, *heap, *hpos;
@@ -54,6 +56,8 @@ static int nsec_cap;
 static short *door_line, *lift_line;
 static fixed_t *door_top, *lift_lo, *lift_hi;
 static int *tele_dest;
+static fixed_t *sec_floor, *sec_ceil;
+static unsigned char *sec_dirty, *sec_post;
 static int nline_cap;
 
 static const int DX[8] = {1, 1, 0, -1, -1, -1, 0, 1};
@@ -140,6 +144,10 @@ static void build_sectors(void) {
         door_top = grow(door_top, nsec_cap * sizeof *door_top);
         lift_lo = grow(lift_lo, nsec_cap * sizeof *lift_lo);
         lift_hi = grow(lift_hi, nsec_cap * sizeof *lift_hi);
+        sec_floor = grow(sec_floor, nsec_cap * sizeof *sec_floor);
+        sec_ceil = grow(sec_ceil, nsec_cap * sizeof *sec_ceil);
+        sec_dirty = grow(sec_dirty, nsec_cap);
+        sec_post = grow(sec_post, nsec_cap);
     }
     if (numlines > nline_cap) {
         nline_cap = numlines;
@@ -147,6 +155,13 @@ static void build_sectors(void) {
     }
     for (int i = 0; i < numsectors; i++) {
         door_line[i] = lift_line[i] = -1;
+        sec_floor[i] = sectors[i].floorheight;
+        sec_ceil[i] = sectors[i].ceilingheight;
+        // An island: no wall of its own, only edges onto the floor around it.
+        // Bars and pillars are; a door has jambs.
+        sec_post[i] = sectors[i].linecount >= 3;
+        for (int k = 0; k < sectors[i].linecount; k++)
+            if (!sectors[i].lines[k]->backsector) sec_post[i] = 0;
         door_top[i] = P_FindLowestCeilingSurrounding(&sectors[i]) - 4 * FRACUNIT;
         lift_lo[i] = P_FindLowestFloorSurrounding(&sectors[i]);
         if (lift_lo[i] > sectors[i].floorheight) lift_lo[i] = sectors[i].floorheight;
@@ -181,6 +196,10 @@ void nav_center(int c, fixed_t *x, fixed_t *y) {
 
 int nav_sector(int c) { return c < 0 ? -1 : csec[c]; }
 
+static edge_t *edge(int a, int d, int *rev);
+static int stand(int c);
+static int tight(int c);
+
 void nav_build(void) {
     fixed_t x0 = INT32_MAX, y0 = INT32_MAX, x1 = INT32_MIN, y1 = INT32_MIN;
     for (int i = 0; i < numvertexes; i++) {
@@ -212,6 +231,7 @@ void nav_build(void) {
         heap = grow(heap, cap * sizeof *heap);
         hpos = grow(hpos, cap * sizeof *hpos);
         pdir = grow(pdir, cap);
+        snap = grow(snap, cap);
     }
     memset(cflags, 0, ncells);
     memset(penalty, 0, ncells);
@@ -227,7 +247,8 @@ void nav_build(void) {
     for (thinker_t *t = thinkercap.next; t != &thinkercap; t = t->next) {
         if (t->function.acp1 != (actionf_p1)P_MobjThinker) continue;
         mobj_t *m = (mobj_t *)t;
-        if (!(m->flags & MF_SOLID) || (m->flags & MF_COUNTKILL) || m->player) continue;
+        // Anything with a speed moves off (lost souls are not counted kills).
+        if (!(m->flags & MF_SOLID) || (m->flags & MF_COUNTKILL) || m->info->speed || m->player) continue;
         int r = (m->radius >> FRACBITS) + 12;
         for (int dy = -r; dy <= r; dy += nav_cs / 2)
             for (int dx = -r; dx <= r; dx += nav_cs / 2) {
@@ -238,13 +259,25 @@ void nav_build(void) {
                 if (abs((cx - m->x) >> FRACBITS) < r && abs((cy - m->y) >> FRACBITS) < r) cflags[c] |= C_THING;
             }
     }
+    fx_build();
     build_sectors();
+    // Every edge and standing spot now, at load, so the once-a-second
+    // floods never trace lines.
+    for (int c = 0; c < ncells; c++) {
+        int rev;
+        for (int d = 0; d < 4; d++) {
+            int bx = c % nav_w + DX[d], by = c / nav_w + DY[d];
+            if (bx >= 0 && bx < nav_w && by < nav_h) edge(c, d, &rev);
+        }
+        stand(c);
+        tight(c);
+    }
 }
 
 // ---- edges ----
 
 static short hits[HITS];
-static int nhit, hit_wall, hit_more;
+static int nhit, hit_wall, hit_more, hit_post;
 
 static boolean collect(intercept_t *in) {
     line_t *l = in->d.line;
@@ -264,6 +297,9 @@ static boolean side_wall(intercept_t *in) {
         hit_wall = 1;
         return false;
     }
+    int f = sec_index(l->frontsector), b = sec_index(l->backsector);
+    if (sec_post[f] && fx_moves(f)) hit_post = f;
+    if (sec_post[b] && fx_moves(b)) hit_post = b;
     return true;
 }
 
@@ -274,6 +310,7 @@ static void trace_edge(int a, int b) {
     nav_center(a, &ax, &ay);
     nav_center(b, &bx, &by);
     nhit = hit_wall = hit_more = 0;
+    hit_post = -1;
     P_PathTraverse(ax, ay, bx, by, PT_ADDLINES, collect);
     int sx = (by > ay) - (by < ay), sy = (ax > bx) - (ax < bx);  // perpendicular
     fixed_t ox = sx * 12 * FRACUNIT, oy = sy * 12 * FRACUNIT;
@@ -293,6 +330,7 @@ static edge_t *edge(int a, int d, int *rev) {
         trace_edge(owner, owner + DY[fd] * nav_w + DX[fd]);
         e->flags = E_DONE | (hit_wall ? E_WALL : 0) | (hit_more ? E_MORE : 0);
         e->n = (unsigned char)nhit;
+        e->post = (short)hit_post;
         memcpy(e->line, hits, sizeof hits);
     }
     return e;
@@ -320,9 +358,14 @@ static boolean stand_cb(line_t *l) {
     if (l->frontsector == l->backsector) return true;
     int side = P_PointOnLineSide((fixed_t)(near_x * 65536), (fixed_t)(near_y * 65536), l);
     int there = sec_index(side ? l->frontsector : l->backsector);
-    if (there == stand_sec || lift_line[there] >= 0 || door_line[there] >= 0) return true;
+    // A sector some line moves is judged at search time, by its edges; but a
+    // post (a bar, a pillar) too small to stand in blocks the spot until it
+    // moves (nav_moved), or a path would squeeze between bars.
+    if (there == stand_sec || lift_line[there] >= 0 || door_line[there] >= 0 || fx_moves(stand_sec)) return true;
     sector_t *T = &sectors[there], *H = &sectors[stand_sec];
-    if (T->floorheight - H->floorheight > STEP || T->ceilingheight - H->floorheight < HEADROOM) return stand_bad = 1, false;
+    int moves = fx_moves(there) && !sec_post[there];
+    if (T->floorheight - H->floorheight > STEP && !moves) return stand_bad = 1, false;
+    if (T->ceilingheight - H->floorheight < HEADROOM && !moves) return stand_bad = 1, false;
     return true;
 }
 
@@ -398,17 +441,54 @@ static int tight(int c) {
     return cflags[c] & C_TIGHT;
 }
 
+// Where a floor or ceiling on the move will stop, so a route through it is
+// found while it travels; the hypothesis (ap_effect.c) has none.
+static fixed_t moving_floor(int s) {
+    void *d = sectors[s].specialdata;
+    if (!d || fx_active(s)) return fx_floor(s);
+    thinker_t *t = d;
+    if (t->function.acp1 == (actionf_p1)T_MoveFloor) return ((floormove_t *)d)->floordestheight;
+    return sectors[s].floorheight;
+}
+
+static fixed_t moving_ceil(int s) {
+    void *d = sectors[s].specialdata;
+    if (!d || fx_active(s)) return fx_ceil(s);
+    thinker_t *t = d;
+    if (t->function.acp1 == (actionf_p1)T_VerticalDoor && ((vldoor_t *)d)->direction == 1) return ((vldoor_t *)d)->topheight;
+    return sectors[s].ceilingheight;
+}
+
 static fixed_t ceil_open(int s) {
-    fixed_t c = sectors[s].ceilingheight;
+    fixed_t c = fx_ceil(s), m = moving_ceil(s);
+    if (m > c) c = m;
     return door_line[s] >= 0 && door_top[s] > c ? door_top[s] : c;
 }
 
 static fixed_t floor_lo(int s) {
-    return lift_line[s] >= 0 && lift_lo[s] < sectors[s].floorheight ? lift_lo[s] : sectors[s].floorheight;
+    fixed_t f = fx_floor(s), m = moving_floor(s);
+    if (m < f) f = m;
+    return lift_line[s] >= 0 && lift_lo[s] < f ? lift_lo[s] : f;
 }
 
 static fixed_t floor_hi(int s) {
-    return lift_line[s] >= 0 && lift_hi[s] > sectors[s].floorheight ? lift_hi[s] : sectors[s].floorheight;
+    fixed_t f = fx_floor_hi(s), m = moving_floor(s);
+    if (m > f) f = m;
+    return lift_line[s] >= 0 && lift_hi[s] > f ? lift_hi[s] : f;
+}
+
+// The line to call lift n with from sector s: a switch on their shared edge
+// that faces s, when there is one, since the lift's best switch may face the
+// lift's other side.
+static int lift_call(int n, int s) {
+    sector_t *N = &sectors[n];
+    for (int i = 0; i < N->linecount; i++) {
+        line_t *l = N->lines[i];
+        if (l->frontsector == &sectors[s] && l->backsector == N && l->tag == N->tag && ap_is_lift(l->special) &&
+            ap_is_use(l->special))
+            return (int)(l - lines);
+    }
+    return lift_line[n];
 }
 
 // Over line li from its side `side`. Returns the sector beyond, or -1 if the
@@ -419,12 +499,13 @@ static int cross(int side, int li, player_t *p, int *use, int *cost) {
     int n = sec_index(side ? l->frontsector : l->backsector);
     if (n == s) return n;
     sector_t *S = &sectors[s], *N = &sectors[n];
+    fixed_t sf = fx_floor(s), nf = fx_floor(n), sc = fx_ceil(s), nc = fx_ceil(n);
     fixed_t top = ceil_open(s) < ceil_open(n) ? ceil_open(s) : ceil_open(n);
     fixed_t bot = floor_lo(s) > floor_lo(n) ? floor_lo(s) : floor_lo(n);
     if (floor_lo(n) - floor_hi(s) > STEP || top - bot < HEADROOM) return -1;
-    fixed_t ctop = S->ceilingheight < N->ceilingheight ? S->ceilingheight : N->ceilingheight;
-    fixed_t cbot = S->floorheight > N->floorheight ? S->floorheight : N->floorheight;
-    int now = N->floorheight - S->floorheight <= STEP && ctop - cbot >= HEADROOM;
+    fixed_t ctop = sc < nc ? sc : nc;
+    fixed_t cbot = sf > nf ? sf : nf;
+    int now = (nf - sf <= STEP && ctop - cbot >= HEADROOM) || fx_ranged(s) || fx_ranged(n);
     if (now) return n;
     *cost += 64;
     if (N->specialdata || S->specialdata) {
@@ -432,14 +513,14 @@ static int cross(int side, int li, player_t *p, int *use, int *cost) {
         return n;
     }
     int dkey = ap_door_key(l->special);
-    if (door_line[n] >= 0 && N->ceilingheight - cbot < HEADROOM) {
+    if (door_line[n] >= 0 && nc - cbot < HEADROOM) {
         if (dkey < 0 || l->backsector != N || !ap_has_key(p, dkey)) return -1;
         *use = li;
         return n;
     }
-    if (lift_line[n] >= 0 && N->floorheight - S->floorheight > STEP) {
+    if (lift_line[n] >= 0 && nf - sf > STEP) {
         // The line being crossed may call the lift itself.
-        int li2 = ap_is_lift(l->special) && ap_is_use(l->special) && l->tag == N->tag ? li : lift_line[n];
+        int li2 = ap_is_lift(l->special) && ap_is_use(l->special) && l->tag == N->tag ? li : lift_call(n, s);
         line_t *a = &lines[li2];
         *use = li2;
         *cost += a->frontsector == N || a->backsector == N ? 0 : 256;
@@ -474,6 +555,18 @@ static int tele_cell(int li) {
     return tele_dest[li];
 }
 
+// Cell c is in, or next to, a sector the hypothesis moves.
+static int fx_near(int c) {
+    int cx = c % nav_w, cy = c / nav_w;
+    for (int dy = -1; dy <= 1; dy++)
+        for (int dx = -1; dx <= 1; dx++) {
+            int x = cx + dx, y = cy + dy;
+            if (x >= 0 && y >= 0 && x < nav_w && y < nav_h && csec[y * nav_w + x] >= 0 && fx_active(csec[y * nav_w + x]))
+                return 1;
+        }
+    return 0;
+}
+
 // Walk the edge a->d. Returns the cell it ends in (a teleporter's
 // destination, or the neighbour) or -1, with the cost and any line to use.
 static int walk(int a, int d, player_t *p, int *cost, int *use) {
@@ -483,6 +576,8 @@ static int walk(int a, int d, player_t *p, int *cost, int *use) {
     if (cflags[b] & C_THING) return -1;
     edge_t *e = edge(a, d, &rev);
     if (e->flags & E_WALL) return -1;
+    if (e->post >= 0 && (fx_ceil(e->post) - fx_floor(e->post) < HEADROOM || fx_floor(e->post) - fx_floor(csec[a]) > STEP))
+        return -1;
     if (d & 1) {
         // No cutting corners: a diagonal slips past the end of a wall or a
         // standoff that the player's 16-unit radius cannot.
@@ -532,12 +627,14 @@ static int walk(int a, int d, player_t *p, int *cost, int *use) {
     if (last != csec[b]) {
         // The segment slipped through a vertex and missed the lines there:
         // only a step the player can take as it stands counts.
-        sector_t *S = &sectors[last], *B = &sectors[csec[b]];
-        fixed_t top = S->ceilingheight < B->ceilingheight ? S->ceilingheight : B->ceilingheight;
-        fixed_t bot = S->floorheight > B->floorheight ? S->floorheight : B->floorheight;
-        if (B->floorheight - S->floorheight > STEP || top - bot < HEADROOM) return -1;
+        int B = csec[b];
+        fixed_t top = fx_ceil(last) < fx_ceil(B) ? fx_ceil(last) : fx_ceil(B);
+        fixed_t bot = fx_floor(last) > fx_floor(B) ? fx_floor(last) : fx_floor(B);
+        if (fx_floor(B) - fx_floor(last) > STEP || top - bot < HEADROOM) return -1;
     }
-    if (!stand(b)) return -1;
+    // The cache holds for the real heights; under the hypothesis a cell in or
+    // next to a sector it moves gets the benefit of the doubt.
+    if (!stand(b) && !fx_near(b)) return -1;
     if (tight(b)) *cost += 96;
     int sp = sectors[csec[b]].special;
     if (sp == 4 || sp == 5 || sp == 7 || sp == 11 || sp == 16) *cost += ap_god ? 32 : 400;
@@ -640,6 +737,59 @@ int nav_step(int a, int b, player_t *p, int *use, int *via, fixed_t *tx, fixed_t
     int r = walk(a, d, p, &cost, use) == b ? 0 : -1;
     *via = walk_via;
     return r;
+}
+
+int nav_snapshot(void) {
+    int n = 0;
+    for (int c = 0; c < ncells; c++) n += snap[c] = gen[c] == flood_gen;
+    return n;
+}
+
+int nav_gain(int *lost) {
+    int g = 0, l = 0;
+    for (int c = 0; c < ncells; c++) {
+        int r = gen[c] == flood_gen;
+        g += r && !snap[c];
+        l += !r && snap[c];
+    }
+    *lost = l;
+    return g;
+}
+
+int nav_was_reached(int c) { return c >= 0 && snap[c]; }
+
+void nav_moved(void) {
+    int any = 0;
+    for (int i = 0; i < numsectors; i++) {
+        fixed_t f = sectors[i].floorheight, c = sectors[i].ceilingheight;
+        sec_dirty[i] = f != sec_floor[i] || c != sec_ceil[i];
+        any |= sec_dirty[i];
+        sec_floor[i] = f;
+        sec_ceil[i] = c;
+    }
+    if (!any) return;
+    // Every cell over a moved sector's block box: its own cells, and those
+    // beside it, even when the sector is too thin to own any.
+    for (int i = 0; i < numsectors; i++) {
+        if (!sec_dirty[i]) continue;
+        int *b = sectors[i].blockbox;
+        fixed_t x0 = bmaporgx + (b[BOXLEFT] << MAPBLOCKSHIFT), x1 = bmaporgx + ((b[BOXRIGHT] + 1) << MAPBLOCKSHIFT);
+        fixed_t y0 = bmaporgy + (b[BOXBOTTOM] << MAPBLOCKSHIFT), y1 = bmaporgy + ((b[BOXTOP] + 1) << MAPBLOCKSHIFT);
+        int cx0 = (int)(((int64_t)x0 - orgx) / (nav_cs * FRACUNIT)), cx1 = (int)(((int64_t)x1 - orgx) / (nav_cs * FRACUNIT));
+        int cy0 = (int)(((int64_t)y0 - orgy) / (nav_cs * FRACUNIT)), cy1 = (int)(((int64_t)y1 - orgy) / (nav_cs * FRACUNIT));
+        for (int y = cy0 < 0 ? 0 : cy0; y <= cy1 && y < nav_h; y++)
+            for (int x = cx0 < 0 ? 0 : cx0; x <= cx1 && x < nav_w; x++) cflags[y * nav_w + x] &= ~C_STANDDONE;
+    }
+}
+
+int nav_exits(int c, player_t *p) {
+    int n = 0;
+    if (c < 0) return 0;
+    for (int d = 0; d < 8; d++) {
+        int cost, use;
+        n += walk(c, d, p, &cost, &use) >= 0;
+    }
+    return n;
 }
 
 void nav_penalize(int c) {
