@@ -10,9 +10,15 @@
 //! The engines (`search.rs`) run on a thread per game; the frame loop hands
 //! a position over and polls for the answer through a mutex it only ever
 //! `try_lock`s, so a think never costs a frame.
+//!
+//! A capture is fought out up close (`fight.rs`): the move is played at once
+//! so the next think starts, and only showing its answer waits for the fight.
 
 mod art;
 mod book;
+mod fight;
+mod fight_paint;
+mod fighters;
 mod game;
 mod paint;
 mod rules;
@@ -28,6 +34,7 @@ use crate::surface::{Panel, Surface};
 use crate::{env_num, next_rand, saver_seed};
 
 use art::BG;
+use fight_paint::Span;
 use game::{Dirty, Game, Pace, Phase};
 use paint::{bar_share, square_colours, Art, Canvas, Painter};
 
@@ -122,6 +129,7 @@ struct Knobs {
     games: usize,
     level: u8,
     result: u64,
+    fight_secs: u32,
     seed: u32,
 }
 
@@ -133,6 +141,8 @@ pub struct Chess {
     layouts: Vec<Layout>,
     /// The eval bar's shown share per game, easing toward the engine's.
     shown: Vec<i32>,
+    /// What each board's fight drew last frame, for the next to restore.
+    drawn: Vec<Option<Span>>,
     now: u64,
     started: bool,
 }
@@ -144,6 +154,11 @@ impl Chess {
             games: env_num(&["CHESS_GAMES"], 0, 0, 4) as usize,
             level: env_num(&["CHESS_LEVEL"], 0, 0, 5) as u8,
             result: env_num(&["CHESS_RESULT_SECS"], 6, 1, 60) as u64,
+            fight_secs: if env_num(&["CHESS_FIGHTS"], 1, 0, 1) == 1 {
+                env_num(&["CHESS_FIGHT_SECS"], 3, 1, 10) as u32
+            } else {
+                0
+            },
             seed: saver_seed(&["CHESS_SEED"], 7),
         };
         Self::build(panel, fps, &knobs)
@@ -159,6 +174,7 @@ impl Chess {
             result: fps * k.result,
             think: Duration::from_millis(k.think),
             fps,
+            fight: fps as u32 * k.fight_secs,
         };
         let (n, cell, landscape) = plan(panel, pixel_aspect(), games);
         let grid = Grid::new(panel, cell, cell).with_ground(art::FIXED[BG as usize]);
@@ -190,10 +206,15 @@ impl Chess {
         Self {
             canvas: Canvas::new(grid),
             pal: art::palette(),
-            art: Art { big, mini },
+            art: Art {
+                big,
+                mini,
+                bodies: fighters::bodies(),
+            },
             games,
             layouts,
             shown: vec![500; n],
+            drawn: vec![None; n],
             now: 0,
             started: false,
         }
@@ -210,11 +231,12 @@ impl Saver for Chess {
         }
         self.now += 1;
         let now = self.now;
-        for ((g, l), shown) in self
+        for (((g, l), shown), drawn) in self
             .games
             .iter_mut()
             .zip(&self.layouts)
             .zip(&mut self.shown)
+            .zip(&mut self.drawn)
         {
             g.update(now);
             let Dirty { full, board, info } = std::mem::take(&mut g.dirty);
@@ -234,7 +256,13 @@ impl Saver for Chess {
             if full {
                 p.clear();
             }
-            if full || board {
+            if full {
+                *drawn = None;
+            }
+            if let Some(f) = &g.fight {
+                p.fight(f, drawn);
+            } else if full || board {
+                *drawn = None;
                 p.board(full || !matches!(g.phase, Phase::Glide { t, .. } if t > 0));
             }
             if full || info {

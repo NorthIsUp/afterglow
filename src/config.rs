@@ -260,6 +260,8 @@ pub fn help(key: &str) -> Option<&'static str> {
         "CHESS_GAMES" => "boards side by side; 0 fits the panel's shape (two on 3.2:1)",
         "CHESS_LEVEL" => "both engines' strength, 1 weakest .. 5; 0 varies it game to game",
         "CHESS_RESULT_SECS" => "seconds the result stays up before the next game",
+        "CHESS_FIGHTS" => "captures fought out up close; off, they glide like any move",
+        "CHESS_FIGHT_SECS" => "seconds a capture's fight lasts, zoom in to zoom out",
         "TETRIS_WELLS" => "wells side by side; 0 fits as many as the panel's shape holds",
         "TETRIS_LEVEL" => "level each game starts at; gravity quickens every ten lines",
         "TETRIS_MOVES" => "the AI's moves a second; a game ends where gravity outruns them",

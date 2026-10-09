@@ -61,7 +61,8 @@ FEATURED = {"doom"}
 
 # Savers whose engines think on the wall clock in the default build: dumped
 # paced for the same reason, with what they need to show some play in a clip.
-PACED = {"chess": {"SAVER_DUMP_PACED": "1", "CHESS_THINK_MS": "600"}}
+# Chess's seed is pinned so the clip catches a capture being fought out.
+PACED = {"chess": {"SAVER_DUMP_PACED": "1", "CHESS_THINK_MS": "600", "CHESS_SEED": "1"}}
 
 
 def savers() -> list[str]:
