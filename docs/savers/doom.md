@@ -8,8 +8,8 @@ widescreen in the manner of Crispy Doom: the vertical field of view stays
 classic Doom's, and the horizontal one grows with the width. That gives 90° at
 4:3 and about 106° at 16:9. On pine's 3.2:1 glass it would reach 135°, so it is
 capped at 120°. The view runs the full height of the screen, with the status
-bar drawn over it in the middle. A switch to `doom` starts a new random map, and so does each
-`DOOM_MAP_SECS` after that.
+bar drawn over it in the middle. A switch to `doom` starts a new random map, and
+so does finishing one, dying on one, or `DOOM_MAP_SECS` on the same map.
 
 **Only in the `-doom` image** (`ghcr.io/northisup/afterglow:latest-doom`,
 `:sha-<commit>-doom`). That build compiles in
@@ -19,11 +19,52 @@ Doom in it. See [`THIRD_PARTY.md`](../../THIRD_PARTY.md). Build it with
 `cargo build --release --features doom`, which needs a C compiler, and point
 `DOOM_WAD` at an IWAD. `tools/freedoom.sh` fetches Freedoom Phase 1.
 
-The autopilot turns to the nearest monster it can see and shoots it. Otherwise
-it walks towards the most open, least visited heading, never one with a wall
-within 96 units, and presses use as it goes, which opens doors. If it stands
-still for 2 s, or covers no new ground for 8 s, it jumps to a random item on the
-map. Intermissions and the end-of-episode text are skipped to a new random map.
+The autopilot plays each map to its exit. It fights what it sees on the way,
+opens doors, calls lifts, fetches keys for locked doors, presses switches,
+detours for secrets and nearby pickups, and on a boss map hunts the bosses
+down. In god mode it finishes most of Freedoom's Episode 1 inside
+`DOOM_MAP_SECS`. A finished map shows its tally for 5 s, then a new random map
+starts; so does the end-of-episode text.
+
+### How the autopilot finds its way
+
+At each map load `doom/ap_nav.c` lays a grid of 32-unit cells over the level.
+An edge between neighbouring cells lists the two-sided lines its segment
+crosses, found once with `P_PathTraverse`. Whether the player can cross is
+judged when searching, from the sectors' current heights: a step of at most 24
+units and 56 of headroom. A door it can open (with the key, if locked) counts
+as open. A lift it can call counts as being at whichever end suits. A
+teleporter line leads to its destination. Cells too close to a wall or a ledge
+for the player's 16-unit radius are closed, so routes never grind a corner.
+
+Once a second `doom/autopilot.c` floods that grid from the player (Dijkstra)
+and picks one errand by path cost, in this order:
+
+1. health, when low and god mode is off;
+2. pickups in sight within about 480 units (further, with god mode off, for a
+   first real gun, armour or ammo it is short of);
+3. the exit, once a route reaches it, after any secret sector within reach in
+   the first 90 s;
+4. keys, then secrets, then switches and trigger lines not yet tried;
+5. ground it has not seen, then the monsters still alive.
+
+It follows the path, aiming through the middle of each opening and at the
+farthest cell in a clear straight walk. A door or lift on the way is pressed:
+it walks up, faces the line and uses it, or stands on a lift and waits. A lift
+called from elsewhere becomes an errand first. It strafes along the route while
+turning to shoot the nearest monster it can see. Pressing a switch takes
+priority over turning to fight. A cell it keeps failing to cross gets
+expensive. An errand that fails three times, or takes over 25 s, is dropped.
+If it has not moved 96 units in 15 s, it jumps to a random item.
+
+Some ideas come from Ioan Chera's
+[AutoDoom](https://github.com/ioan-chera/AutoDoom) bot for Eternity: aiming
+through the middle of each opening, and a lift that counts as being at either
+end. No code is taken from it.
+
+`tools/doom-bench/` plays maps headless at full speed and reports exits, time,
+kills, secrets and stuck-jumps. `mise run bench-doom 1 8` plays every Episode 1
+map eight times, in parallel, each run with its own random game.
 
 ## How it runs
 
@@ -52,7 +93,9 @@ map. Intermissions and the end-of-episode text are skipped to a new random map.
   letterboxed.
 
 Source: [`src/doom/`](../../src/doom/mod.rs),
-[`doom/afterglow_doom.c`](../../doom/afterglow_doom.c).
+[`doom/afterglow_doom.c`](../../doom/afterglow_doom.c),
+[`doom/autopilot.c`](../../doom/autopilot.c),
+[`doom/ap_nav.c`](../../doom/ap_nav.c).
 
 ## Knobs
 
@@ -74,8 +117,10 @@ Source: [`src/doom/`](../../src/doom/mod.rs),
 - `DOOM_WAD`: path to the IWAD (default `/freedoom1.wad`, where the `-doom`
   image puts it). Any Doom or Doom II IWAD works. If it can't be read, the saver
   shows static.
-- `DOOM_MAP_SECS`: seconds before a new random map, 0..86400 (default 180). 0
-  changes maps only when you switch to `doom`.
+- `DOOM_MAP_SECS`: the longest one map runs before a new random one, in
+  seconds, 0..86400 (default 300). The clock starts again with each map, so
+  the timer only cuts in when the autopilot is still short of the exit. 0
+  changes maps only on an exit, a death, or a switch to `doom`.
 - `DOOM_GAMMA`: palette brightness lift, 0..4 (default 2).
 - `DOOM_LIGHT`: extra sector light, 0..2 (default 1). This is Doom's gun-flash
   boost held on, so dark rooms don't read as a black panel. It takes effect on

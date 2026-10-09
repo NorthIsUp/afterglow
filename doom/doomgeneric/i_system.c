@@ -116,7 +116,11 @@ static byte *AutoAllocMemory(int *size, int default_ram, int min_ram)
 
         *size = default_ram * 1024 * 1024;
 
-        zonemem = malloc(*size);
+        /* afterglow: slack past the zone's end. The column drawers read up
+           to 127 texels past a post (r_draw.c masks the index, not the
+           length), so a sprite drawn huge whose patch sits at the top of the
+           zone read past the allocation and could fault. */
+        zonemem = malloc(*size + 64 * 1024);
 
         // Failed to allocate?  Reduce zone size until we reach a size
         // that is acceptable.
