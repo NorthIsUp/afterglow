@@ -100,7 +100,7 @@ impl Micropolis {
         let want = Want {
             seed: saver_seed(&["MICROPOLIS_SEED"], 1),
             year_secs: env_num(&["MICROPOLIS_YEAR_SECS"], 40, 1, 3600) as u32,
-            city_mins: env_num(&["MICROPOLIS_CITY_MINS"], 180, 0, 10_080) as u32,
+            city_mins: env_num(&["MICROPOLIS_CITY_MINS"], 120, 0, 10_080) as u32,
             disaster_mins: env_num(&["MICROPOLIS_DISASTER_MINS"], 25, 0, 10_080) as u32,
             bundled_pct: env_num(&["MICROPOLIS_BUNDLED_PCT"], 25, 0, 100) as u32,
         };

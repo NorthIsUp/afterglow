@@ -204,6 +204,19 @@ struct City {
     mayor: Mayor,
     name: Name,
     born: Instant,
+    /// The most people it has had, and the city time it had them.
+    peak: (i32, i32),
+}
+
+impl City {
+    /// Fallen to an eighth of its peak and no better for eight years: a
+    /// ghost town is no screensaver, so the next city starts.
+    fn ruined(&mut self, s: &Stats) -> bool {
+        if s.pop >= self.peak.0 {
+            self.peak = (s.pop, s.city_time);
+        }
+        self.peak.0 > 2000 && s.pop * 8 < self.peak.0 && s.city_time - self.peak.1 > 8 * 48
+    }
 }
 
 struct Runner<'a> {
@@ -253,6 +266,7 @@ impl Runner<'_> {
             mayor: Mayor::new(Self::map(), seed),
             name,
             born: Instant::now(),
+            peak: (0, 0),
         })
     }
 
@@ -301,8 +315,9 @@ fn run(e: &Engine) {
             }
         }
         let now = Instant::now();
-        let old = city.as_ref().is_some_and(|c| {
+        let old = city.as_mut().is_some_and(|c| {
             w.city_mins > 0 && now - c.born >= Duration::from_secs(u64::from(w.city_mins) * 60)
+                || c.ruined(&r.stats)
         });
         if city.is_none() || old {
             city = r.new_city(&w);
@@ -367,6 +382,7 @@ pub fn bench(
     seed: u32,
     years: u32,
     bundled: Option<usize>,
+    disaster_years: u32,
     mut log: impl FnMut(&Stats, &[u16], &Mayor),
 ) {
     let e = Engine::get_unstarted();
@@ -383,6 +399,11 @@ pub fn bench(
     assert!(r.ok(rc) && r.refresh());
     let mut mayor = Mayor::new(Runner::map(), seed);
     for t in 1..=years * TICKS_PER_YEAR {
+        if disaster_years > 0 && t % (disaster_years * TICKS_PER_YEAR) == 0 {
+            let kind = t / (disaster_years * TICKS_PER_YEAR) % 3;
+            println!("disaster {kind}");
+            assert!(r.ok(unsafe { mpx_disaster(kind as c_int) }));
+        }
         assert!(r.ok(unsafe { mpx_step(1) }));
         if t.is_multiple_of(MAYOR_EVERY) {
             assert!(r.refresh());

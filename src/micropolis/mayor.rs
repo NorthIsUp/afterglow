@@ -35,6 +35,8 @@ const MAX_FAILS: u8 = 4;
 /// Mayor calls (two city years) after which an empty zone stops counting as
 /// room to grow.
 const STALE: u32 = 768;
+/// How far a fire station's cover reaches, in blocks.
+const FIRE_REACH: f32 = 3.0;
 const KEPT: u8 = 1;
 const SITE: u8 = 2;
 
@@ -316,37 +318,40 @@ impl Mayor {
 
     /// `None` when every want stands; otherwise whether a tool succeeded.
     fn build(&mut self, map: &[u16], s: &Stats, hands: &mut impl Hands) -> Option<bool> {
-        for i in 0..self.wants.len() {
-            let (want, fails, _) = self.wants[i];
-            let Some((tool, x, y)) = next_step(map, want) else {
-                continue;
-            };
-            if s.funds < tool.cost() {
-                return Some(false);
-            }
-            let r = hands.tool(tool, x, y);
-            if r == OK {
-                self.actions += 1;
-                return Some(true);
-            }
-            if r == NO_MONEY {
-                return Some(false);
-            }
-            if r == NEED_BULLDOZE {
-                if let Want::Building(t, cx, cy) = want {
-                    if clear_site(map, t, cx, cy, hands) {
-                        self.actions += 1;
-                        return Some(true);
-                    }
-                }
-            }
-            self.wants[i].1 = fails + 1;
-            if fails + 1 >= MAX_FAILS {
-                self.wants.remove(i);
-            }
+        // Most urgent first: after a disaster, power before roads before
+        // homes, and the savings wait for the plant rather than going on
+        // roads to a dark city.
+        let (i, (tool, x, y)) = self
+            .wants
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &(w, ..))| next_step(map, w).map(|st| (i, st)))
+            .min_by_key(|&(i, _)| urgency(self.wants[i].0))?;
+        let (want, fails, _) = self.wants[i];
+        if s.funds < tool.cost() {
             return Some(false);
         }
-        None
+        let r = hands.tool(tool, x, y);
+        if r == OK {
+            self.actions += 1;
+            return Some(true);
+        }
+        if r == NO_MONEY {
+            return Some(false);
+        }
+        if r == NEED_BULLDOZE {
+            if let Want::Building(t, cx, cy) = want {
+                if clear_site(map, t, cx, cy, hands) {
+                    self.actions += 1;
+                    return Some(true);
+                }
+            }
+        }
+        self.wants[i].1 = fails + 1;
+        if fails + 1 >= MAX_FAILS {
+            self.wants.remove(i);
+        }
+        Some(false)
     }
 
     fn plan(&mut self, map: &[u16], s: &Stats) -> bool {
@@ -374,24 +379,29 @@ impl Mayor {
             }
             return true;
         }
+        // A plant's worth kept back once the grid is two-thirds drawn, so
+        // growth never outruns power it cannot then afford; and, except from
+        // a stadium, seaport or airport, once the city is a town, so a quake
+        // that topples a plant is not the end.
+        let near_cap = load * 3 > cap * 2;
+        let mut reserve = 800 + if near_cap { Tool::Coal.cost() } else { 0 };
         // A capped zone type grows no more until its stadium, seaport or
         // airport stands: the best thing the money can buy, so save for it.
-        let mut reserve = 800;
+        let mut saving = 0;
         for (cap, have, tool) in [
             (s.res_cap, s.stadium, Tool::Stadium),
             (s.ind_cap, s.seaport, Tool::Seaport),
             (s.com_cap, s.airport, Tool::Airport),
         ] {
             if cap != 0 && have == 0 && self.count(|t| t == tool) == 0 {
-                if s.funds >= tool.cost() + 300 {
+                if s.funds >= tool.cost() + reserve {
                     return self.big(tool);
                 }
-                reserve += tool.cost();
+                saving += tool.cost();
             }
         }
-        // Savings for the next plant once the grid is two-thirds drawn, so
-        // growth never outruns power it cannot then afford.
-        if load * 3 > cap * 2 {
+        reserve += saving;
+        if s.pop > 10_000 && !near_cap {
             reserve += Tool::Coal.cost();
         }
         if s.funds < reserve {
@@ -401,11 +411,13 @@ impl Mayor {
         let police = self.count(|t| t == Tool::Police);
         // A station costs a hundred a year, as much as a whole block's
         // roads: one each early on, more only as the city outgrows them.
-        if police * 40 + 20 <= zones || (s.crime > 100 && police * 20 < zones) {
+        if police * 40 + 20 <= zones || (s.crime > 120 && police * 25 < zones) {
             return self.zone(Tool::Police, Kind::Town);
         }
-        if self.count(|t| t == Tool::Fire) * 60 + 30 <= zones {
-            return self.zone(Tool::Fire, Kind::Town);
+        if zones >= 30 {
+            if let Some(bi) = self.uncovered() {
+                return self.zone_in(Tool::Fire, bi);
+            }
         }
         let want = 1 + zones / 40;
         let mut demand = [
@@ -417,7 +429,8 @@ impl Mayor {
         for (d, tool, kind) in demand {
             // An empty city's valves start near zero; seed all three.
             let starting = zones < 3 && self.count(|t| t == tool) == 0;
-            if (d > 0.0 || starting) && self.vacant(map, tool) < want {
+            let (all, fresh) = self.vacant(map, tool);
+            if (d > 0.0 || starting) && fresh < want && all < want + 2 + zones / 20 {
                 return self.zone(tool, kind);
             }
         }
@@ -444,13 +457,14 @@ impl Mayor {
             .count()
     }
 
-    /// Zones of `tool` nobody has moved into yet, not counting ones left
-    /// empty so long that nobody ever will: the smog or the commute is
-    /// wrong there, and waiting on them would stall the city.
-    fn vacant(&self, map: &[u16], tool: Tool) -> usize {
-        self.wants
+    /// Zones of `tool` nobody has moved into yet: all of them, and those
+    /// zoned in the last two city years. One left empty longer may never
+    /// fill (the smog or the commute is wrong there), so it should not stall
+    /// the city; but a lot of them means more lots would only sit empty too.
+    fn vacant(&self, map: &[u16], tool: Tool) -> (usize, usize) {
+        let empty: Vec<u32> = self
+            .wants
             .iter()
-            .filter(|&&(_, _, born)| self.calls.wrapping_sub(born) < STALE)
             .filter(|(w, ..)| match *w {
                 Want::Building(t, x, y) if t == tool => {
                     let c = tile(map, x, y);
@@ -469,7 +483,13 @@ impl Mayor {
                 }
                 _ => false,
             })
-            .count()
+            .map(|&(_, _, born)| born)
+            .collect();
+        let fresh = empty
+            .iter()
+            .filter(|&&born| self.calls.wrapping_sub(born) < STALE)
+            .count();
+        (empty.len(), fresh)
     }
 
     /// Whether what is built and wanted would draw more than the plants
@@ -490,6 +510,41 @@ impl Mayor {
             })
             .sum();
         cap == 0 || load + unbuilt + 40 > cap * 9 / 10
+    }
+
+    /// An opened block with room for a fire station and none near: a fire
+    /// left to burn takes the district with it, plants and all.
+    fn uncovered(&self) -> Option<usize> {
+        let stations: Vec<(i32, i32)> = self
+            .wants
+            .iter()
+            .filter_map(|(w, ..)| match *w {
+                Want::Building(Tool::Fire, x, y) => Some((x, y)),
+                _ => None,
+            })
+            .collect();
+        let near = |b: &Block| {
+            stations.iter().any(|&(x, y)| {
+                let dx = (x - b.x - BW / 2) as f32 / BW as f32;
+                let dy = (y - b.y - BH / 2) as f32 / BH as f32;
+                dx.hypot(dy) <= FIRE_REACH
+            })
+        };
+        (0..self.blocks.len()).find(|&bi| {
+            let b = &self.blocks[bi];
+            b.kind.is_some() && b.slots.contains(&Slot::Free) && !near(b)
+        })
+    }
+
+    /// Put `tool` in a free slot of block `bi`, which has one.
+    fn zone_in(&mut self, tool: Tool, bi: usize) -> bool {
+        let Some(i) = (0..6).find(|&i| self.blocks[bi].slots[i] == Slot::Free) else {
+            return false;
+        };
+        self.blocks[bi].slots[i] = Slot::Taken;
+        let (x, y) = self.blocks[bi].slot_centre(i);
+        self.want_building(tool, x, y);
+        true
     }
 
     /// Put `tool` (a 3x3) in a free slot of a `kind` block, opening one if
@@ -635,6 +690,19 @@ impl Mayor {
         }
     }
 
+    #[cfg(test)]
+    pub fn top(&self, map: &[u16]) -> String {
+        let mut v: Vec<(u8, String)> = self
+            .wants
+            .iter()
+            .filter_map(|&(w, f, _)| {
+                next_step(map, w).map(|st| (urgency(w), format!("{w:?} f{f} {st:?}")))
+            })
+            .collect();
+        v.sort();
+        format!("{} pending: {:?}", v.len(), &v[..v.len().min(3)])
+    }
+
     /// Want a building, its site closed to power lines, and any line the
     /// mayor meant to run across it forgotten.
     fn want_building(&mut self, tool: Tool, x: i32, y: i32) {
@@ -658,6 +726,19 @@ impl Mayor {
         if !self.wants.iter().any(|(o, ..)| *o == w) {
             self.wants.push((w, 0, self.calls));
         }
+    }
+}
+
+/// Lower builds first.
+fn urgency(w: Want) -> u8 {
+    match w {
+        Want::Building(Tool::Coal | Tool::Nuclear, ..) => 0,
+        Want::Wire(..) | Want::Crossing(..) => 1,
+        Want::Road(..) => 2,
+        Want::Building(Tool::Fire | Tool::Police, ..) => 3,
+        Want::Building(Tool::Res | Tool::Com | Tool::Ind, ..) => 4,
+        Want::Building(..) => 5,
+        Want::Park(..) => 6,
     }
 }
 

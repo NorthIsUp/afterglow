@@ -1,7 +1,8 @@
 # Third-party notices
 
 afterglow is MIT-licensed (see `LICENSE`). Two parts of it derive from other
-people's work, and the `-doom` image adds two more, below.
+people's work, and the GPL image (`-gpl`, also tagged `-doom`) adds three
+more, below.
 
 ## GNU Unifont glyphs
 
@@ -39,7 +40,18 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## doomgeneric (`-doom` image only)
+## The GPL image
+
+Only a `--features doom` or `--features micropolis` build compiles any of
+the code below. The image built with both, published as the `-gpl` tags and
+under the older `-doom` tags too, is a combined work distributed under the GNU
+General Public License v3: Micropolis is GPL-3.0-or-later, and doomgeneric's
+GPL-2.0-or-later allows that. Its complete corresponding source is this
+repository at the commit the tag names (`sha-<commit>-gpl`). The image carries
+the licences under `/licenses/`. afterglow's own source stays MIT. The default
+build and image contain none of it.
+
+## doomgeneric (GPL image only)
 
 `doom/doomgeneric/` is [doomgeneric](https://github.com/ozkl/doomgeneric) at
 `dcb7a8d`, id Software's Doom by way of Chocolate Doom, under the GNU General
@@ -51,15 +63,9 @@ and UI files draw a Hor+ widescreen view with the 320-wide UI centred, in the
 manner of [Crispy Doom](https://github.com/fabiangreffrath/crispy-doom) (also
 GPL-2.0). `i_scale.c`, unused here, is removed.
 
-Only a `--features doom` build compiles any of it. That build, published as the
-`-doom` image tags, is a combined work distributed under the GPL v2: its
-complete corresponding source is this repository at the commit the tag names
-(`sha-<commit>-doom`). afterglow's own source stays MIT. The default build and
-image contain none of it.
+## Freedoom (GPL image only)
 
-## Freedoom (`-doom` image only)
-
-The `-doom` image carries `freedoom1.wad` from
+The GPL image carries `freedoom1.wad` from
 [Freedoom](https://freedoom.github.io/) Phase 1 v0.13.0, fetched and checksummed
 by `tools/freedoom.sh`. Its notice, also at `/licenses/freedoom-COPYING.txt` in
 the image:
@@ -93,3 +99,28 @@ LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
+
+## Micropolis (GPL image only)
+
+`micropolis/engine/` is the simulation engine of
+[MicropolisCore](https://github.com/SimHacker/micropolis) at `c98f6b0`,
+Electronic Arts' 2008 GPL release of SimCity Classic as reworked by Don
+Hopkins, under the GNU General Public License v3 or later with EA's additional
+terms under section 7 (in each source file's header; the licence text is
+`micropolis/COPYING`). Among those terms: no right to the SimCity trademark is
+granted, and modified versions must be marked as such. This one is modified,
+each change marked `afterglow`: `afterglow.h` (new) routes every assert and
+fatal path to the glue's setjmp boundary, `fileio.cpp` opens the bundled
+cities from memory, `micropolis.h` lets the glue read private state, and
+`simulate.cpp` clamps industrial demand where upstream clamped it into
+residential's by mistake. `micropolis/afterglow_micropolis.cpp` links against
+the engine and is under the same licence.
+
+`micropolis/tiles.xpm` (the 16x16 tile set) and the sample cities in
+`micropolis/cities/` come from the same release and licence.
+
+Micropolis is a registered trademark of Micropolis Corporation (Micropolis
+GmbH) and is licensed here as a courtesy of the owner
+([micropolis.com](https://www.micropolis.com)), under the "Micropolis" Public
+Name License in `micropolis/MicropolisPublicNameLicense.txt`. SimCity is a
+trademark of Electronic Arts, which has no part in this.

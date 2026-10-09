@@ -43,9 +43,12 @@ The clips are GIFs in Git LFS; `mise run media` regenerates them
 docker pull ghcr.io/northisup/afterglow:latest   # linux/arm64; also :sha-<commit>
 ```
 
-`:latest-doom` (and `:sha-<commit>-doom`) is the same image plus the
-[`doom`](docs/savers/doom.md) saver and Freedoom. It compiles in GPL-2.0 code,
-so that image is GPL as a whole; the default image is MIT.
+`:latest-gpl` (and `:sha-<commit>-gpl`) is the same image plus the
+[`doom`](docs/savers/doom.md) saver with Freedoom and the
+[`micropolis`](docs/savers/micropolis.md) saver. It compiles in GPL code, so that
+image is GPL-3.0 as a whole; the default image is MIT. Its older `-doom` tags
+still point at it. Micropolis is a registered trademark of Micropolis GmbH,
+licensed here as a courtesy of the owner.
 
 It needs a node with a monitor on HDMI, `/dev/dri/card0`, and a privileged
 container. [`examples/deployment.yaml`](examples/deployment.yaml) is a minimal
@@ -161,7 +164,8 @@ them live — see [Live settings](docs/mirror.md#live-settings-config).
 | [`chess`](docs/savers/chess.md)                  | Two engines playing each other, a game per board — two side by side on 3.2:1 — with gliding pieces, captures fought out Battle Chess style, an eval bar, captured pieces and a scrolling score sheet.                                   |
 | [`tetris`](docs/savers/tetris.md)                | Falling blocks played by an AI, as many wells side by side as the panel's shape holds — four on pine — each its own game to the kill screen.                                                                                            |
 | [`maze-chase`](docs/savers/maze-chase.md)        | A Pac-Man-style maze chase on autopilot: four ghosts with the classic personalities, in a maze generated to fill the panel, new every level.                                                                                            |
-| [`doom`](docs/savers/doom.md)                    | Freedoom on autopilot, one widescreen game on a random map, its field of view sized to the panel. **Only in the `-doom` image, which is GPL** (see the page).                                                                           |
+| [`doom`](docs/savers/doom.md)                    | Freedoom on autopilot, one widescreen game on a random map, its field of view sized to the panel. **Only in the `-gpl` image** (see the page).                                                                                          |
+| [`micropolis`](docs/savers/micropolis.md)        | Micropolis, the open-source SimCity, built by an AI mayor from empty land, disasters and all, under a slow camera that fills the panel. **Only in the `-gpl` image** (see the page).                                                    |
 
 ### ascii.rest halftone scenes
 

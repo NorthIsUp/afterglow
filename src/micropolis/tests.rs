@@ -390,7 +390,9 @@ fn the_engine_grows_a_city_and_survives_an_error() {
 /// micropolis::tests::bench -- --ignored --nocapture` grows a city at full
 /// speed on this thread and prints a line a year. Alone only: it shares the
 /// one simulator with the engine thread. `MP_SEED`, `MP_YEARS`, `MP_CITY`
-/// (a bundled city's index) and `MP_OUT` (a directory for whole-map PPMs).
+/// (a bundled city's index), `MP_DISASTER` (years between disasters),
+/// `MP_OUT` (a directory for whole-map PPMs) and `MP_DEBUG` (what the mayor
+/// is waiting to build).
 #[test]
 #[ignore = "a bench, run alone: it shares the one simulator"]
 fn bench() {
@@ -400,19 +402,28 @@ fn bench() {
     let t0 = Instant::now();
     let mut n = 0;
     let city = std::env::var("MP_CITY").ok().and_then(|s| s.parse().ok());
-    engine::bench(seed, years, city, |s, map, m| {
-        n += 1;
-        if let (Some(dir), true) = (&out, n % 40 == 0) {
-            write_map(&format!("{dir}/map-{}.ppm", s.year), map);
-        }
-        if s.month < 3 {
-            println!(
+    engine::bench(
+        seed,
+        years,
+        city,
+        env("MP_DISASTER").unwrap_or(0),
+        |s, map, m| {
+            n += 1;
+            if let (Some(dir), true) = (&out, n % 4 == 0) {
+                write_map(&format!("{dir}/map-{}.ppm", s.year), map);
+            }
+            if s.month < 3 && std::env::var("MP_DEBUG").is_ok() {
+                println!("  {}", m.top(map));
+            }
+            if s.month < 3 {
+                println!(
                 "{} pop {:>7} funds {:>7} tax {} R{:>5} C{:>5} I{:>5} zones {}/{} coal {} nuc {} police {} fire {} actions {}",
                 s.year, s.pop, s.funds, s.tax, s.res_valve, s.com_valve, s.ind_valve,
                 s.powered, s.unpowered, s.coal, s.nuclear, s.police, s.fire, m.actions
             );
-        }
-    });
+            }
+        },
+    );
     println!("{years} years in {:?}", t0.elapsed());
 }
 
