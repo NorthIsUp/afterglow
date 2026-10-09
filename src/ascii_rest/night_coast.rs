@@ -14,6 +14,7 @@ use std::f64::consts::PI;
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, mix, noise, smooth};
+use super::stretch::Stretch;
 use super::{hex, Piece};
 use crate::grid::Cell;
 
@@ -58,26 +59,16 @@ struct Layout {
 
 impl Layout {
     fn new(w: usize, h: usize) -> Self {
-        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
-        // at square.
-        let (wf, tall) = (w as f64, h as f64 - 100.0);
-        let wide = (wf - 200.0) / 120.0;
-        let narrow = clamp((200.0 - wf) / 100.0);
-        let grow = |at: f64, by_wide: f64, by_narrow: f64| {
-            if wf >= 200.0 {
-                at + by_wide * wide
-            } else {
-                at - by_narrow * narrow
-            }
-        };
+        let s = Stretch::new(w, h);
+        let Stretch { w: wf, tall, .. } = s;
         let horizon = 60.0 + 0.55 * tall;
-        let moon = [grow(150.0, 86.0, 68.0), 19.0 + 0.35 * tall];
-        let far_shore = grow(148.0, 30.0, 68.0);
+        let moon = [s.grow(150.0, 86.0, 68.0), 19.0 + 0.35 * tall];
+        let far_shore = s.grow(148.0, 30.0, 68.0);
         let hummocks = [
             [
-                grow(4.5, 1.5, 1.0),
-                grow(180.0, 108.0, 86.0),
-                grow(26.0, 6.0, 12.0),
+                s.grow(4.5, 1.5, 1.0),
+                s.grow(180.0, 108.0, 86.0),
+                s.grow(26.0, 6.0, 12.0),
             ],
             [
                 3.2 * clamp((wf - 240.0) / 80.0),
@@ -90,13 +81,13 @@ impl Layout {
             h,
             horizon,
             moon,
-            shoulder: [grow(86.0, 16.0, 22.0), grow(50.0, 8.0, 4.0)],
-            trees: [grow(76.0, 16.0, 16.0), grow(78.0, 16.0, 16.0), grow(56.0, 10.0, 10.0)],
-            shore: [grow(90.0, 16.0, 24.0), grow(74.0, 14.0, 18.0)],
+            shoulder: [s.grow(86.0, 16.0, 22.0), s.grow(50.0, 8.0, 4.0)],
+            trees: [s.grow(76.0, 16.0, 16.0), s.grow(78.0, 16.0, 16.0), s.grow(56.0, 10.0, 10.0)],
+            shore: [s.grow(90.0, 16.0, 24.0), s.grow(74.0, 14.0, 18.0)],
             far_shore,
             hummocks,
             buoy: [hummocks[0][1] as usize + 4, (horizon - 5.0) as usize],
-            reach: grow(115.0, 50.0, 50.0),
+            reach: s.grow(115.0, 50.0, 50.0),
         }
     }
 

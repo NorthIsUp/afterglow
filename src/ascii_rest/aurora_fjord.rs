@@ -15,6 +15,7 @@ use std::f64::consts::PI;
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, js_round, mix, noise, sign_or_one, smooth};
+use super::stretch::Stretch;
 use super::{hex, Piece};
 use crate::grid::Cell;
 
@@ -144,8 +145,7 @@ struct Layout {
 impl Layout {
     fn new(w: usize, h: usize) -> Self {
         // `narrow` is 1 at square: the ranges close in on the fjord there.
-        let (wf, tall) = (w as f64, h as f64 - 100.0);
-        let narrow = clamp((200.0 - wf) / 100.0);
+        let Stretch { w: wf, narrow, tall, .. } = Stretch::new(w, h);
         let fjord = if wf >= 200.0 { wf / 2.0 } else { 100.0 - 62.0 * narrow };
         // past 3.2:1 the peaks spread rather than leave the ends bare
         let spread = if wf >= 200.0 { (wf / 320.0).max(1.0) } else { 1.0 - 0.38 * narrow };

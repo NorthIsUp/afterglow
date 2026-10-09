@@ -1,6 +1,7 @@
 //! Where the ghats, their temples, priests and lamps sit in a `w x h` frame.
 
 use crate::ascii_rest::math::{clamp, smooth};
+use crate::ascii_rest::stretch::Stretch;
 
 /// Temple spires: [centre x on upstream's ghats, height in rows, half width
 /// at the base, the narrowest panel that has it]. `x` stretches with the
@@ -73,16 +74,9 @@ pub struct Layout {
 
 impl Layout {
     pub fn new(w: usize, h: usize) -> Self {
-        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
-        // at square.
-        let (wf, tall) = (w as f64, h as f64 - 100.0);
-        let wide = (wf - 200.0) / 120.0;
-        let narrow = clamp((200.0 - wf) / 100.0);
-        let end = if wf >= 200.0 {
-            150.0 + 50.0 * wide
-        } else {
-            150.0 - 80.0 * narrow
-        };
+        let s = Stretch::new(w, h);
+        let Stretch { w: wf, tall, .. } = s;
+        let end = s.grow(150.0, 50.0, 80.0);
         // the ghats' furniture stretches with them
         let k = end / 150.0;
         let sky = (tall * 0.55).round();

@@ -18,6 +18,7 @@ mod lightning;
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, js_round, mix, noise, smooth};
+use super::stretch::Stretch;
 use super::{hex, Piece};
 use crate::font;
 use crate::grid::Cell;
@@ -113,12 +114,11 @@ struct Layout {
 
 impl Layout {
     fn new(w: usize, h: usize) -> Self {
-        let wf = w as f64;
-        let wide = (wf - 200.0) / 120.0;
-        let narrow = clamp((200.0 - wf) / 100.0);
+        let s = Stretch::new(w, h);
+        let Stretch { w: wf, wide, narrow, .. } = s;
         // the old 3.2:1 recomposition stood the storm 50 columns east; a
         // square one brings it in over the farm, which steps toward the edge
-        let sd = if wf >= 200.0 { 50.0 * wide } else { -69.0 * narrow };
+        let sd = s.grow(0.0, 50.0, 69.0);
         let top = (h - 100) / 2;
         Self {
             w,

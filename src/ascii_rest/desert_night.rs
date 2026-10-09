@@ -19,6 +19,7 @@
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, hash, js_hypot, js_round, mix, noise, smooth, unit};
+use super::stretch::Stretch;
 use super::{hex, Piece};
 use crate::grid::Cell;
 
@@ -158,23 +159,13 @@ fn arc_sweep(c: [f64; 2], a0: f64) -> f64 {
 
 impl Layout {
     fn new(w: usize, h: usize) -> Self {
-        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
-        // at square; `tall` is the rows past upstream's 100.
-        let (wf, tall) = (w as f64, h as f64 - 100.0);
-        let wide = (wf - 200.0) / 120.0;
-        let narrow = clamp((200.0 - wf) / 100.0);
-        let grow = |at: f64, by_wide: f64, by_narrow: f64| {
-            if wf >= 200.0 {
-                at + by_wide * wide
-            } else {
-                at - by_narrow * narrow
-            }
-        };
+        let s = Stretch::new(w, h);
+        let Stretch { w: wf, tall, .. } = s;
         // Two thirds of the extra rows are sky: the milky way is the subject.
         let sky = (tall * 0.6).round();
         // The acacia and the core hold 50 columns right of the camera, so
         // narrowing pans the camera left to keep the tree in frame.
-        let cx = grow(100.0, 60.0, 78.0);
+        let cx = s.grow(100.0, 60.0, 78.0);
         let core = [cx + 52.0, 38.0 + sky];
         // A portrait frame turns the arch up so it climbs the extra sky.
         let a0 = -1.035 + 0.45 * clamp(tall / 78.0);
@@ -189,7 +180,7 @@ impl Layout {
             h,
             hz: 64.0 + sky,
             cx,
-            town: [grow(30.0, 50.0, 15.0), 66.0 + sky],
+            town: [s.grow(30.0, 50.0, 15.0), 66.0 + sky],
             core,
             arc,
             arc_s: [a0, 0.8 + sweep],

@@ -216,39 +216,18 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 /// Position in `SAVERS`, or None for a name no saver answers to. The one place
 /// a user-supplied name is validated — `make` cannot report a bad name.
 ///
-/// A name in `WIDE_ALIASES` also answers to its old `<name>-wide`.
+/// An ascii.rest port also answers to `<name>-wide`, its twin's name from
+/// before it drew at any size, so a deployment or bookmark naming the twin
+/// still lands on the port.
 pub fn index_of(name: &str) -> Option<usize> {
     row_of(name).or_else(|| {
         let piece = name.strip_suffix("-wide")?;
-        WIDE_ALIASES.contains(&piece).then(|| row_of(piece))?
+        PIECES
+            .iter()
+            .any(|&(n, _)| n == piece)
+            .then(|| row_of(piece))?
     })
 }
-
-/// The savers that had a `-wide` twin before they drew at any size, so a
-/// deployment or bookmark naming the twin still lands on the saver.
-const WIDE_ALIASES: &[&str] = &[
-    "alpine-dawn",
-    "aurora",
-    "aurora-fjord",
-    "deep-reef",
-    "desert-night",
-    "double-pendulum",
-    "earthrise",
-    "fractal-tree",
-    "kyoto-dusk",
-    "lighthouse",
-    "marine-drive",
-    "misty-forest",
-    "night-coast",
-    "ocean-sunset",
-    "reaction-diffusion",
-    "storm-plains",
-    "synthwave",
-    "taj-dawn",
-    "tv-static",
-    "varanasi-ghats",
-    "vinyl",
-];
 
 /// Position in `SAVERS` of exactly `name`, no aliases.
 fn row_of(name: &str) -> Option<usize> {
@@ -376,7 +355,7 @@ impl Driver {
 
     /// Draw one frame into `buf`, then hand the mirror its cells — after the
     /// flush, so they are the frame that just went to the panel. One atomic
-    /// load with nobody watching; see mirror.rs for why this can never make the
+    /// load with nobody watching; see `mirror` for why this can never make the
     /// display wait.
     #[inline]
     pub fn frame(&mut self, buf: &mut [u32], mirror: &Mirror) -> Damage {
@@ -703,12 +682,11 @@ mod tests {
             t0.elapsed()
         );
     }
-    /// Every former pair's old `-wide` name still reaches it, and nothing
-    /// else gains a `-wide` that never existed. The alias is not a row.
+    /// Every port's old `-wide` name still reaches it, and nothing else
+    /// gains a `-wide` that never existed. The alias is not a row.
     #[test]
-    fn a_former_pair_answers_to_its_old_wide_name() {
-        assert_eq!(WIDE_ALIASES.len(), 21);
-        for n in WIDE_ALIASES {
+    fn a_port_answers_to_its_old_wide_name() {
+        for (n, _) in PIECES {
             let wide = format!("{n}-wide");
             assert_eq!(index_of(&wide), index_of(n), "{wide}");
             assert!(index_of(n).is_some(), "{n}");

@@ -19,6 +19,7 @@ use std::f64::consts::PI;
 
 use super::halftone::{Dots, BAYER};
 use super::math::{clamp, fbm, hash, js_round, mix, noise, smooth};
+use super::stretch::Stretch;
 use super::{hex, Piece};
 use crate::grid::Cell;
 use taj::{mosque, taj};
@@ -84,18 +85,9 @@ struct Layout {
 
 impl Layout {
     fn new(w: usize, h: usize) -> Self {
-        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
-        // at square.
-        let (wf, tall) = (w as f64, h as f64 - 100.0);
-        let wide = (wf - 200.0) / 120.0;
-        let narrow = clamp((200.0 - wf) / 100.0);
-        let grow = |at: f64, by_wide: f64, by_narrow: f64| {
-            js_round(if wf >= 200.0 {
-                at + by_wide * wide
-            } else {
-                at - by_narrow * narrow
-            })
-        };
+        let s = Stretch::new(w, h);
+        let Stretch { w: wf, narrow, tall, .. } = s;
+        let grow = |at, by_wide, by_narrow| js_round(s.grow(at, by_wide, by_narrow));
         let top = js_round(0.6 * tall);
         let cx = grow(128.0, 48.0, 70.0);
         let mx = cx - grow(83.0, 0.0, 42.0);

@@ -19,6 +19,7 @@ use plans::{hall, hill_b, lantern, pagoda, town};
 
 use super::halftone::{Dots, BAYER};
 use super::math::{clamp, fbm, hash, js_round, mix, noise, smooth};
+use super::stretch::Stretch;
 use super::{hex, Piece};
 use crate::font;
 use crate::grid::Cell;
@@ -109,20 +110,10 @@ const PIVOT: f64 = 31.0;
 
 impl Layout {
     fn new(w: usize, h: usize) -> Self {
-        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
-        // at square.
-        let (wf, tall) = (w as f64, h as f64 - 100.0);
-        let wide = (wf - 200.0) / 120.0;
-        let narrow = clamp((200.0 - wf) / 100.0);
-        let grow = |at: f64, by_wide: f64, by_narrow: f64| {
-            if wf >= 200.0 {
-                at + by_wide * wide
-            } else {
-                at - by_narrow * narrow
-            }
-        };
+        let s = Stretch::new(w, h);
+        let Stretch { w: wf, wide, narrow, tall } = s;
         let sky = (tall * 0.25).round();
-        let px = grow(141.0, 85.0, 57.0);
+        let px = s.grow(141.0, 85.0, 57.0);
         // right of the pagoda while there is sky for it, else left of the spire
         let gap = wf - (px + 14.5);
         let moon = if wf >= 200.0 {
@@ -142,9 +133,9 @@ impl Layout {
             px,
             hall: (wf >= 290.0).then_some(px - 60.0),
             moon: moon.map(|v| v.round() as i32),
-            west: [grow(80.0, 10.0, 40.0), grow(120.0, 50.0, 60.0)],
-            west_cloud: grow(90.0, 50.0, 45.0),
-            hills: [grow(70.0, 20.0, 35.0), grow(175.0, 95.0, 75.0)],
+            west: [s.grow(80.0, 10.0, 40.0), s.grow(120.0, 50.0, 60.0)],
+            west_cloud: s.grow(90.0, 50.0, 45.0),
+            hills: [s.grow(70.0, 20.0, 35.0), s.grow(175.0, 95.0, 75.0)],
             town_from: 70.0,
             lx: 53.0,
             lamp: [0.0; 2],
