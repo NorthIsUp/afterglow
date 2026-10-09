@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use super::*;
 use crate::grid::with_test_aspect;
+use crate::mirror::codec::Encoder;
 use crate::saver;
 use crate::testalloc::allocs_during;
 
@@ -289,8 +290,7 @@ fn bench_doom() {
     let (mut render, mut mirror, mut px, mut bytes) = (Duration::ZERO, Duration::ZERO, 0, 0);
     let mut saver_only = Duration::ZERO;
     let mut cells: Vec<Cell> = Vec::new();
-    let mut prev: Vec<Cell> = Vec::new();
-    let mut out: Vec<u8> = Vec::new();
+    let mut enc = Encoder::new();
     let rounds = 600;
     for i in 0..=rounds {
         let (f, w, pl) = &frames[i % frames.len()];
@@ -313,24 +313,14 @@ fn bench_doom() {
         let t = Instant::now();
         cells.clear();
         cells.extend_from_slice(saver::Saver::mirror(&mut r).cells());
-        if prev.len() != cells.len() {
-            prev = vec![Cell::new(u16::MAX, u16::MAX); cells.len()];
-        }
-        out.clear();
-        for (j, (a, b)) in prev.iter().zip(cells.iter()).enumerate() {
-            if a != b {
-                out.extend_from_slice(&(j as u32).to_le_bytes());
-                out.extend_from_slice(&b.raw().to_le_bytes());
-            }
-        }
-        prev.copy_from_slice(&cells);
+        let out = enc.encode(&cells).len();
         let ml = t.elapsed();
         if i > 0 {
             render += el;
             saver_only += rl;
             mirror += ml;
             px += dmg.px();
-            bytes += out.len();
+            bytes += out;
         }
     }
     let per = |d: Duration| d.as_secs_f64() * 1e6 / rounds as f64;

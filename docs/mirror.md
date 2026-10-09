@@ -65,9 +65,22 @@ viewer's own thread.
 
 `GET /stream` is an HTTP/1.1 chunked binary stream — one-way server → client,
 which `fetch` and a stream reader already do, so a WebSocket would buy nothing
-for a hand-rolled SHA-1 and a frame codec. Records are self-describing
-(`u32 count`, then `count * (u32 index, u32 cell)`), which is what makes them
-survive nginx re-chunking them on the way through the gate. `GET /meta` is the
+for a hand-rolled SHA-1 and a frame codec. Records are self-describing, which is
+what makes them survive nginx re-chunking them on the way through the gate, and
+each is the smaller of two kinds (`src/mirror/codec.rs`): **sparse**,
+`u32 count` then `count * (u32 index, u32 cell)`, or **packed**, for a frame
+where most of the grid moved: a table of the frame's distinct cells and one
+index per cell into it, deflated, which the page inflates with the browser's
+own `DecompressionStream`. Doom at pine's shape moves 167k of its 207k cells a
+frame; sparse that was 1.34 MB a frame and 34 MB/s, packed it is ~45–75 KB and
+~1.7 MB/s.
+
+Nothing queues on either side. The server builds each record from the newest
+frame once the socket has taken the last one, caps each viewer at 2 MiB/s, and
+keeps a small send buffer, so a slow browser gets fewer frames, never older
+ones. The page applies records to its own copy of the grid as they arrive and
+paints once per animation frame; a grid with no glyph to blit (doom, `blocks`)
+paints as one scaled image instead of a rectangle per cell. `GET /meta` is the
 geometry, palette and glyph table; `GET /` is the page. `SAVER_HTTP=off`
 removes all of it.
 

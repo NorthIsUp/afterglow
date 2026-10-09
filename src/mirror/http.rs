@@ -4,10 +4,12 @@
 use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::fd::AsRawFd;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use super::codec::Encoder;
 use super::Mirror;
 use crate::config;
 use crate::grid::Cell;
@@ -23,7 +25,16 @@ const MAX_VIEWERS: usize = 4;
 /// browser that went away is noticed instead of parking a thread forever.
 const KEEPALIVE: Duration = Duration::from_secs(10);
 
+/// Bytes a second one viewer may be sent. Doom packs to ~50 KB a frame, so it
+/// streams every frame at 30fps with room to spare; a saver that packs badly
+/// gets fewer frames, not a backlog.
+pub(super) const MAX_RATE: u64 = 2 << 20;
+
+/// `SO_SNDBUF` for a stream; see `small_send_buffer`.
+const SEND_BUFFER: libc::c_int = 256 << 10;
+
 const PAGE: &str = include_str!("mirror.html");
+const STREAM_JS: &str = include_str!("stream.js");
 
 /// Longest interval `POST /rotate` accepts, in minutes — the same day
 /// `SAVER_ROTATE_SECS` tops out at.
@@ -193,6 +204,12 @@ pub(super) fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
             "200 OK",
             "text/html; charset=utf-8",
             PAGE.as_bytes(),
+        ),
+        (_, "/stream.js") => send(
+            &mut s,
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            STREAM_JS.as_bytes(),
         ),
         (_, "/meta") => match meta_json(mirror) {
             Some(meta) => send(&mut s, "200 OK", "application/json", meta.as_bytes()),
@@ -478,9 +495,15 @@ fn send(s: &mut TcpStream, status: &str, ctype: &str, body: &[u8]) -> std::io::R
     s.flush()
 }
 
-/// One viewer: wait for a frame, diff it against what this viewer last saw,
-/// write the changed cells. The diff and the write are both on THIS thread —
-/// the render thread's only involvement is the memcpy in `publish`.
+/// One viewer: wait for a frame, encode what changed since this viewer's last
+/// one, write it. The encode and the write are both on THIS thread — the
+/// render thread's only involvement is the memcpy in `publish`.
+///
+/// Nothing queues. The write blocks until the socket takes the record, and the
+/// next one is built from whatever frame is newest by then, so a viewer that
+/// cannot keep up gets fewer frames rather than older ones. The small send
+/// buffer and the byte cap keep "by then" short: a kernel buffer autotuned to
+/// megabytes is seconds of picture behind at doom's rate.
 fn stream(mirror: &Mirror, mut s: TcpStream, query: &str) -> std::io::Result<()> {
     // The epoch the page read from `/meta`, checked under the same lock
     // `describe` bumps it under, before a viewer slot or a single frame is
@@ -504,6 +527,7 @@ fn stream(mirror: &Mirror, mut s: TcpStream, query: &str) -> std::io::Result<()>
         );
     }
     let _guard = ViewerGuard(mirror);
+    small_send_buffer(&s);
 
     // X-Accel-Buffering: the tailscale-auth gate is nginx, and nginx buffers a
     // proxied response by default — which for a trickle of small chunks means
@@ -517,20 +541,19 @@ fn stream(mirror: &Mirror, mut s: TcpStream, query: &str) -> std::io::Result<()>
     )?;
     s.flush()?;
 
-    let mut prev: Vec<Cell> = Vec::new();
+    let mut enc = Encoder::new();
     let mut cur: Vec<Cell> = Vec::new();
-    let mut out: Vec<u8> = Vec::new();
     let mut last_gen = 0u64;
+    let mut due = Instant::now();
 
     loop {
-        {
+        let fresh = {
             let mut f = mirror.frame.lock().unwrap();
-            while f.gen == last_gen {
-                let (guard, timeout) = mirror.ready.wait_timeout(f, KEEPALIVE).unwrap();
+            let mut timed_out = false;
+            while f.gen == last_gen && !timed_out {
+                let (guard, t) = mirror.ready.wait_timeout(f, KEEPALIVE).unwrap();
                 f = guard;
-                if timeout.timed_out() {
-                    break;
-                }
+                timed_out = t.timed_out();
             }
             // A modeset invalidates geometry, palette and glyph meaning; the
             // page reconnects and re-reads /meta rather than being patched.
@@ -543,34 +566,49 @@ fn stream(mirror: &Mirror, mut s: TcpStream, query: &str) -> std::io::Result<()>
                 return s.flush();
             }
             last_gen = f.gen;
-            cur.clear();
-            cur.extend_from_slice(&f.cells);
-        }
-
-        // `describe` bumps the generation with no cells behind it, so a viewer
-        // that connects during a modeset would otherwise open with an empty
-        // record. Wait for a real frame instead.
-        if cur.is_empty() {
+            // `describe` bumps the generation with no cells behind it; a
+            // viewer that connects during a modeset waits for a real frame.
+            let fresh = !f.cells.is_empty();
+            if fresh {
+                cur.clear();
+                cur.extend_from_slice(&f.cells);
+            }
+            fresh || timed_out
+        };
+        if !fresh {
             continue;
         }
 
-        if prev.len() != cur.len() {
-            prev.clear();
-            prev.resize(cur.len(), NEVER);
+        // An idle stream re-sends `cur` against itself: the empty record,
+        // which is the keepalive that notices a dead socket.
+        let rec = if cur.is_empty() {
+            &0u32.to_le_bytes()[..]
+        } else {
+            enc.encode(&cur)
+        };
+        let start = Instant::now();
+        write_chunk(&mut s, rec)?;
+        due = due.max(start) + Duration::from_secs_f64(rec.len() as f64 / MAX_RATE as f64);
+        if let Some(wait) = due.checked_duration_since(Instant::now()) {
+            std::thread::sleep(wait);
         }
-        out.clear();
-        out.extend_from_slice(&0u32.to_le_bytes());
-        let mut n = 0u32;
-        for (i, (a, b)) in prev.iter().zip(cur.iter()).enumerate() {
-            if a != b {
-                out.extend_from_slice(&(i as u32).to_le_bytes());
-                out.extend_from_slice(&b.raw().to_le_bytes());
-                n += 1;
-            }
-        }
-        out[..4].copy_from_slice(&n.to_le_bytes());
-        prev.copy_from_slice(&cur);
-        write_chunk(&mut s, &out)?;
+    }
+}
+
+/// Cap the kernel's queue for this viewer at roughly one packed frame plus
+/// headroom for a long-RTT link: ~5 MB/s at 50 ms, more than `MAX_RATE`.
+fn small_send_buffer(s: &TcpStream) {
+    let size: libc::c_int = SEND_BUFFER;
+    // SAFETY: a valid socket fd and an int-sized option value, as the call
+    // documents; failure leaves the default buffer, which only costs latency.
+    unsafe {
+        libc::setsockopt(
+            s.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            (&raw const size).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
     }
 }
 

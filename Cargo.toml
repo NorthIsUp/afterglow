@@ -23,6 +23,9 @@ libc = "0.2"
 # Safe u8 -> u32 view of the mapped buffer. A 4-byte-per-pixel slice copy per
 # pixel was the hot path; one u32 store is a single bounds-checked write.
 bytemuck = "1"
+# Deflate for the mirror's packed frames, which the browser inflates natively
+# (`DecompressionStream`). Pure Rust, so the static musl build stays C-free.
+miniz_oxide = "0.9"
 
 [features]
 # Doom, compiled in from doomgeneric (GPL-2.0). Off by default: a binary built
