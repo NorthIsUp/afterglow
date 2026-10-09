@@ -82,7 +82,7 @@ impl Doom {
         let light = env_num(&["DOOM_LIGHT"], 1, 0, 2) as i32;
         let fov = env_num(&["DOOM_FOV"], 0, 0, 170) as i32;
         let pct = env_num(&["DOOM_WIDTH_PCT"], 100, 0, 100) as i32;
-        let hud = env_num(&["DOOM_HUD"], 1, 0, 1) as i32;
+        let hud = env_num(&["DOOM_HUD"], 0, 0, 1) as i32;
         let skill = env_num(&["DOOM_SKILL"], 3, 1, 5) as i32;
         let god = env_num(&["DOOM_GOD"], 1, 0, 1) as i32;
         let seed = saver_seed(&["DOOM_SEED"], 1);
