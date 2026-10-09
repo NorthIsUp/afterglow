@@ -13,19 +13,12 @@ view controls (`actual ratio / size / calibrate`, below). The list is grouped �
 from `/meta`, built from one table in `saver.rs`, so the page knows no saver by
 name. Type in the filter box to narrow it; up/down and enter pick from the
 keyboard, escape clears. The saver on the panel is highlighted and scrolled into
-view, including after a rotation. A scene and its full-width `-wide` twin are
-one row, with an `expanded` toggle in the bar that switches between them. Every
-pair starts expanded: clicking its row shows the `-wide` until someone unticks
-`expanded` for it, and then its original from then on, for every viewer — the
-choice is the server's, per pair, and `/meta` lists the expanded ones as
-`expanded`. A character piece has no twin: it draws at the panel's own shape,
-so it is a plain row. Its old `-wide` name still selects it. Under 720 px
-wide the list becomes a drawer behind the button above the canvas.
+view, including after a rotation. Every saver is one row: the scenes and
+character pieces draw at the panel's own shape, and a port's old `-wide` name
+still selects it. Under 720 px wide the list becomes a drawer behind the button above the canvas.
 
 Each row has a tick box for whether rotation may pick it, and each group heading
-one for the whole group (half-ticked when some are in). A scene's box covers its
-`-wide` twin as well, and the pair takes one turn: rotation shows whichever half
-`expanded` is set to. Everything out with the timer on is a pause, and the bar says
+one for the whole group (half-ticked when some are in). Everything out with the timer on is a pause, and the bar says
 so in red. A saver out of rotation still shows when clicked.
 
 A click is one round trip. The row and the name change at once, the canvas
@@ -83,9 +76,8 @@ loop has built it, or after two seconds with only `{"saver":…}` (no monitor, s
 no render loop). `POST /rotate?mins=N` sets the rotation interval and
 `POST /rotation?saver=<name>&on=0|1` (or `group=<name>`) who it may pick — see
 [Rotating on a timer](rotation.md). `/meta`
-carries the list's `groups` (`[{"name","savers"}]`, a `-wide` twin left out),
-`wide` (scene → twin), and the live `rotate_secs` and `excluded` (savers out of
-rotation). `GET /stat` is the live counters — `{"overruns":N,"viewers":N,"fps":N}`.
+carries the list's `groups` (`[{"name","savers"}]`) and the live
+`rotate_secs` and `excluded` (savers out of rotation). `GET /stat` is the live counters — `{"overruns":N,"viewers":N,"fps":N}`.
 `overruns` is frames that ran past the frame budget, which is what a raised
 `SAVER_FPS` against the pod's 500m CFS quota shows up as: the render loop is
 stopped mid-period and runs a burst, and the burst is visible stutter on the

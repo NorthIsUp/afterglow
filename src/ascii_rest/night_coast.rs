@@ -5,19 +5,18 @@
 //! Upstream's `Float32Array`s stay `f32` here: their rounding is part of the
 //! picture, and an f64 copy drifts off the golden at dither boundaries.
 //!
-//! `night-coast-wide` is the same coast recomposed for a 3.2:1 panel. The
-//! headland keeps the left; the open sea runs on to a low far shore with two
-//! hummocks either side of the moon's road, and the beam reaches further.
+//! At any size the headland keeps the left and the open sea the rest: wider
+//! panels push the moon, the far shore and the beam's reach out with the
+//! frame and raise a second hummock beside the moon's road; narrower ones draw
+//! the headland in to the cottage; taller ones add sky above and sea below.
 
 use std::f64::consts::PI;
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, mix, noise, smooth};
-use super::{Fit, Piece, hex};
+use super::{hex, Piece};
 use crate::grid::Cell;
 
-const H: usize = 100;
-const HORIZON: f64 = 60.0;
 const LAMP_X: f64 = 30.0;
 /// Cloud field width: the clouds wrap at this many columns.
 const CW: usize = 640;
@@ -33,11 +32,12 @@ const PANE: u8 = 7;
 const ROOF: u8 = 8;
 const ISLE: u8 = 9;
 
-/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+/// Where things sit in a `w x h` frame. Upstream's 200x100 is the anchor
+/// every value moves from, so there it is exact.
 struct Layout {
-    name: &'static str,
     w: usize,
-    anchor: f64,
+    h: usize,
+    horizon: f64,
     moon: [f64; 2],
     /// Where the headland falls from its crown to the sea.
     shoulder: [f64; 2],
@@ -47,46 +47,68 @@ struct Layout {
     shore: [f64; 2],
     /// Where the far shore starts.
     far_shore: f64,
-    /// Its hummocks: [height, centre, half width].
-    hummocks: &'static [[f64; 3]],
-    /// The buoy light's column, on row 55.
-    buoy: usize,
+    /// Its hummocks: [height, centre, half width]; the second only on a
+    /// panel wide enough to hold it beside the moon's road.
+    hummocks: [[f64; 3]; 2],
+    /// The buoy light, on the big hummock's crown.
+    buoy: [usize; 2],
     /// How far the beam reaches when it runs across the frame.
     reach: f64,
 }
 
-const ORIGINAL: Layout = Layout {
-    name: "night-coast",
-    w: 200,
-    anchor: 0.3,
-    moon: [150.0, 19.0],
-    shoulder: [86.0, 50.0],
-    trees: [76.0, 78.0, 56.0],
-    shore: [90.0, 74.0],
-    far_shore: 148.0,
-    hummocks: &[[4.5, 180.0, 26.0]],
-    buoy: 184,
-    reach: 115.0,
-};
+impl Layout {
+    fn new(w: usize, h: usize) -> Self {
+        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
+        // at square.
+        let (wf, tall) = (w as f64, h as f64 - 100.0);
+        let wide = (wf - 200.0) / 120.0;
+        let narrow = clamp((200.0 - wf) / 100.0);
+        let grow = |at: f64, by_wide: f64, by_narrow: f64| {
+            if wf >= 200.0 {
+                at + by_wide * wide
+            } else {
+                at - by_narrow * narrow
+            }
+        };
+        let horizon = 60.0 + 0.55 * tall;
+        let moon = [grow(150.0, 86.0, 68.0), 19.0 + 0.35 * tall];
+        let far_shore = grow(148.0, 30.0, 68.0);
+        let hummocks = [
+            [
+                grow(4.5, 1.5, 1.0),
+                grow(180.0, 108.0, 86.0),
+                grow(26.0, 6.0, 12.0),
+            ],
+            [
+                3.2 * clamp((wf - 240.0) / 80.0),
+                far_shore + (moon[0] - far_shore) * 27.0 / 58.0,
+                18.0,
+            ],
+        ];
+        Self {
+            w,
+            h,
+            horizon,
+            moon,
+            shoulder: [grow(86.0, 16.0, 22.0), grow(50.0, 8.0, 4.0)],
+            trees: [grow(76.0, 16.0, 16.0), grow(78.0, 16.0, 16.0), grow(56.0, 10.0, 10.0)],
+            shore: [grow(90.0, 16.0, 24.0), grow(74.0, 14.0, 18.0)],
+            far_shore,
+            hummocks,
+            buoy: [hummocks[0][1] as usize + 4, (horizon - 5.0) as usize],
+            reach: grow(115.0, 50.0, 50.0),
+        }
+    }
 
-const WIDE: Layout = Layout {
-    name: "night-coast-wide",
-    w: 320,
-    anchor: 0.5,
-    moon: [236.0, 19.0],
-    shoulder: [102.0, 58.0],
-    trees: [92.0, 94.0, 66.0],
-    shore: [106.0, 88.0],
-    far_shore: 178.0,
-    hummocks: &[[6.0, 288.0, 32.0], [3.2, 205.0, 18.0]],
-    buoy: 294,
-    reach: 165.0,
-};
+    fn top(&self, x: f64) -> f64 {
+        self.horizon
+            - 15.0 * smooth(self.shoulder[0], self.shoulder[1], x) * (1.0 - 0.12 * smooth(24.0, 0.0, x))
+            - 1.6 * fbm(x * 0.15, 3.7, 3, 0.0)
+    }
+}
 
-pub type NightCoast = Scene<false>;
-pub type NightCoastWide = Scene<true>;
-
-pub struct Scene<const IS_WIDE: bool> {
+pub struct NightCoast {
+    l: Layout,
     dots: Dots,
     mat: Vec<u8>,
     shade: Vec<f32>,
@@ -96,36 +118,19 @@ pub struct Scene<const IS_WIDE: bool> {
     tower_top: f64,
 }
 
-fn density(x: f64, y: f64) -> f64 {
+fn density(x: f64, y: f64, horizon: f64) -> f64 {
     let cw = CW as f64;
     let q = fbm(x * 0.008, y * 0.02, 3, cw * 0.008);
     let d = fbm(x * 0.018 + q * 2.4, y * 0.036 + q * 1.1, 5, cw * 0.018);
     // heaped mid-sky, thinner overhead, wisps at the horizon
     d + 0.05 * smooth(8.0, 22.0, y)
         - 0.04 * smooth(10.0, 0.0, y)
-        - 0.16 * smooth(36.0, HORIZON - 4.0, y)
+        - 0.16 * smooth(horizon - 24.0, horizon - 4.0, y)
 }
 
-impl<const IS_WIDE: bool> Scene<IS_WIDE> {
-    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
-    const W: usize = Self::L.w;
-
-    fn top(x: f64) -> f64 {
-        HORIZON
-            - 15.0 * smooth(Self::L.shoulder[0], Self::L.shoulder[1], x) * (1.0 - 0.12 * smooth(24.0, 0.0, x))
-            - 1.6 * fbm(x * 0.15, 3.7, 3, 0.0)
-    }
-}
-
-impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
-    const NAME: &'static str = Self::L.name;
-    const COLS: usize = Self::W;
-    const ROWS: usize = H;
+impl Piece for NightCoast {
+    const NAME: &'static str = "night-coast";
     const FPS: u32 = 15;
-    const CELL: usize = 1;
-    const FIT: Fit = Fit::Cover {
-        anchor: Self::L.anchor,
-    };
     const GROUND: u32 = hex("#080b12");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[
@@ -137,53 +142,55 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         hex("#9c4136"), hex("#ff5d4d"),
     ];
 
-    fn new() -> Self {
-        let n = Self::W * H;
+    fn new(cols: usize, rows: usize) -> Self {
+        let l = Layout::new(cols, rows);
+        let (w, h, horizon) = (l.w, l.h, l.horizon);
+        let n = w * h;
         let mut mat = vec![AIR; n];
         let mut shade = vec![0f32; n];
-        let base = Self::top(LAMP_X);
+        let base = l.top(LAMP_X);
         let tower_top = base - 15.0;
         let mut trees: Vec<[f64; 3]> = Vec::new();
         let mut x = 1.0;
-        while x < Self::L.trees[0] {
+        while x < l.trees[0] {
             // the clearing for the tower and the cottage
             if !(x > 22.0 && x < 49.0) {
                 trees.push([
                     x + hash(x, 2.0) * 1.2,
-                    (4.0 + hash(x, 3.0) * 7.0) * smooth(Self::L.trees[1], Self::L.trees[2], x),
+                    (4.0 + hash(x, 3.0) * 7.0) * smooth(l.trees[1], l.trees[2], x),
                     2.0 + hash(x, 4.0) * 1.6,
                 ]);
             }
             x += 2.6 + hash(x * 7.0, 1.0) * 2.6;
         }
-        let cottage = Self::top(41.0);
-        for r in 0..H {
-            for xi in 0..Self::W {
-                let k = r * Self::W + xi;
+        let cottage = l.top(41.0);
+        for r in 0..h {
+            for xi in 0..w {
+                let k = r * w + xi;
                 let x = xi as f64;
                 let y = r as f64 + 0.5;
-                let t0 = Self::top(x);
-                let mut isle = HORIZON;
-                for &[hh, hx, hw] in Self::L.hummocks {
+                let t0 = l.top(x);
+                let mut isle = horizon;
+                for &[hh, hx, hw] in l.hummocks.iter().filter(|m| m[0] > 0.0) {
                     isle -= hh * (1.0 - ((x - hx) / hw).powi(2)).max(0.0);
                 }
                 isle -= 1.4 * fbm(x * 0.2, 9.0, 2, 0.0);
-                if y >= t0 && y < HORIZON + 4.0 && x < Self::L.shore[0] {
+                if y >= t0 && y < horizon + 4.0 && x < l.shore[0] {
                     mat[k] = LAND;
                     // rock and scrub, the brow of the slope catching the moon
                     shade[k] = (0.2
                         + 0.45 * fbm(x * 0.35, y * 0.35, 3, 0.0)
                         + 0.5 * smooth(t0 + 3.0, t0, y)
-                        - 0.2 * smooth(HORIZON - 4.0, HORIZON + 4.0, y))
+                        - 0.2 * smooth(horizon - 4.0, horizon + 4.0, y))
                         as f32;
-                } else if x > Self::L.far_shore && y >= isle && y < HORIZON {
+                } else if x > l.far_shore && y >= isle && y < horizon {
                     mat[k] = ISLE;
                 }
                 for &[tx, th, tw] in &trees {
                     if th < 1.0 {
                         continue;
                     }
-                    let tb = Self::top(tx);
+                    let tb = l.top(tx);
                     let dy = y - (tb - th);
                     if dy >= 0.0 && y < tb + 2.0 && (x + 0.5 - tx).abs() <= (dy / th) * tw + 0.4 {
                         mat[k] = TREE;
@@ -235,26 +242,27 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
 
         // a faint unevenness in the clear sky, so it is never one flat tone
         let haze = (0..n)
-            .map(|k| fbm((k % Self::W) as f64 * 0.05, (k / Self::W) as f64 * 0.08, 3, 0.0) as f32)
+            .map(|k| fbm((k % w) as f64 * 0.05, (k / w) as f64 * 0.08, 3, 0.0) as f32)
             .collect();
 
         // the clouds: heaps of noise that wrap, so they can drift forever
-        let rows = HORIZON as usize;
+        let rows = horizon.ceil() as usize;
         let mut cover = vec![0f32; CW * rows];
         let mut lit = vec![0f32; CW * rows];
         for r in 0..rows {
             for x in 0..CW {
                 let (xf, y) = (x as f64, r as f64 + 0.5);
-                let d = density(xf, y);
+                let d = density(xf, y, horizon);
                 cover[r * CW + x] = smooth(0.52, 0.63, d) as f32;
                 // Lit on the side facing the moon (up and right), shadowed
                 // underneath, a little darker deep inside.
-                let toward = density(xf + 2.5, y - 3.0);
+                let toward = density(xf + 2.5, y - 3.0, horizon);
                 lit[r * CW + x] = clamp(0.5 + (d - toward) * 11.0 - (d - 0.6) * 1.2) as f32;
             }
         }
 
         Self {
+            l,
             dots: Dots::new(Self::PALETTE),
             mat,
             shade,
@@ -271,23 +279,24 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let flash = sb.max(0.0).powi(14) * 2.2; // pointed at us
         let lamp_y = self.tower_top - 4.0;
         let drift = t * 1.4;
-        let hf = H as f64;
+        let l = &self.l;
+        let (hf, horizon) = (l.h as f64, l.horizon);
 
-        for r in 0..H {
-            for xi in 0..Self::W {
-                let k = r * Self::W + xi;
+        for r in 0..l.h {
+            for xi in 0..l.w {
+                let k = r * l.w + xi;
                 let x = xi as f64;
                 let rf = r as f64;
                 let y = rf + 0.5;
                 let m = self.mat[k];
                 let (mut cr, mut cg, mut cbl) = (0.0, 0.0, 0.0);
                 let (mut floor, mut fade) = (0.3, 1.0);
-                let (dmx, dmy) = (x + 0.5 - Self::L.moon[0], y - Self::L.moon[1]);
+                let (dmx, dmy) = (x + 0.5 - l.moon[0], y - l.moon[1]);
                 let dm = (dmx * dmx + dmy * dmy).sqrt();
 
-                if y < HORIZON && m == AIR {
+                if y < horizon && m == AIR {
                     // sky: deep navy up top to a hazy horizon, brighter round the moon
-                    let v = y / HORIZON;
+                    let v = y / horizon;
                     let halo = (-dm / 24.0).exp() * 0.35 + (-dm / 9.0).exp() * 0.45;
                     let glow_h = v.powi(3) * 0.24; // the horizon's last light
                     let veil = 0.85 + 0.3 * f64::from(self.haze[k]);
@@ -316,7 +325,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     } else if c < 0.05 && hash(x, rf * 3.0 + 11.0) > 0.982 {
                         let tw =
                             0.6 + 0.4 * (t * (1.5 + hash(x, rf) * 3.0) + hash(rf, x) * 6.28).sin();
-                        let s = (0.5 + 0.5 * tw) * (1.0 - halo) * smooth(HORIZON, 20.0, y);
+                        let s = (0.5 + 0.5 * tw) * (1.0 - halo) * smooth(horizon, 20.0, y);
                         cr = cr.max(s * 0.92);
                         cg = cg.max(s * 0.94);
                         cbl = cbl.max(s);
@@ -325,7 +334,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                         // shadow slate, through moonlit grey, to a silver rim near
                         // the moon; low cloud is lit from below by the horizon
                         let near = (-dm / 30.0).exp();
-                        let b = clamp(l * (0.5 + 0.6 * near) + 0.25 * smooth(30.0, HORIZON, y));
+                        let b = clamp(l * (0.5 + 0.6 * near) + 0.25 * smooth(30.0, horizon, y));
                         let ramp = |lo: f64, mid: f64, hi: f64| {
                             if b < 0.5 {
                                 mix(lo, mid, b * 2.0)
@@ -343,12 +352,12 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                         cg = mix(cg, kg, a);
                         cbl = mix(cbl, kb, a);
                     }
-                } else if y >= HORIZON
+                } else if y >= horizon
                     && (m == AIR || m == LAND)
-                    && !(m == LAND && y < HORIZON + 4.0)
+                    && !(m == LAND && y < horizon + 4.0)
                 {
                     // sea: cold, darker toward us, waves stretched along the swell
-                    let v = (y - HORIZON) / (hf - HORIZON);
+                    let v = (y - horizon) / (hf - horizon);
                     let w = 0.6 * noise(x * 0.07 + t * 0.12, y * 0.45 - t * 0.6, 0.0)
                         + 0.4 * noise(x * 0.2 - t * 0.25, y * 0.9 - t * 1.1, 0.0);
                     let swell = 0.45 + 0.95 * w;
@@ -356,14 +365,14 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     cg = (0.13 - 0.06 * v) * swell;
                     cbl = (0.28 - 0.12 * v) * swell;
                     // the moon's road: wider toward us, broken into glints
-                    let road_w = 3.0 + (y - HORIZON) * 0.55;
-                    let road = (-((x + 0.5 - Self::L.moon[0]) / road_w).powi(2)).exp();
+                    let road_w = 3.0 + (y - horizon) * 0.55;
+                    let road = (-((x + 0.5 - l.moon[0]) / road_w).powi(2)).exp();
                     let glint = smooth(0.5, 0.8, w) * road;
                     cr += 0.95 * glint + 0.07 * road;
                     cg += 0.95 * glint + 0.09 * road;
                     cbl += 0.95 * glint + 0.15 * road;
                     // the lamp's reflection, warm, under the tower
-                    let lw = 1.3 + (y - HORIZON) * 0.22;
+                    let lw = 1.3 + (y - horizon) * 0.22;
                     let refl = (-((x + 0.5 - LAMP_X) / lw).powi(2)).exp()
                         * smooth(0.45, 0.8, w)
                         * (0.75 + 0.6 * flash);
@@ -371,8 +380,8 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     cg += 0.72 * refl;
                     cbl += 0.32 * refl;
                     // surf where the headland meets the water
-                    if y < HORIZON + 8.0 && x < Self::L.shore[0] {
-                        let edge = smooth(Self::L.shore[0], Self::L.shore[1], x) * smooth(HORIZON + 8.0, HORIZON + 3.0, y);
+                    if y < horizon + 8.0 && x < l.shore[0] {
+                        let edge = smooth(l.shore[0], l.shore[1], x) * smooth(horizon + 8.0, horizon + 3.0, y);
                         let foam =
                             smooth(0.5, 0.85, noise(x * 0.45 - t * 0.6, y * 0.8 + t * 0.4, 0.0))
                                 * edge;
@@ -380,7 +389,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                         cg += 0.7 * foam;
                         cbl += 0.75 * foam;
                     }
-                    let haze = (-(y - HORIZON) / 2.5).exp() * 0.16;
+                    let haze = (-(y - horizon) / 2.5).exp() * 0.16;
                     cr += haze * 0.8;
                     cg += haze * 0.9;
                     cbl += haze;
@@ -397,7 +406,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 } else if m == ISLE {
                     (cr, cg, cbl) = (0.06, 0.08, 0.15);
                     floor = 0.1;
-                    if xi == Self::L.buoy && r == 55 {
+                    if [xi, r] == l.buoy {
                         // a buoy light out on the point, blinking
                         let on = (t * 2.2).sin() > 0.55;
                         (cr, cg, cbl) = if on {
@@ -433,7 +442,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 let (bx, by) = (x + 0.5 - LAMP_X, y - lamp_y);
                 if m != TOWER && m != CAP && m != LANTERN {
                     if bx * cb > 0.0 {
-                        let along = bx.abs() / (cb.abs() * Self::L.reach + 1.0);
+                        let along = bx.abs() / (cb.abs() * l.reach + 1.0);
                         if along < 1.0 {
                             let spread = 1.4 + bx.abs() * 0.11;
                             let b = (1.0 - along).powf(1.8) * (-(by / spread).powi(2)).exp() * 0.85;

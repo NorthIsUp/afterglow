@@ -27,10 +27,10 @@ struct Block {
 }
 
 impl Title {
-    /// `night-coast-wide` reads `night coast`. `cell` is the piece's cell
+    /// `night-coast` reads `night coast`. `cell` is the piece's cell
     /// shape, 1 for a scene.
     pub fn new(name: &str, cell: usize, palette: &[u32]) -> Self {
-        let text = name.strip_suffix("-wide").unwrap_or(name).replace('-', " ");
+        let text = name.replace('-', " ");
         let ink = brightest(palette);
         let mut glyphs = Block::blank(text.len(), 1);
         for (n, b) in text.bytes().enumerate() {
@@ -43,7 +43,7 @@ impl Title {
     }
 
     /// The block `stamp` uses on a `cols x rows` grid: dots while they take
-    /// at most half its width, which they do on the cover view, then glyphs —
+    /// at most half its width, which they do untoured, then glyphs —
     /// a close-up's wider cells would otherwise blow the dots up across half
     /// the panel — then nothing.
     fn pick(&self, cols: usize, rows: usize) -> Option<&Block> {
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn a_scene_title_is_dots_in_the_brightest_ink() {
-        let t = Title::new("night-coast-wide", 1, &[0x000000, 0xFFFFFF, 0x808080]);
+        let t = Title::new("night-coast", 1, &[0x000000, 0xFFFFFF, 0x808080]);
         let d = t.dots.as_ref().unwrap();
         // Narrower than 11 monospace glyphs, and no taller than paired rows.
         assert!(d.w < 11 * 8 && d.h <= 8 + 2, "{}x{}", d.w, d.h);

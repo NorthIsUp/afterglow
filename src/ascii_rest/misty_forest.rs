@@ -7,18 +7,18 @@
 //! Upstream's `Float32Array`s stay `f32` here: their rounding is part of the
 //! picture.
 //!
-//! `misty-forest-wide` is the same forest recomposed for a 3.2:1 panel: the sun
-//! and its clearing keep the right third, the ridges and fog run on west, and a
-//! young pine stands in front between the two framing giants.
+//! At any size the sun and its clearing keep the right third and the two
+//! giants frame the edges: wider panels run the ridges and fog on west and
+//! stand a young pine between the giants; taller ones add sky above and
+//! forest floor below.
 
 use std::f64::consts::PI;
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, mix, noise, smooth};
-use super::{Fit, Piece, hex};
+use super::{hex, Piece};
 use crate::grid::Cell;
 
-const H: usize = 100;
 const SUN_R: f64 = 3.4;
 const SKY: i8 = -1;
 const FLOOR: i8 = 5;
@@ -65,41 +65,61 @@ fn fog_b(s: f64) -> f64 {
     mix(0.9, 0.6, s)
 }
 
-/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+/// Where things sit in a `w x h` frame. Upstream's 200x100 is the anchor
+/// every value moves from, so there it is exact. Rows in [`LAYERS`] and the
+/// sky's shading are upstream's; a tall frame's extra sky is `sky` rows above
+/// them.
 struct Layout {
-    name: &'static str,
     w: usize,
+    h: usize,
+    sky: usize,
+    /// How far apart a tall frame's floor rows push the ridges, per row of
+    /// upstream's spacing.
+    spread: f64,
     sun: [f64; 2],
     /// The columns where the nearest trees leave a clearing under the sun.
     clearing: [f64; 2],
     /// The pines in front: [column, tip row, spread, tier height].
-    giants: &'static [[f64; 4]],
+    giants: Vec<[f64; 4]>,
 }
 
-const ORIGINAL: Layout = Layout {
-    name: "misty-forest",
-    w: 200,
-    sun: [146.0, 45.5],
-    clearing: [92.0, 140.0],
-    giants: &[[9.0, -12.0, 15.0, 7.0], [192.0, 12.0, 7.0, 5.0]],
-};
+impl Layout {
+    fn new(w: usize, h: usize) -> Self {
+        let wf = w as f64;
+        let sky = (h - 100) / 2;
+        let skyf = sky as f64;
+        let narrow = clamp((200.0 - wf) / 100.0);
+        // the old 3.2:1 recomposition moved the sun 87 columns for 120 more
+        let sun = 146.0 + (wf - 200.0) * 0.725;
+        // narrower, the giants stand further out so they frame rather than wall
+        let mut giants = vec![
+            [9.0 - 6.0 * narrow, -12.0 + skyf, 15.0, 7.0],
+            [wf - 8.0 + 3.0 * narrow, 12.0 + skyf, 7.0, 5.0],
+        ];
+        // a young pine, off-centre between the giants once the middle is wide
+        // enough to look empty
+        if wf >= 260.0 {
+            giants.insert(1, [wf * 0.325, 34.0 + skyf, 7.0, 5.0]);
+        }
+        Self {
+            w,
+            h,
+            sky,
+            spread: (h - 100 - sky) as f64 * 0.75 / 40.0,
+            sun: [sun, 45.5 + skyf],
+            clearing: [sun - 54.0, sun - 6.0],
+            giants,
+        }
+    }
 
-const WIDE: Layout = Layout {
-    name: "misty-forest-wide",
-    w: 320,
-    sun: [233.0, 45.5],
-    clearing: [179.0, 227.0],
-    giants: &[
-        [9.0, -12.0, 15.0, 7.0],
-        [104.0, 34.0, 7.0, 5.0],
-        [312.0, 12.0, 7.0, 5.0],
-    ],
-};
+    /// Where a ridge upstream puts at row `ly` stands.
+    fn ridge(&self, ly: f64) -> f64 {
+        ly + self.sky as f64 + (ly - 50.0) * self.spread
+    }
+}
 
-pub type MistyForest = Scene<false>;
-pub type MistyForestWide = Scene<true>;
-
-pub struct Scene<const IS_WIDE: bool> {
+pub struct MistyForest {
+    l: Layout,
     dots: Dots,
     sr: Vec<f32>,
     sg: Vec<f32>,
@@ -123,18 +143,9 @@ pub struct Scene<const IS_WIDE: bool> {
     mote_cells: Vec<usize>,
 }
 
-impl<const IS_WIDE: bool> Scene<IS_WIDE> {
-    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
-    const W: usize = Self::L.w;
-}
-
-impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
-    const NAME: &'static str = Self::L.name;
-    const COLS: usize = Self::W;
-    const ROWS: usize = H;
+impl Piece for MistyForest {
+    const NAME: &'static str = "misty-forest";
     const FPS: u32 = 15;
-    const CELL: usize = 1;
-    const FIT: Fit = Fit::Cover { anchor: 0.5 };
     const GROUND: u32 = hex("#090f0e");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[
@@ -150,9 +161,11 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         hex("#a9c3cc"), hex("#8eadb8"), hex("#6f93a2"), hex("#53798a"), hex("#3d6172"), hex("#2b4a5a"),
     ];
 
-    fn new() -> Self {
-        let n = Self::W * H;
-        let hf = H as f64;
+    fn new(cols: usize, rows: usize) -> Self {
+        let lay = Layout::new(cols, rows);
+        let (w, h, sky) = (lay.w, lay.h, lay.sky as f64);
+        let n = w * h;
+        let hf = h as f64;
 
         // --- the layers, rasterised far to near so nearer ones cover farther
         let mut layer = vec![SKY; n];
@@ -162,31 +175,32 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let mut ground = vec![0f32; n]; // the row a cell's ridge rises from, for its valley mist
         for (i, &[ly, amp, gap, h0, h1, ..]) in LAYERS.iter().enumerate() {
             let fi = i as f64;
+            let ly = lay.ridge(ly);
             // nearer ridges dip toward the sun, a valley opening onto the light
             let ridge = |x: f64| {
                 ly + amp
                     * (fbm(x * (0.018 + fi * 0.003), fi * 13.0 + 2.0, 3, 0.0) - 0.5)
                     * (if i < 3 { 4.0 } else { 3.0 })
                     + if i > 0 && i < NEAR {
-                        (2.0 + fi * 2.0) * (-((x - Self::L.sun[0] - 4.0) / 38.0).powi(2)).exp()
+                        (2.0 + fi * 2.0) * (-((x - lay.sun[0] - 4.0) / 38.0).powi(2)).exp()
                     } else {
                         0.0
                     }
             };
-            let base: Vec<f32> = (0..Self::W).map(|x| ridge(x as f64) as f32).collect();
+            let base: Vec<f32> = (0..w).map(|x| ridge(x as f64) as f32).collect();
             let mut fill = vec![0u8; n];
             let mut spire = vec![0u8; n];
-            for x in 0..Self::W {
+            for x in 0..w {
                 let r0 = ridge(x as f64).floor().max(0.0) as usize;
-                for r in r0..H {
-                    fill[r * Self::W + x] = 1;
+                for r in r0..h {
+                    fill[r * w + x] = 1;
                 }
             }
             // pines: a spire of tiers, each tier flaring out and stepping back in
             let mut tx = -2.0 + hash(fi, 1.0) * gap;
-            while tx < (Self::W + 2) as f64 {
+            while tx < (w + 2) as f64 {
                 // the nearest trees leave a clearing under the sun for the light to land in
-                if !(i == NEAR && tx > Self::L.clearing[0] && tx < Self::L.clearing[1]) {
+                if !(i == NEAR && tx > lay.clearing[0] && tx < lay.clearing[1]) {
                     let th = h0 + (h1 - h0) * hash(tx * 7.0, fi + 5.0);
                     let tip = ridge(tx) - th;
                     let tier = 2.0 + th * 0.12;
@@ -198,13 +212,13 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                             let saw = (d % tier) / tier;
                             let half = d * 0.3 * (0.6 + 0.5 * saw) + 0.35;
                             let x0 = (tx - half).floor().max(0.0) as i64;
-                            let x1 = ((Self::W - 1) as f64).min((tx + half).ceil()) as i64;
+                            let x1 = ((w - 1) as f64).min((tx + half).ceil()) as i64;
                             for x in x0..=x1 {
                                 let dx = (x as f64 + 0.5 - tx).abs();
                                 if dx > half {
                                     continue;
                                 }
-                                let k = r as usize * Self::W + x as usize;
+                                let k = r as usize * w + x as usize;
                                 fill[k] = 1;
                                 spire[k] = 1;
                                 if i == NEAR {
@@ -222,27 +236,27 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             }
             // where the silhouette starts in each column, smoothed a little so the
             // mist line follows the forest rather than every single spire
-            let mut top = vec![H as f32; Self::W];
+            let mut top = vec![h as f32; w];
             for (x, t) in top.iter_mut().enumerate() {
-                if let Some(r) = (0..H).find(|&r| fill[r * Self::W + x] != 0) {
+                if let Some(r) = (0..h).find(|&r| fill[r * w + x] != 0) {
                     *t = r as f32;
                 }
             }
-            let line: Vec<f32> = (0..Self::W)
+            let line: Vec<f32> = (0..w)
                 .map(|x| {
                     let mut s = 0.0;
                     for d in -3i64..=3 {
-                        s += f64::from(top[(x as i64 + d).clamp(0, Self::W as i64 - 1) as usize]);
+                        s += f64::from(top[(x as i64 + d).clamp(0, w as i64 - 1) as usize]);
                     }
                     (s / 7.0).max(f64::from(top[x])) as f32
                 })
                 .collect();
             let open = |xx: i64, rr: i64| {
-                xx >= 0 && xx < Self::W as i64 && (rr < 0 || fill[rr as usize * Self::W + xx as usize] == 0)
+                xx >= 0 && xx < w as i64 && (rr < 0 || fill[rr as usize * w + xx as usize] == 0)
             };
-            for r in 0..H {
-                for x in 0..Self::W {
-                    let k = r * Self::W + x;
+            for r in 0..h {
+                for x in 0..w {
+                    let k = r * w + x;
                     if fill[k] == 0 {
                         continue;
                     }
@@ -257,7 +271,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     below[k] = (r as f64 + 0.5 - f64::from(line[x])) as f32;
                     ground[k] = base[x];
                     // a rim where the sky (or a farther layer) shows beside or above
-                    let toward = if (x as f64) < Self::L.sun[0] { 1 } else { -1 };
+                    let toward = if (x as f64) < lay.sun[0] { 1 } else { -1 };
                     let (xi, ri) = (x as i64, r as i64);
                     edge[k] = if open(xi + toward, ri) || open(xi, ri - 1) {
                         1.0
@@ -274,29 +288,29 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         // smaller one at the right edge, so the frame is not a symmetric curtain
         // (wide: and a young one between, off-centre, so the middle is not empty)
         let mut giant = vec![0u8; n];
-        for &[gx, tip, spread, tier] in Self::L.giants {
-            for r in tip.floor().max(0.0) as usize..H {
+        for &[gx, tip, spread, tier] in &lay.giants {
+            for r in tip.floor().max(0.0) as usize..h {
                 let d = r as f64 + 0.5 - tip;
                 let saw = (d % tier) / tier;
                 // each tier of boughs sweeps out and droops, so the outline is a stack
                 // of points rather than a straight edge where it meets the frame
                 let half = (spread * (0.5 + 0.5 * saw)).min(d * 0.34 * (0.45 + 0.7 * saw) + 0.5);
                 let x0 = (gx - half).floor().max(0.0) as i64;
-                let x1 = ((Self::W - 1) as f64).min((gx + half).ceil()) as i64;
+                let x1 = ((w - 1) as f64).min((gx + half).ceil()) as i64;
                 for x in x0..=x1 {
                     let xf = x as f64;
                     let dx = (xf + 0.5 - gx).abs();
                     // the side toward the frame stays full, so no sliver of sky shows there
                     // (the young pine stands clear of the frame, so both its sides are ragged)
-                    let framed = gx < 20.0 || gx > (Self::W - 20) as f64;
-                    let outer = if framed && (xf + 0.5 - gx) * (gx - (Self::W / 2) as f64) > 0.0 {
+                    let framed = gx < 20.0 || gx > (w - 20) as f64;
+                    let outer = if framed && (xf + 0.5 - gx) * (gx - (w / 2) as f64) > 0.0 {
                         1.6
                     } else {
                         1.0
                     };
                     let ragged = half * outer * (0.82 + 0.3 * noise(xf * 0.5, r as f64 * 0.4, 0.0));
                     if dx <= ragged || dx < 0.9 {
-                        let k = r * Self::W + x as usize;
+                        let k = r * w + x as usize;
                         giant[k] = 1;
                         tex[k] = (smooth(0.66, 0.96, saw)
                             * smooth(0.25, 0.8, dx / ragged)
@@ -315,15 +329,15 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         // a rim two cells deep on the side that faces the sun
         {
             let open = |x: i64, r: i64| {
-                x >= 0 && x < Self::W as i64 && (r < 0 || giant[r as usize * Self::W + x as usize] == 0)
+                x >= 0 && x < w as i64 && (r < 0 || giant[r as usize * w + x as usize] == 0)
             };
-            for r in 0..H {
-                for x in 0..Self::W {
-                    let k = r * Self::W + x;
+            for r in 0..h {
+                for x in 0..w {
+                    let k = r * w + x;
                     if giant[k] == 0 {
                         continue;
                     }
-                    let tx = if (x as f64) < Self::L.sun[0] { 1 } else { -1 };
+                    let tx = if (x as f64) < lay.sun[0] { 1 } else { -1 };
                     let (xi, ri) = (x as i64, r as i64);
                     edge[k] = if open(xi + tx, ri) || open(xi, ri - 1) {
                         1.0
@@ -350,13 +364,13 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let mut abin = vec![0f32; n];
         let mut dist = vec![0f32; n];
         let ra = RA as f64;
-        for r in 0..H {
-            for xi in 0..Self::W {
-                let k = r * Self::W + xi;
+        for r in 0..h {
+            for xi in 0..w {
+                let k = r * w + xi;
                 let x = xi as f64;
                 let y = r as f64 + 0.5;
                 let l = layer[k];
-                let (dx, dy) = (x + 0.5 - Self::L.sun[0], y - Self::L.sun[1]);
+                let (dx, dy) = (x + 0.5 - lay.sun[0], y - lay.sun[1]);
                 let ang = dy.atan2(dx);
                 abin[k] = (((ang / (PI * 2.0)) * ra + ra) % ra) as f32;
                 let d = (dx * dx + dy * dy).sqrt();
@@ -368,7 +382,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 let (mut cr, mut cg, mut cb, mut ray);
                 if l == SKY {
                     // sky: deep overhead, paling to the fog band low down, warm by the sun
-                    let v = clamp(y / 52.0);
+                    let v = clamp((y - sky) / 52.0);
                     let p = v.powf(1.6);
                     let veil = 0.95 + 0.1 * fbm(x * 0.04, y * 0.08, 3, 0.0);
                     cr = mix(0.065, 0.36, p) * veil;
@@ -376,7 +390,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     cb = mix(0.17, 0.62, p) * veil;
                     // the fog band the far ridge stands in
                     let band = 0.75
-                        * smooth(28.0, 50.0, y)
+                        * smooth(28.0, 50.0, y - sky)
                         * (0.55 + 0.75 * fbm(x * 0.025, y * 0.16, 3, 0.0));
                     cr = mix(cr, fog_r(0.0), band);
                     cg = mix(cg, fog_g(0.0), band);
@@ -396,14 +410,14 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     cr = mix(cr, 1.3, disc);
                     cg = mix(cg, 1.24, disc);
                     cb = mix(cb, 1.08, disc);
-                    fog_amt[k] = (0.3 * smooth(30.0, 50.0, y)) as f32;
+                    fog_amt[k] = (0.3 * smooth(30.0, 50.0, y - sky)) as f32;
                     fog_speed[k] = 0.4;
                     cloud_amt[k] = (0.75
-                        * smooth(5.0, 15.0, y)
-                        * smooth(44.0, 28.0, y)
+                        * smooth(5.0, 15.0, y - sky)
+                        * smooth(44.0, 28.0, y - sky)
                         * smooth(SUN_R + 2.0, SUN_R + 8.0, d))
                         as f32;
-                    ray = 0.35 * smooth(26.0, 46.0, y);
+                    ray = 0.35 * smooth(26.0, 46.0, y - sky);
                     lift[k] = 0.04;
                 } else if l < NEAR as i8 {
                     let li = l as usize;
@@ -504,13 +518,13 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
 
         // drifting fog banks: wide soft noise that wraps so it can slide forever
         let fw = FW as f64;
-        let mut fog = vec![0f32; FW * H];
-        for r in 0..H {
+        let mut fog = vec![0f32; FW * h];
+        for r in 0..h {
             for u in 0..FW {
                 fog[r * FW + u] = smooth(
                     0.42,
                     0.75,
-                    fbm(u as f64 * 0.022, r as f64 * 0.09, 4, fw * 0.022),
+                    fbm(u as f64 * 0.022, (r as f64 - sky) * 0.09, 4, fw * 0.022),
                 ) as f32;
             }
         }
@@ -544,12 +558,14 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             ray_b[i] = smooth(0.4, 0.7, fbm(fi * 0.03, 8.7, 2, ra * 0.03)) as f32;
         }
 
-        let motes = (0..110)
+        // upstream's 110 motes, as dense on any frame, in the air over the floor
+        let air = 44.0 + (hf - 100.0 - sky);
+        let motes = (0..(110.0 * (w * h) as f64 / 20000.0) as u32)
             .map(|i| {
                 let i = f64::from(i);
                 [
-                    hash(i, 1.0) * Self::W as f64,
-                    50.0 + hash(i, 2.0) * 44.0,
+                    hash(i, 1.0) * w as f64,
+                    50.0 + sky + hash(i, 2.0) * air,
                     0.3 + hash(i, 3.0) * 0.8,
                     hash(i, 4.0) * 6.28,
                     hash(i, 5.0),
@@ -558,6 +574,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             .collect::<Vec<_>>();
 
         Self {
+            l: lay,
             dots: Dots::new(Self::PALETTE),
             sr,
             sg,
@@ -582,7 +599,8 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
-        let (wf, hf) = (Self::W as f64, H as f64);
+        let (w, h, sky) = (self.l.w, self.l.h, self.l.sky);
+        let (wf, hf) = (w as f64, h as f64);
         for &k in &self.mote_cells {
             self.mote[k] = 0.0;
         }
@@ -593,7 +611,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
             if y < 0.0 || y >= hf {
                 continue;
             }
-            let k = y as usize * Self::W + x.floor() as usize;
+            let k = y as usize * w + x.floor() as usize;
             self.mote[k] = (0.5 + 0.5 * sz) as f32;
             self.mote_cells.push(k);
         }
@@ -605,9 +623,9 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let ray_at =
             |v: &[f32], a: f64| f64::from(v[(a.floor() as i64).rem_euclid(RA as i64) as usize]);
 
-        for r in 0..H {
-            for xi in 0..Self::W {
-                let k = r * Self::W + xi;
+        for r in 0..h {
+            for xi in 0..w {
+                let k = r * w + xi;
                 let x = xi as f64;
                 let (mut cr, mut cg, mut cb) = (
                     f64::from(self.sr[k]),
@@ -638,8 +656,10 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     let ui = u.floor();
                     let uf = u - ui;
                     let ui = ui as usize;
-                    let c0 = f64::from(self.cloud[r * FW + ui % FW]);
-                    let c1 = f64::from(self.cloud[r * FW + (ui + 1) % FW]);
+                    // cloud_amt is zero outside the table's rows, so r >= sky here
+                    let row = (r - sky) * FW;
+                    let c0 = f64::from(self.cloud[row + ui % FW]);
+                    let c1 = f64::from(self.cloud[row + (ui + 1) % FW]);
                     let a = (c0 + (c1 - c0) * uf) * ca;
                     if a > 0.005 {
                         // cool grey-teal, warming to gold on the undersides near the sun

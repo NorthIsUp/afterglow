@@ -28,9 +28,8 @@ env lookup, no clock read: see [CLAUDE.md](../CLAUDE.md) on the frame loop.
 is a **shuffled bag**: every saver, in random order, none of them again until all
 of them have been shown, then reshuffled. That is what "rotate through all the
 savers" has to mean — rolling an independent choice each time takes about 230
-turns to show you all 51 turns' worth (64 savers, a scene's pair being one turn; coupon
-collector), nineteen hours at a five-minute interval, where the bag takes
-exactly 51 and four and a quarter.
+turns to show you all 51 savers (coupon collector), nineteen hours at a
+five-minute interval, where the bag takes exactly 51 and four and a quarter.
 
 A bag is not a walk down the table: a walk is predictable in the wrong way (the
 same saver always follows the same saver, and the three toaster variants are
@@ -47,11 +46,9 @@ ones hold the target fps on this panel and so there is nothing to compensate for
 **Who is in rotation** is a tick box per saver in the mirror page's list (and
 per group, on its heading), or `POST /rotation?saver=<name>&on=0|1` /
 `POST /rotation?group=<name>&on=0|1` by hand; `/meta` reports the savers out as
-`excluded`. A scene goes in or out with its `-wide` twin, because the page shows
-the pair as one row, and the pair is one turn in the bag: rotation shows the half
-its `expanded` choice names: the `-wide`, until a click picks the other half (the
-`expanded` toggle, or `/select` of either name), which then sticks. Rotation moving
-on, and the startup `SAVER`, do not change the choice. `SAVER_ROTATE_EXCLUDE` (comma-separated names, default none)
+`excluded`. Every saver is one turn in the bag. A port's old `-wide` name (from
+before the scenes and character pieces drew at any size) still names it, here and
+everywhere else a saver is named. `SAVER_ROTATE_EXCLUDE` (comma-separated names, default none)
 is the startup set, so a deployment can pin it; like the interval, the page moves
 it live and a restart goes back to the env value. An unknown name there is
 logged and ignored.

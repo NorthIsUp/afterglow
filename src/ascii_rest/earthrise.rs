@@ -12,22 +12,19 @@
 //! rather than [`Dots::ink`]. `Math.pow` with an integer exponent is
 //! repeated squaring under JavaScriptCore, which is `powi`.
 //!
-//! `earthrise-wide` is the same view recomposed for a 3.2:1 panel. The camera's
-//! view widens over the same ground, more of the highlands rising on the left;
-//! the Earth and the bright stars move 60 columns right with the centre, two
-//! more bright stars fill the new sky and the galaxy's band runs further across
-//! it.
+//! At any size the camera stands on the same ground and its view takes in the
+//! frame: wider panels see more of the highlands on the left, two more bright
+//! stars and a longer galaxy band; the Earth keeps right of centre, drawing in
+//! toward it on narrower panels; taller ones are more sky over the Earth, the
+//! camera marching from nearer ground to reach the bottom row.
 
 use std::f64::consts::PI;
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, js_hypot, js_round, mix, noise, smooth, unit};
-use super::{Fit, Piece, hex};
+use super::{hex, Piece};
 use crate::grid::Cell;
 
-const H: usize = 100;
-/// Screen row of eye level; the horizon dips below it.
-const EYE: f64 = 37.0;
 /// Focal length in cells.
 const F: f64 = 112.0;
 const CAM_H: f64 = 20.0;
@@ -93,77 +90,162 @@ struct Twinkle {
     core: bool,
 }
 
-/// Where things sit in the frame: upstream's, or the `-wide` recomposition's.
+/// Where things sit in a `w x h` frame. Upstream's 200x100 is the anchor
+/// every value moves from, so there it is exact.
 struct Layout {
-    name: &'static str,
     w: usize,
-    anchor: f64,
+    h: usize,
+    /// Screen row of eye level; the horizon dips below it.
+    eye: f64,
+    /// The nearest ground the camera marches from: closer on a tall panel, so
+    /// the ground still reaches its bottom row.
+    near: f64,
     /// The Earth's centre.
     ec: [f64; 2],
     /// The bright stars, which twinkle: [col, row, brightness, period in seconds].
-    bright: &'static [(usize, usize, f64, f64)],
+    bright: Vec<(usize, usize, f64, f64)>,
     /// A few big boulders in the near ground, [x, z, radius].
     rocks: &'static [[f64; 3]],
-    /// The near corners' falloff: where it starts from the centre, and the centre.
-    vignette: [f64; 2],
+    /// The near corners' falloff: where it starts from the centre, the centre,
+    /// and the rows it rises over.
+    vignette: [f64; 4],
     /// The galaxy's band: its slope, and the columns it fades out between.
     band: [f64; 3],
 }
 
-const ORIGINAL: Layout = Layout {
-    name: "earthrise",
-    w: 200,
-    anchor: 0.2,
-    ec: [141.0, 32.0],
-    bright: &[
-        (24, 9, 1.0, 4.6),
-        (67, 27, 0.85, 3.4),
-        (99, 12, 0.95, 5.8),
-        (189, 7, 0.8, 4.1),
-    ],
-    rocks: &[
-        [30.0, 50.0, 2.4],
-        [62.0, 63.0, 1.8],
-        [12.0, 70.0, 1.3],
-        [-4.0, 45.0, 1.2],
-        [90.0, 55.0, 1.6],
-        [46.0, 90.0, 1.4],
-    ],
-    vignette: [30.0, 100.0],
-    band: [0.32, 120.0, 70.0],
-};
+const ROCKS: [[f64; 3]; 8] = [
+    [30.0, 50.0, 2.4],
+    [62.0, 63.0, 1.8],
+    [12.0, 70.0, 1.3],
+    [-4.0, 45.0, 1.2],
+    [90.0, 55.0, 1.6],
+    [46.0, 90.0, 1.4],
+    // only on a wider panel: at upstream's width the second's shadow reaches
+    // into view
+    [-60.0, 60.0, 2.0],
+    [95.0, 80.0, 1.7],
+];
 
-const WIDE: Layout = Layout {
-    name: "earthrise-wide",
-    w: 320,
-    anchor: 0.5,
-    ec: [201.0, 32.0],
-    bright: &[
-        (84, 9, 1.0, 4.6),
-        (127, 27, 0.85, 3.4),
-        (159, 12, 0.95, 5.8),
-        (249, 7, 0.8, 4.1),
-        (21, 19, 0.9, 5.1),
-        (297, 14, 0.85, 3.9),
-    ],
-    rocks: &[
-        [30.0, 50.0, 2.4],
-        [62.0, 63.0, 1.8],
-        [12.0, 70.0, 1.3],
-        [-4.0, 45.0, 1.2],
-        [90.0, 55.0, 1.6],
-        [46.0, 90.0, 1.4],
-        [-60.0, 60.0, 2.0],
-        [95.0, 80.0, 1.7],
-    ],
-    vignette: [50.0, 160.0],
-    band: [0.26, 170.0, 100.0],
-};
+/// Upstream's bright stars, and two more for the sky a wide panel adds.
+const BRIGHT: [(usize, usize, f64, f64); 4] = [
+    (24, 9, 1.0, 4.6),
+    (67, 27, 0.85, 3.4),
+    (99, 12, 0.95, 5.8),
+    (189, 7, 0.8, 4.1),
+];
+const BRIGHT_WIDE: [(f64, usize, f64, f64); 2] = [(21.0, 19, 0.9, 5.1), (297.0, 14, 0.85, 3.9)];
 
-pub type Earthrise = Scene<false>;
-pub type EarthriseWide = Scene<true>;
+impl Layout {
+    fn new(w: usize, h: usize) -> Self {
+        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
+        // at square.
+        let (wf, tall) = (w as f64, h as f64 - 100.0);
+        let wide = (wf - 200.0) / 120.0;
+        let narrow = clamp((200.0 - wf) / 100.0);
+        let grow = |at: f64, by_wide: f64, by_narrow: f64| {
+            if wf >= 200.0 {
+                at + by_wide * wide
+            } else {
+                at - by_narrow * narrow
+            }
+        };
+        // a tall panel is mostly more sky over the Earth
+        let eye = 37.0 + 0.7 * tall;
+        let below = h as f64 - eye;
+        let ec = [wf / 2.0 + 41.0 - 30.0 * narrow, 32.0 + (eye - 37.0)];
+        let lift = eye / 37.0;
+        let place = |x: f64, r: usize| {
+            let x = if wf >= 200.0 { x + (wf - 200.0) / 2.0 } else { x * wf / 200.0 };
+            (js_round(x) as usize, js_round(r as f64 * lift) as usize)
+        };
+        let mut bright: Vec<_> = BRIGHT
+            .iter()
+            .map(|&(x, r, s, p)| {
+                let (x, r) = place(x as f64, r);
+                (x, r, s, p)
+            })
+            .collect();
+        if wide >= 0.5 {
+            bright.extend(BRIGHT_WIDE.iter().map(|&(x, r, s, p)| {
+                (js_round(x * wf / 320.0) as usize, js_round(r as f64 * lift) as usize, s, p)
+            }));
+        }
+        // none in front of the Earth, where a narrow panel would put some
+        bright.retain(|&(x, r, ..)| {
+            let (dx, dy) = (x as f64 - ec[0], r as f64 - (ec[1] - RISE / 2.0));
+            dx.hypot(dy) > ER + 6.0 && (1..w - 1).contains(&x) && (1..h - 1).contains(&r)
+        });
+        Self {
+            w,
+            h,
+            eye,
+            near: 26.0 * (63.0 / below).min(1.0),
+            ec,
+            bright,
+            rocks: if wide > 0.3 { &ROCKS } else { &ROCKS[..6] },
+            vignette: [grow(30.0, 20.0, 15.0), wf / 2.0, 84.0 + tall, 102.0 + tall],
+            band: [grow(0.32, -0.06, 0.0) * lift, grow(120.0, 50.0, 56.0), grow(70.0, 30.0, 40.0)],
+        }
+    }
 
-pub struct Scene<const IS_WIDE: bool> {
+    fn height(&self, x: f64, z: f64) -> f64 {
+        let mut h = 6.0 * fbm(x * 0.006 + 50.0, z * 0.006 + 50.0, 3, 0.0)
+            + 0.6 * fbm(x * 0.04, z * 0.04, 2, 0.0);
+        // old, worn highlands at the edge of sight, rising to the left, and a
+        // lower ridge in front of them
+        if z > 150.0 {
+            let lift = smooth(150.0, 300.0, z);
+            // rounded massifs: folded noise, worn smooth
+            let m = 1.0 - (2.0 * fbm(x * 0.006 + 7.0, z * 0.006, 4, 0.0) - 1.0).abs();
+            h += lift * (28.0 * (-((x + 260.0) / 230.0).powi(2)).exp() + 45.0 * (m * m - 0.35));
+            let ridge = (-((z - 205.0) / 20.0).powi(2)).exp() * (-((x + 140.0) / 130.0).powi(2)).exp();
+            h += ridge * 22.0 * (0.35 + fbm(x * 0.018 + 3.0, z * 0.01, 3, 0.0));
+        }
+        // big basins only out in the middle distance, so we do not stand in one
+        if z > 90.0 {
+            h += craters(x, z, 110.0, 11.0, 0.14, 0.34, 0.55) * smooth(90.0, 150.0, z);
+        }
+        if z < 300.0 {
+            h += craters(x, z, 34.0, 23.0, 0.12, 0.36, 0.85);
+        }
+        if z < 170.0 {
+            h += craters(x, z, 10.0, 37.0, 0.12, 0.34, 0.85) * smooth(170.0, 110.0, z);
+        }
+        // one big crater in the near ground, off to the left
+        {
+            let (dx, dz) = (x + 24.0, z - 58.0);
+            let q = (dx * dx + dz * dz).sqrt() / 16.0;
+            if q < 2.0 {
+                h += bowl(q, 16.0);
+            }
+        }
+        // boulders strewn close by, and a few big ones
+        if z < 90.0 {
+            let c = 5.0;
+            let (ci, cj) = ((x / c).floor(), (z / c).floor());
+            if hash(ci + 91.0, cj) < 0.14 {
+                let bx = (ci + 0.2 + 0.6 * hash(ci, cj + 92.0)) * c;
+                let bz = (cj + 0.2 + 0.6 * hash(ci + 93.0, cj)) * c;
+                let br = 0.3 + 0.5 * hash(ci + 94.0, cj + 95.0).powi(2);
+                let d2 = ((x - bx).powi(2) + (z - bz).powi(2)) / (br * br);
+                if d2 < 4.0 {
+                    h += br * 0.9 * (-d2 * 1.4).exp();
+                }
+            }
+            for &[bx, bz, br] in self.rocks {
+                let d2 = ((x - bx).powi(2) + (z - bz).powi(2)) / (br * br);
+                // a squat, lumpy dome
+                if d2 < 1.0 {
+                    h += br * (0.85 + 0.3 * noise(x * 1.3, z * 1.3, 0.0)) * (1.0 - d2).sqrt();
+                }
+            }
+        }
+        h
+    }
+}
+
+pub struct Earthrise {
+    lay: Layout,
     dots: Dots,
     /// The static picture: the ground and the sky, drawn once.
     base: Vec<Cell>,
@@ -227,76 +309,9 @@ fn quantile(a: &[f32], p: f64) -> f64 {
     f64::from(s[(p * (s.len() - 1) as f64).floor() as usize])
 }
 
-impl<const IS_WIDE: bool> Scene<IS_WIDE> {
-    const L: Layout = if IS_WIDE { WIDE } else { ORIGINAL };
-    const W: usize = Self::L.w;
-    const N: usize = Self::W * H;
-
-    fn height(x: f64, z: f64) -> f64 {
-        let mut h = 6.0 * fbm(x * 0.006 + 50.0, z * 0.006 + 50.0, 3, 0.0)
-            + 0.6 * fbm(x * 0.04, z * 0.04, 2, 0.0);
-        // old, worn highlands at the edge of sight, rising to the left, and a
-        // lower ridge in front of them
-        if z > 150.0 {
-            let lift = smooth(150.0, 300.0, z);
-            // rounded massifs: folded noise, worn smooth
-            let m = 1.0 - (2.0 * fbm(x * 0.006 + 7.0, z * 0.006, 4, 0.0) - 1.0).abs();
-            h += lift * (28.0 * (-((x + 260.0) / 230.0).powi(2)).exp() + 45.0 * (m * m - 0.35));
-            let ridge = (-((z - 205.0) / 20.0).powi(2)).exp() * (-((x + 140.0) / 130.0).powi(2)).exp();
-            h += ridge * 22.0 * (0.35 + fbm(x * 0.018 + 3.0, z * 0.01, 3, 0.0));
-        }
-        // big basins only out in the middle distance, so we do not stand in one
-        if z > 90.0 {
-            h += craters(x, z, 110.0, 11.0, 0.14, 0.34, 0.55) * smooth(90.0, 150.0, z);
-        }
-        if z < 300.0 {
-            h += craters(x, z, 34.0, 23.0, 0.12, 0.36, 0.85);
-        }
-        if z < 170.0 {
-            h += craters(x, z, 10.0, 37.0, 0.12, 0.34, 0.85) * smooth(170.0, 110.0, z);
-        }
-        // one big crater in the near ground, off to the left
-        {
-            let (dx, dz) = (x + 24.0, z - 58.0);
-            let q = (dx * dx + dz * dz).sqrt() / 16.0;
-            if q < 2.0 {
-                h += bowl(q, 16.0);
-            }
-        }
-        // boulders strewn close by, and a few big ones
-        if z < 90.0 {
-            let c = 5.0;
-            let (ci, cj) = ((x / c).floor(), (z / c).floor());
-            if hash(ci + 91.0, cj) < 0.14 {
-                let bx = (ci + 0.2 + 0.6 * hash(ci, cj + 92.0)) * c;
-                let bz = (cj + 0.2 + 0.6 * hash(ci + 93.0, cj)) * c;
-                let br = 0.3 + 0.5 * hash(ci + 94.0, cj + 95.0).powi(2);
-                let d2 = ((x - bx).powi(2) + (z - bz).powi(2)) / (br * br);
-                if d2 < 4.0 {
-                    h += br * 0.9 * (-d2 * 1.4).exp();
-                }
-            }
-            for &[bx, bz, br] in Self::L.rocks {
-                let d2 = ((x - bx).powi(2) + (z - bz).powi(2)) / (br * br);
-                // a squat, lumpy dome
-                if d2 < 1.0 {
-                    h += br * (0.85 + 0.3 * noise(x * 1.3, z * 1.3, 0.0)) * (1.0 - d2).sqrt();
-                }
-            }
-        }
-        h
-    }
-}
-
-impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
-    const NAME: &'static str = Self::L.name;
-    const COLS: usize = Self::W;
-    const ROWS: usize = H;
+impl Piece for Earthrise {
+    const NAME: &'static str = "earthrise";
     const FPS: u32 = 15;
-    const CELL: usize = 1;
-    const FIT: Fit = Fit::Cover {
-        anchor: Self::L.anchor,
-    };
     const GROUND: u32 = hex("#030408");
     #[rustfmt::skip]
     const PALETTE: &'static [u32] = &[
@@ -311,26 +326,29 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         hex("#b9774a"), hex("#8a4838"),
     ];
 
-    fn new() -> Self {
+    fn new(cols: usize, rows: usize) -> Self {
+        let lay = Layout::new(cols, rows);
+        let (w, h) = (lay.w, lay.h);
+        let n = w * h;
         let sun = sun();
         let mut dots = Dots::new(Self::PALETTE);
 
         // the ground: march each column from near to far
-        let mut ground = vec![false; Self::N];
-        let mut top = vec![H as i32; Self::W];
-        let mut gx = vec![0f32; Self::N];
-        let mut gz = vec![0f32; Self::N];
-        let mut gy = vec![0f32; Self::N];
-        let cam_y = Self::height(0.0, 7.0) + CAM_H;
+        let mut ground = vec![false; n];
+        let mut top = vec![h as i32; w];
+        let mut gx = vec![0f32; n];
+        let mut gz = vec![0f32; n];
+        let mut gy = vec![0f32; n];
+        let cam_y = lay.height(0.0, 7.0) + CAM_H;
         for (c, top_c) in top.iter_mut().enumerate() {
-            let dir = (c as f64 + 0.5 - Self::W as f64 / 2.0) / F;
-            let mut top_r = H as i32;
-            let (mut z, mut prev_y, mut prev_z, mut prev_f) = (26.0, 0.0, 0.0, 1e9);
+            let dir = (c as f64 + 0.5 - w as f64 / 2.0) / F;
+            let mut top_r = h as i32;
+            let (mut z, mut prev_y, mut prev_z, mut prev_f) = (lay.near, 0.0, 0.0, 1e9);
             while z < ZMAX && top_r > 0 {
                 let x = dir * z;
-                let hy = Self::height(x, z);
+                let hy = lay.height(x, z);
                 let y = hy - (z * z) / (2.0 * RM);
-                let yf = EYE - (F * (y - cam_y)) / z;
+                let yf = lay.eye - (F * (y - cam_y)) / z;
                 let r0 = (yf - 0.5).ceil().max(0.0) as i32;
                 for r in r0..top_r {
                     // place the cell between this sample and the last, by where its row falls
@@ -339,7 +357,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     } else {
                         1.0
                     };
-                    let k = r as usize * Self::W + c;
+                    let k = r as usize * w + c;
                     ground[k] = true;
                     gz[k] = (if prev_z != 0.0 { mix(prev_z, z, a) } else { z }) as f32;
                     gx[k] = (dir * f64::from(gz[k])) as f32;
@@ -359,20 +377,20 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         }
 
         // Static light: the ground and the sky, everything but the Earth's disc.
-        let mut sr = vec![0f32; Self::N];
-        let mut sg = vec![0f32; Self::N];
-        let mut sb = vec![0f32; Self::N];
-        let mut scap = vec![1f32; Self::N];
-        for r in 0..H {
+        let mut sr = vec![0f32; n];
+        let mut sg = vec![0f32; n];
+        let mut sb = vec![0f32; n];
+        let mut scap = vec![1f32; n];
+        for r in 0..h {
             for (xi, &top_x) in top.iter().enumerate() {
-                let k = r * Self::W + xi;
+                let k = r * w + xi;
                 if !ground[k] {
                     continue;
                 }
                 let (x, z, y) = (f64::from(gx[k]), f64::from(gz[k]), f64::from(gy[k]));
                 let e = 0.1 + z * 0.004;
-                let hx = (Self::height(x + e, z) - Self::height(x - e, z)) / (2.0 * e);
-                let hz = (Self::height(x, z + e) - Self::height(x, z - e)) / (2.0 * e);
+                let hx = (lay.height(x + e, z) - lay.height(x - e, z)) / (2.0 * e);
+                let hz = (lay.height(x, z + e) - lay.height(x, z - e)) / (2.0 * e);
                 let nl = js_hypot(&[hx, 1.0, hz]);
                 let lam = (-hx * sun[0] + sun[1] - hz * sun[2]) / nl;
                 // toward the eye, for the moon's own way of reflecting (Lommel-Seeliger)
@@ -386,7 +404,7 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                     let mut s = 0.1 + z * 0.003;
                     while s < 120.0 {
                         let (px, pz, py) = (x + sun[0] * s, z + sun[2] * s, y + sun[1] * s);
-                        let d = py - Self::height(px, pz);
+                        let d = py - lay.height(px, pz);
                         if d < 0.0 {
                             lit = 0.0;
                             break;
@@ -409,11 +427,11 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 // the near corners fall off a little, to frame the view
                 let vig = 1.0
                     - 0.3
-                        * smooth(84.0, 102.0, r as f64)
+                        * smooth(lay.vignette[2], lay.vignette[3], r as f64)
                         * smooth(
-                            Self::L.vignette[0],
-                            Self::L.vignette[1],
-                            (xi as f64 - Self::L.vignette[1]).abs(),
+                            lay.vignette[0],
+                            lay.vignette[1],
+                            (xi as f64 - lay.vignette[1]).abs(),
                         );
                 let mut b = (1.0 - (-ls * 1.5).exp()) * albedo * vig;
                 // the far crest catches the sun along its whole length
@@ -436,20 +454,20 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
 
         // the sky: a soft band of the galaxy, and stars that hold still
         let near =
-            |x: f64, r: f64| (x + 0.5 - Self::L.ec[0]).hypot(r + 0.5 - (Self::L.ec[1] - RISE / 2.0)) < 2.0 * ER;
-        for r in 0..H {
-            for xi in 0..Self::W {
-                let k = r * Self::W + xi;
+            |x: f64, r: f64| (x + 0.5 - lay.ec[0]).hypot(r + 0.5 - (lay.ec[1] - RISE / 2.0)) < 2.0 * ER;
+        for r in 0..h {
+            for xi in 0..w {
+                let k = r * w + xi;
                 if ground[k] {
                     continue;
                 }
                 let (x, rf) = (xi as f64, r as f64);
                 // a black sky. Faint stars, thicker along a diagonal where the
                 // galaxy runs, none round the Earth
-                let band_d = (rf - (4.0 + x * Self::L.band[0])) / 1.05;
+                let band_d = (rf - (4.0 + x * lay.band[0])) / 1.05;
                 let band = (-(band_d / 10.0).powi(2)).exp()
                     * smooth(0.35, 0.65, fbm(x * 0.05, rf * 0.08, 3, 0.0))
-                    * smooth(Self::L.band[1], Self::L.band[2], x);
+                    * smooth(lay.band[1], lay.band[2], x);
                 let (mut cr, mut cg, mut cb) = (0.0, 0.0, 0.0);
                 let hs = hash(x * 3.0 + 1.0, rf * 7.0 + 2.0);
                 if hs > 0.994 - 0.05 * band && !near(x, rf) {
@@ -471,13 +489,13 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 scap[k] = 1.0;
             }
         }
-        let base = (0..Self::N)
+        let base = (0..n)
             .map(|k| {
                 let f = |v: &[f32]| f64::from(v[k]);
                 dot(
                     &mut dots,
-                    k % Self::W,
-                    k / Self::W,
+                    k % w,
+                    k / w,
                     f(&sr),
                     f(&sg),
                     f(&sb),
@@ -590,10 +608,10 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let l = [sun[0], sun[1], -sun[2]]; // into screen space, z toward us
         let hv = unit([l[0], l[1], l[2] + 1.0]);
         let mut bx = Vec::new();
-        let (ec0, ec1, er) = (Self::L.ec[0] as i32, Self::L.ec[1] as i32, ER as i32);
-        for r in (ec1 - RISE as i32 - er - 13).max(0)..=(ec1 + er + 2).min(H as i32 - 1) {
-            for x in ec0 - er - 13..=ec0 + er + 13 {
-                let k = r as usize * Self::W + x as usize;
+        let (ec0, ec1, er) = (lay.ec[0] as i32, lay.ec[1] as i32, ER as i32);
+        for r in (ec1 - RISE as i32 - er - 13).max(0)..=(ec1 + er + 2).min(h as i32 - 1) {
+            for x in (ec0 - er - 13).max(0)..=(ec0 + er + 13).min(w as i32 - 1) {
+                let k = r as usize * w + x as usize;
                 if !ground[k] {
                     bx.push(k);
                 }
@@ -601,8 +619,8 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         }
         // the bright stars and the faint cross each one carries
         let mut twinkle = Vec::new();
-        for &(x, r, s, p) in Self::L.bright {
-            for (ox, oy, w) in [
+        for &(x, r, s, p) in &lay.bright {
+            for (ox, oy, wt) in [
                 (0, 0, 1.0),
                 (-1, 0, 0.2),
                 (1, 0, 0.2),
@@ -610,22 +628,23 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
                 (0, 1, 0.2),
             ] {
                 let (cx, cr) = ((x as i32 + ox) as usize, (r as i32 + oy) as usize);
-                let k = cr * Self::W + cx;
+                let k = cr * w + cx;
                 if !ground[k] {
                     twinkle.push(Twinkle {
                         k,
                         x: cx,
                         r: cr,
-                        s: s * w,
+                        s: s * wt,
                         p,
                         ph: hash(x as f64, r as f64) * 6.28,
-                        core: w == 1.0,
+                        core: wt == 1.0,
                     });
                 }
             }
         }
 
         Self {
+            lay,
             dots,
             base,
             sr,
@@ -651,15 +670,16 @@ impl<const IS_WIDE: bool> Piece for Scene<IS_WIDE> {
         let (ct, st, cn, sn) = (tilt.cos(), tilt.sin(), nod.cos(), nod.sin());
         let spin = t * 0.045;
         let drift = t * 0.012; // clouds run a little ahead of the ground
-        let ey = Self::L.ec[1] - RISE * (0.5 - 0.5 * ((t / RISE_T) * PI * 2.0).cos());
+        let (w, ec) = (self.lay.w, self.lay.ec);
+        let ey = ec[1] - RISE * (0.5 - 0.5 * ((t / RISE_T) * PI * 2.0).cos());
         for &k in &self.bx {
-            let (x, r) = (k % Self::W, k / Self::W);
+            let (x, r) = (k % w, k / w);
             let mut cr = f64::from(self.sr[k]);
             let mut cg = f64::from(self.sg[k]);
             let mut cb = f64::from(self.sb[k]);
             let mut cap = f64::from(self.scap[k]);
             let mut floor = 0.0;
-            let dx = x as f64 + 0.5 - Self::L.ec[0];
+            let dx = x as f64 + 0.5 - ec[0];
             let dy = r as f64 + 0.5 - ey;
             let d = dx.hypot(dy);
             // the Earth's air, a thin blue rim on its sunlit side

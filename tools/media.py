@@ -57,12 +57,6 @@ def savers() -> list[str]:
     return list(dict.fromkeys(names))
 
 
-def tour_order(names: list[str]) -> list[str]:
-    """One half per pair, the `-wide` one, as rotation picks it by default."""
-    s = set(names)
-    return [n for n in names if f"{n}-wide" not in s]
-
-
 def capture(binary: Path, name: str, scratch: Path) -> list[np.ndarray]:
     warm = WARMUP.get(name, DEFAULT_WARMUP)
     dump = scratch / name
@@ -153,7 +147,7 @@ def main() -> int:
     unknown = set(want) - set(indexed)
     if unknown:
         sys.exit(f"not in the README's saver index: {sorted(unknown)}")
-    tour = [] if names else tour_order(indexed)
+    tour = [] if names else indexed
     out.mkdir(parents=True, exist_ok=True)
     clips: dict[str, list[np.ndarray]] = {}
 

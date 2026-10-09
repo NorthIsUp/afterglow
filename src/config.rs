@@ -236,7 +236,7 @@ pub fn help(key: &str) -> Option<&'static str> {
         "ASCII_REST_TOUR" => "the slow camera: drifts into detail, pulls back now and then",
         "ASCII_REST_TOUR_SHOT_SECS" => "seconds a shot takes, give or take; slow moves end sooner",
         "ASCII_REST_TOUR_CUTS" => "cut between framings and drift, instead of one long move",
-        "ASCII_REST_TOUR_MAX_ZOOM_PCT" => "closest zoom, per cent of the cover view's cell",
+        "ASCII_REST_TOUR_MAX_ZOOM_PCT" => "closest zoom, per cent of the untoured cell",
         "ASCII_REST_TITLE" => "the scene's name in a corner",
         "LIGHTHOUSE_BEAM_FRONT" => {
             "the beam turns in front of the tower on the near half; off, always behind"

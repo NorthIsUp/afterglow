@@ -157,7 +157,7 @@ them live — see [Live settings](docs/mirror.md#live-settings-config).
 
 ### ascii.rest halftone scenes
 
-Ports of [ascii.rest](https://ascii.rest)'s scenes, held on a cover view; `ASCII_REST_TOUR=1` adds a slow camera tour. Every scene also has a `-wide` variant recomposed at 3.2:1, and the pair opens on it: the mirror page and rotation show the `-wide` until someone unticks `expanded`. The shared engine, the tour and its knobs: [the ascii.rest ports](docs/ascii-rest.md).
+Ports of [ascii.rest](https://ascii.rest)'s scenes, each recomposed for the panel's own shape, from pine's 3.2:1 to portrait; `ASCII_REST_TOUR=1` adds a slow camera tour. The shared engine, the tour and its knobs: [the ascii.rest ports](docs/ascii-rest.md#scenes).
 
 | `SAVER`                                           | What                                                                                                     |
 | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
