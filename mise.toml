@@ -21,6 +21,18 @@ run         = "cargo build --release --locked"
 description = "Run tests"
 run         = "cargo test --release --locked"
 
+[tasks.build-doom]
+description = "Build release with Doom compiled in (GPL as a whole; see THIRD_PARTY.md)"
+run         = "cargo build --release --locked --features doom"
+
+[tasks.test-doom]
+description = "Run tests with Doom compiled in, against Freedoom (downloaded once)"
+run         = 'DOOM_TEST_WAD="$PWD/$(tools/freedoom.sh)" cargo test --release --locked --features doom'
+
+[tasks.clippy-doom]
+description = "Run clippy on the Doom build"
+run         = "cargo clippy --release --locked --all-targets --features doom -- -D warnings"
+
 [tasks.lint]
 description = "Run linters"
 run         = "hk check"

@@ -91,7 +91,9 @@ pub fn run_dump(dir: &str, cfg: &Config, mirror: &Mirror) -> Result<(), String> 
     // card — the same argument that put the damage self-check in this file.
     // Paced at SAVER_FPS when it is live, so a dump of many frames is a live
     // mirror rather than a burst; `SAVER_HTTP=off` keeps a dump instant.
-    let paced = cfg.http != "off";
+    // `SAVER_DUMP_PACED=1` paces without the mirror, for a saver whose
+    // simulation runs on the wall clock (doom's engine thread).
+    let paced = cfg.http != "off" || crate::env_num(&["SAVER_DUMP_PACED"], 0, 0, 1) == 1;
 
     std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {dir}: {e}"))?;
     let log_path = format!("{dir}/damage.txt");

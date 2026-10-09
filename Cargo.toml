@@ -24,6 +24,15 @@ libc = "0.2"
 # pixel was the hot path; one u32 store is a single bounds-checked write.
 bytemuck = "1"
 
+[features]
+# Doom, compiled in from doomgeneric (GPL-2.0). Off by default: a binary built
+# with it is GPL as a whole, and it needs a C compiler. The `-doom` image is
+# this build; the default image never sees the C.
+doom = ["dep:cc"]
+
+[build-dependencies]
+cc = { version = "1", optional = true, features = ["parallel"] }
+
 [profile.release]
 opt-level = 3
 lto = true

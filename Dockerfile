@@ -23,13 +23,38 @@ FROM rust:1-alpine AS build
 # musl-dev for the C runtime musl-gcc needs; no libdrm, the crate does ioctls.
 RUN apk add --no-cache musl-dev
 WORKDIR /src
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 # --locked so the committed Cargo.lock is authoritative; a drifting dependency
 # should fail the build rather than silently ship something else.
 RUN cargo build --release --locked
 
-# --- runtime stage: just the binary ---
+# --- the -doom variant: doomgeneric compiled in, so GPL as a whole ---
+# `docker build --target doom`. The default target below never copies doom/,
+# so the MIT image cannot pick up a byte of it.
+FROM rust:1-alpine AS build-doom
+# gcc and binutils (nm) for build.rs, which compiles the engine four times.
+RUN apk add --no-cache musl-dev gcc binutils
+WORKDIR /src
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY src ./src
+COPY doom ./doom
+RUN cargo build --release --locked --features doom
+
+FROM alpine:3 AS freedoom
+RUN apk add --no-cache curl
+COPY tools/freedoom.sh /freedoom.sh
+RUN /freedoom.sh /out
+
+FROM scratch AS doom
+COPY --from=build-doom /src/target/release/screensaver /screensaver
+COPY --from=freedoom /out/freedoom1.wad /freedoom1.wad
+COPY --from=freedoom /out/COPYING.txt /licenses/freedoom-COPYING.txt
+COPY doom/doomgeneric/LICENSE /licenses/doomgeneric-GPL-2.0.txt
+COPY LICENSE /licenses/afterglow-MIT.txt
+ENTRYPOINT ["/screensaver"]
+
+# --- runtime stage: just the binary. Last, so it is the default target ---
 FROM scratch
 COPY --from=build /src/target/release/screensaver /screensaver
 ENTRYPOINT ["/screensaver"]

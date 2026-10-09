@@ -43,6 +43,10 @@ The clips are GIFs in Git LFS; `mise run media` regenerates them
 docker pull ghcr.io/northisup/afterglow:latest   # linux/arm64; also :sha-<commit>
 ```
 
+`:latest-doom` (and `:sha-<commit>-doom`) is the same image plus the
+[`doom`](docs/savers/doom.md) saver and Freedoom. It compiles in GPL-2.0 code,
+so that image is GPL as a whole; the default image is MIT.
+
 It needs a node with a monitor on HDMI, `/dev/dri/card0`, and a privileged
 container. [`examples/deployment.yaml`](examples/deployment.yaml) is a minimal
 Kubernetes deployment: the privileged container, the `release-fbcon`
@@ -154,6 +158,7 @@ them live — see [Live settings](docs/mirror.md#live-settings-config).
 | [`hardrain`](docs/savers/hardrain.md)            | A downpour: steeply slanted streaks under a gusting wind, a mist the sky is veiled in, squalls sweeping across, and standing water at the bottom that ripples where the rain lands.                                                     |
 | [`zot`](docs/savers/zot.md)                      | Lightning.                                                                                                                                                                                                                              |
 | [`plasma`](docs/savers/plasma.md)                | The demo-scene plasma, full screen: four sine fields summed into soft blobs of density, drawn with ascii.rest's ramp `.,-~:;=+*#%@` at the panel's own resolution, any size or shape.                                                   |
+| [`doom`](docs/savers/doom.md)                    | Freedoom on autopilot, a view per random map, as many side by side as the panel fits. **Only in the `-doom` image, which is GPL** (see the page).                                                                                       |
 
 ### ascii.rest halftone scenes
 
