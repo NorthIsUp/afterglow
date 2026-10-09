@@ -338,35 +338,17 @@ impl Canvas for Aurora {
     #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = 20;
-    #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("AURORA_COLOR", "0")];
+    const COLOR: &'static str = "AURORA_COLOR";
+    const PALETTE: &'static [u32] = PALETTE;
+    const INK: u32 = hex("#7dffb0");
+    /// A deep night blue.
+    const GROUND: u32 = hex("#040a1c");
 
-    fn new(cols: usize, rows: usize) -> Self {
-        let colour = crate::env_num(&["AURORA_COLOR"], 1, 0, 1) == 1;
+    fn new(cols: usize, rows: usize, colour: bool) -> Self {
         Self(Scene::new(cols, rows, Layout::fit(cols, rows, colour)))
-    }
-
-    fn palette(&self) -> &'static [u32] {
-        if self.0.lay.colour {
-            PALETTE
-        } else {
-            &[INK]
-        }
-    }
-
-    /// A deep night blue in colour, upstream's black without.
-    fn ground(&self) -> u32 {
-        if self.0.lay.colour {
-            hex("#040a1c")
-        } else {
-            0
-        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
     }
 }
-
-/// Upstream's one ink.
-const INK: u32 = hex("#7dffb0");

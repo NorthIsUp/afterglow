@@ -407,20 +407,12 @@ impl Canvas for ReactionDiffusion {
     #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = 20;
-    #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("REACTION_DIFFUSION_COLOR", "0")];
+    const COLOR: &'static str = "REACTION_DIFFUSION_COLOR";
+    const PALETTE: &'static [u32] = PALETTE;
+    const INK: u32 = hex("#ff8a3d");
 
-    fn new(cols: usize, rows: usize) -> Self {
-        let colour = crate::env_num(&["REACTION_DIFFUSION_COLOR"], 1, 0, 1) == 1;
+    fn new(cols: usize, rows: usize, colour: bool) -> Self {
         Self(Dish::new(cols, rows, colour))
-    }
-
-    fn palette(&self) -> &'static [u32] {
-        if self.0.colour {
-            PALETTE
-        } else {
-            &[INK]
-        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
@@ -438,5 +430,3 @@ const PALETTE: &[u32] = &[
     hex("#ffa83a"),
     hex("#ffe27a"),
 ];
-/// Upstream's one ink.
-const INK: u32 = hex("#ff8a3d");

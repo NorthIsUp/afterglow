@@ -214,21 +214,19 @@ pub trait Canvas: Sized + 'static {
     const FPS: u32;
     /// A text cell, two widths tall; here so the mirror groups it as text.
     const CELL: usize = 2;
-    /// Knob values that draw upstream's picture: a port's own additions,
-    /// colour among them, default on.
+    /// The knob that turns colour on (the default): cells index `PALETTE`
+    /// over `GROUND`. Off is upstream's `INK` on black.
+    const COLOR: &'static str;
+    const PALETTE: &'static [u32];
+    /// Upstream's one ink: the whole palette with colour off.
+    const INK: u32;
+    const GROUND: u32 = 0;
+    /// Knob values beyond `COLOR=0` that draw upstream's picture: a port's
+    /// own additions, default on.
     #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)];
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[];
 
-    fn new(cols: usize, rows: usize) -> Self;
-
-    /// What the cells' colour indices address: the piece's colours, or
-    /// upstream's one ink with its colour knob off.
-    fn palette(&self) -> &'static [u32];
-
-    /// What shows behind the picture.
-    fn ground(&self) -> u32 {
-        0
-    }
+    fn new(cols: usize, rows: usize, colour: bool) -> Self;
 
     /// Write every one of the `cols * rows` cells of the picture at `t`.
     fn frame(&mut self, t: f64, out: &mut [Cell]);
@@ -264,6 +262,11 @@ impl Clock {
     }
 }
 
+/// `P`'s colour knob.
+fn colour_of<P: Canvas>() -> bool {
+    crate::env_num(&[P::COLOR], 1, 0, 1) == 1
+}
+
 /// The saver for any [`Canvas`]: one grid the size of the panel, in text
 /// cells of `ASCII_REST_TEXT_CELL_W x _H` glass pixels.
 pub struct Fill<P: Canvas> {
@@ -281,9 +284,14 @@ impl<P: Canvas> Fill<P> {
         let h = crate::env_num(&["ASCII_REST_TEXT_CELL_H"], 24, 8, 128) as usize;
         let grid = Grid::new(panel, w, h);
         let (cols, rows) = (grid.cols(), grid.rows());
-        let piece = P::new(cols, rows);
-        let palette = piece.palette();
-        let grid = grid.with_ground(piece.ground());
+        let colour = colour_of::<P>();
+        let piece = P::new(cols, rows, colour);
+        let (palette, ground) = if colour {
+            (P::PALETTE, P::GROUND)
+        } else {
+            (const { &[P::INK] as &[u32] }, 0)
+        };
+        let grid = grid.with_ground(ground);
         let title = (crate::env_num(&["ASCII_REST_TITLE"], 0, 0, 1) == 1)
             .then(|| Title::new(P::NAME, P::CELL, palette));
         Self {
@@ -852,21 +860,35 @@ pub(crate) mod tests {
         );
     }
 
-    /// A canvas's colour, at least, is its own: every one has an `UPSTREAM`
-    /// knob, and switching them must change its picture at upstream's grid.
+    /// `P` at upstream's grid, with `knobs` set.
+    fn canvas<P: Canvas>(knobs: &[(&str, &str)]) -> P {
+        with_knobs(P::NAME, knobs, || {
+            P::new(P::COLS, P::ROWS, super::colour_of::<P>())
+        })
+    }
+
+    /// `P` at upstream's grid with colour off and its `UPSTREAM` knobs.
+    fn upstream_canvas<P: Canvas>() -> P {
+        let knobs: Vec<_> = std::iter::once((P::COLOR, "0"))
+            .chain(P::UPSTREAM.iter().copied())
+            .collect();
+        canvas(&knobs)
+    }
+
+    /// A canvas's colour, at least, is its own: switching to upstream's
+    /// knobs must change its picture at upstream's grid.
     pub fn upstream_knobs_change_the_canvas<P: Canvas>() {
-        assert!(!P::UPSTREAM.is_empty(), "{}: no UPSTREAM knobs", P::NAME);
-        let new = || P::new(P::COLS, P::ROWS);
         let pic = |mut p: P| {
             let mut out = vec![Cell::CLEAR; P::COLS * P::ROWS];
             p.frame(4.0, &mut out);
             out
         };
-        let (ours, theirs) = (
-            with_knobs(P::NAME, &[], new),
-            with_knobs(P::NAME, P::UPSTREAM, new),
+        assert_ne!(
+            pic(canvas::<P>(&[])),
+            pic(upstream_canvas::<P>()),
+            "{}",
+            P::NAME
         );
-        assert_ne!(pic(ours), pic(theirs), "{}", P::NAME);
     }
 
     /// [`golden_cells`] for a [`Piece`].
@@ -884,7 +906,7 @@ pub(crate) mod tests {
 
     /// [`golden_cells`] for a [`Canvas`], built at upstream's grid.
     pub fn golden_fill<P: Canvas>() {
-        let mut piece = with_knobs(P::NAME, P::UPSTREAM, || P::new(P::COLS, P::ROWS));
+        let mut piece = upstream_canvas::<P>();
         golden_cells(
             P::NAME,
             [P::COLS, P::ROWS, P::FPS as usize],

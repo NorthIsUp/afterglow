@@ -668,40 +668,23 @@ impl Canvas for Lighthouse {
     #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = 20;
+    const COLOR: &'static str = "LIGHTHOUSE_COLOR";
+    const PALETTE: &'static [u32] = PALETTE;
+    const INK: u32 = hex("#ffd27a");
+    /// A night of deep navy.
+    const GROUND: u32 = hex("#050b1a");
     #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)] =
-        &[("LIGHTHOUSE_BEAM_FRONT", "0"), ("LIGHTHOUSE_COLOR", "0")];
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("LIGHTHOUSE_BEAM_FRONT", "0")];
 
-    fn new(cols: usize, rows: usize) -> Self {
+    fn new(cols: usize, rows: usize, colour: bool) -> Self {
         let round = crate::env_num(&["LIGHTHOUSE_BEAM_FRONT"], 1, 0, 1) == 1;
-        let colour = crate::env_num(&["LIGHTHOUSE_COLOR"], 1, 0, 1) == 1;
         Self(Scene::new(Layout::fit(cols, rows, colour, round)))
-    }
-
-    fn palette(&self) -> &'static [u32] {
-        if self.0.lay.colour {
-            PALETTE
-        } else {
-            &[INK]
-        }
-    }
-
-    /// A night of deep navy in colour, upstream's black without.
-    fn ground(&self) -> u32 {
-        if self.0.lay.colour {
-            hex("#050b1a")
-        } else {
-            0
-        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
         self.0.frame(t, out);
     }
 }
-
-/// Upstream's one ink.
-const INK: u32 = hex("#ffd27a");
 
 /// A byte for upstream's `·` star in the ASCII-only buffer.
 const MIDDOT: u8 = 0x7f;

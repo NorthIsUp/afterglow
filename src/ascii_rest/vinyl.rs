@@ -731,9 +731,6 @@ impl Scene {
 
 pub struct Vinyl(Scene);
 
-/// Upstream's one ink.
-const INK: u32 = hex("#ffb347");
-
 /// A deck's width in columns at scale `s`: the record, then the tonearm, the
 /// pitch slider and the plinth's edge, which keep their size.
 fn deck_w(s: f64) -> f64 {
@@ -747,17 +744,18 @@ impl Canvas for Vinyl {
     #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = 24;
+    const COLOR: &'static str = "VINYL_COLOR";
+    const PALETTE: &'static [u32] = PALETTE;
+    const INK: u32 = hex("#ffb347");
     #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)] =
-        &[("VINYL_COLOR", "0"), ("VINYL_SIDE_SECS", "0")];
+    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("VINYL_SIDE_SECS", "0")];
 
     /// Two decks and a mixer at least `MIX` wide when they still come out
     /// at `TWO` of the size one deck alone would; otherwise one deck as big
     /// as fits, centred. At upstream's 64x25 the one deck is upstream's.
-    fn new(cols: usize, rows: usize) -> Self {
+    fn new(cols: usize, rows: usize, colour: bool) -> Self {
         const MIX: f64 = 22.0;
         const TWO: f64 = 0.6;
-        let colour = crate::env_num(&["VINYL_COLOR"], 1, 0, 1) == 1;
         let side = crate::env_num(&["VINYL_SIDE_SECS"], 240, 0, 3600) as f64;
         let (w, h) = (cols as f64, rows as f64);
         let tall = h / ROWS as f64;
@@ -809,14 +807,6 @@ impl Canvas for Vinyl {
             }
         };
         Self(scene)
-    }
-
-    fn palette(&self) -> &'static [u32] {
-        if self.0.colour {
-            PALETTE
-        } else {
-            &[INK]
-        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {

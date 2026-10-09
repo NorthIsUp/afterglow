@@ -481,9 +481,6 @@ impl Scene {
 
 pub struct FractalTree(Scene);
 
-/// Upstream's one ink.
-const INK: u32 = hex("#9be36b");
-
 impl Canvas for FractalTree {
     const NAME: &'static str = "fractal-tree";
     #[cfg(test)]
@@ -491,14 +488,15 @@ impl Canvas for FractalTree {
     #[cfg(test)]
     const ROWS: usize = ROWS;
     const FPS: u32 = 15;
-    #[cfg(test)]
-    const UPSTREAM: &'static [(&'static str, &'static str)] = &[("FRACTAL_TREE_COLOR", "0")];
+    const COLOR: &'static str = "FRACTAL_TREE_COLOR";
+    const PALETTE: &'static [u32] = PALETTE;
+    const INK: u32 = hex("#9be36b");
 
     /// Upstream's tree scaled to fit, in the middle. Given more than
     /// `GROVE` of its frames' width, trees of 55% to 80% of it walk out from
     /// it either side until one stands past the edge, the farthest first so
     /// the middle one is in front, and the ground runs edge to edge.
-    fn new(cols: usize, rows: usize) -> Self {
+    fn new(cols: usize, rows: usize, colour: bool) -> Self {
         /// Half a full-size crown's width in columns, less a little so
         /// neighbours' leaves touch.
         const CROWN: f64 = 21.0;
@@ -506,7 +504,6 @@ impl Canvas for FractalTree {
         const GROVE: f64 = 1.4;
         /// Columns the crown needs at upstream's scale.
         const WIDE: f64 = 56.0;
-        let colour = crate::env_num(&["FRACTAL_TREE_COLOR"], 1, 0, 1) == 1;
         let s = (rows as f64 / ROWS as f64).min(cols as f64 / WIDE);
         let ground = rows - 1;
         let mid = cols as f64 / 2.0;
@@ -551,14 +548,6 @@ impl Canvas for FractalTree {
             dots: ends,
         };
         Self(Scene::new(cols, rows, all, ground, colour))
-    }
-
-    fn palette(&self) -> &'static [u32] {
-        if self.0.tone.is_empty() {
-            &[INK]
-        } else {
-            PALETTE
-        }
     }
 
     fn frame(&mut self, t: f64, out: &mut [Cell]) {
