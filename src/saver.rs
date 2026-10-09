@@ -19,6 +19,7 @@ use crate::life::Life;
 use crate::lissajous::Lissajous;
 use crate::marble::Marble;
 use crate::matrix::Matrix;
+use crate::maze::MazeChase;
 use crate::mirror::{self, Mirror};
 use crate::moire::Moire;
 use crate::plasma::Plasma;
@@ -32,6 +33,7 @@ use crate::speeder::Speeder;
 use crate::strings::Strings;
 use crate::surface::{Damage, Panel, Surface};
 use crate::tactiles::Tactiles;
+use crate::tetris::Tetris;
 use crate::toasters::Toasters;
 use crate::toasters2::Toasters2;
 use crate::toasters3::Toasters3;
@@ -126,6 +128,8 @@ macro_rules! savers {
         ("zot", |p, fps| Box::new(Zot::new(p, fps))),
         ("plasma", |p, fps| Box::new(Plasma::new(p, fps))),
         ("chess", |p, fps| Box::new(Chess::new(p, fps))),
+        ("tetris", |p, fps| Box::new(Tetris::new(p, fps))),
+        ("maze-chase", |p, fps| Box::new(MazeChase::new(p, fps))),
         #[cfg(feature = "doom")]
         ("doom", |p, fps| Box::new(Doom::new(p, fps))),
             $((
@@ -188,6 +192,8 @@ const SECTIONS: &[(&str, usize)] = &[
     ("zot", 4),
     ("plasma", 4),
     ("chess", 4),
+    ("tetris", 2),
+    ("maze-chase", 2),
     #[cfg(feature = "doom")]
     ("doom", 2),
 ];
