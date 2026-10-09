@@ -10,15 +10,19 @@ character piece. Both are composed for the panel they land on, landscape
 through square to portrait, rather than fitted or cropped. A port is only its
 drawing code.
 
-- **Scenes** (`cell: 1`, a palette) share `halftone::Dots`: the 4x4 ordered
+- **Scenes** (one dot per cell, a palette) share `halftone::Dots`: the 4x4 ordered
   dither, the " ·•●" dot glyphs (drawn round on a square-glass cell, sized to
   upstream's coverage) and the cached nearest-palette lookup.
-- **Character pieces** (`cell: 2`) have one ink upstream; here each has a
+- **Character pieces** (text cells twice as tall as wide) have one ink upstream; here each has a
   palette of its own as well. Their box-drawing and block characters are in the
   glyph table as `font::TEXT`.
 
 Pictures are drawn 1:1, one piece cell per grid cell, never resampled: that
 would smear the dither.
+
+Every port had a `-wide` twin before it drew at any size; `<name>-wide` is
+still accepted wherever a saver is named (`SAVER`, `/select`,
+`SAVER_ROTATE_EXCLUDE`, `/config?saver=`) and means the port.
 
 Every port is checked cell for cell against upstream's own output — glyph and
 palette index, four frames each, stateful pieces stepped through every tick
@@ -51,10 +55,6 @@ scene at 200x100 and holds it to upstream cell for cell; an exercise test runs
 it on every panel shape from pine's 3.2:1 through 16:9, 4:3, square and portrait
 down to 128px: it covers the grid, reaches both sides, moves, and never
 allocates.
-
-Each scene had a `-wide` twin before it drew at any size; `<name>-wide` is
-still accepted wherever a saver is named (`SAVER`, `/select`,
-`SAVER_ROTATE_EXCLUDE`, `/config?saver=`) and means the scene.
 
 ### Knobs
 
@@ -126,10 +126,6 @@ does. The `text` list in `each_piece!` gives a piece that golden test, a check
 that the `UPSTREAM` knobs really change the picture, and an exercise test on every
 panel shape from pine's 3.2:1 through 16:9, 4:3, square and portrait down to
 128px: it moves, reaches both sides on a landscape panel, and never allocates.
-
-Each piece had a `-wide` twin before it drew at any size; `<name>-wide` is
-still accepted wherever a saver is named (`SAVER`, `/select`,
-`SAVER_ROTATE_EXCLUDE`, `/config?saver=`) and means the piece.
 
 Knobs shared by all eight:
 

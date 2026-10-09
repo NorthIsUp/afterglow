@@ -36,6 +36,7 @@
 
 pub mod halftone;
 pub mod math;
+pub mod stretch;
 pub mod text;
 pub mod title;
 pub mod tour;

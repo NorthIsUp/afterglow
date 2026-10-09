@@ -218,7 +218,7 @@ struct Scene {
     /// The lighthouse and its rocks never move: light as 0..1 where they are,
     /// -1 where they are not.
     still: Vec<f32>,
-    /// What each still cell is, for the twin's colours.
+    /// What each still cell is, for the palette.
     still_tone: Vec<u8>,
     /// What each cell of `out` is this frame, likewise.
     tone: Vec<u8>,

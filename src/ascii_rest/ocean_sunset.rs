@@ -18,6 +18,7 @@ use std::f64::consts::PI;
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, js_round, mix, noise, smooth};
+use super::stretch::Stretch;
 use super::{hex, Piece};
 use crate::grid::Cell;
 
@@ -131,21 +132,11 @@ struct Layout {
 
 impl Layout {
     fn new(w: usize, h: usize) -> Self {
-        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
-        // at square; `tall` is the rows past upstream's 100.
-        let (wf, tall) = (w as f64, h - 100);
-        let wide = (wf - 200.0) / 120.0;
-        let narrow = clamp((200.0 - wf) / 100.0);
-        let grow = |at: f64, by_wide: f64, by_narrow: f64| {
-            if wf >= 200.0 {
-                at + by_wide * wide
-            } else {
-                at - by_narrow * narrow
-            }
-        };
+        let s = Stretch::new(w, h);
+        let tall = h - 100;
         let hz = 56 + tall / 2;
-        let sun = grow(134.0, 78.0, 62.0);
-        let hs = grow(1.0, 0.3, 0.15);
+        let sun = s.grow(134.0, 78.0, 62.0);
+        let hs = s.grow(1.0, 0.3, 0.15);
         // a deck at least twice the frame's width, so it never repeats in view
         let u = 640 * w.div_ceil(200).max(1);
         let scale = u as f64 / 640.0;
@@ -157,9 +148,9 @@ impl Layout {
             h,
             hz,
             sun: [sun, hz as f64 - 4.5],
-            boat: grow(112.0, 76.0, 56.0) as usize,
+            boat: s.grow(112.0, 76.0, 56.0) as usize,
             hs,
-            vs: grow(1.0, 0.15, 0.15),
+            vs: s.grow(1.0, 0.15, 0.15),
             landw: (60.0 * hs).ceil() as usize,
             u,
             deck_periods: [8.0 * scale, 4.0 * scale, 26.0 * scale],

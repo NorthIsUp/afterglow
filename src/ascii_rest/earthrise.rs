@@ -22,6 +22,7 @@ use std::f64::consts::PI;
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, js_hypot, js_round, mix, noise, smooth, unit};
+use super::stretch::Stretch;
 use super::{hex, Piece};
 use crate::grid::Cell;
 
@@ -137,18 +138,8 @@ const BRIGHT_WIDE: [(f64, usize, f64, f64); 2] = [(21.0, 19, 0.9, 5.1), (297.0, 
 
 impl Layout {
     fn new(w: usize, h: usize) -> Self {
-        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
-        // at square.
-        let (wf, tall) = (w as f64, h as f64 - 100.0);
-        let wide = (wf - 200.0) / 120.0;
-        let narrow = clamp((200.0 - wf) / 100.0);
-        let grow = |at: f64, by_wide: f64, by_narrow: f64| {
-            if wf >= 200.0 {
-                at + by_wide * wide
-            } else {
-                at - by_narrow * narrow
-            }
-        };
+        let s = Stretch::new(w, h);
+        let Stretch { w: wf, wide, narrow, tall } = s;
         // a tall panel is mostly more sky over the Earth
         let eye = 37.0 + 0.7 * tall;
         let below = h as f64 - eye;
@@ -183,8 +174,8 @@ impl Layout {
             ec,
             bright,
             rocks: if wide > 0.3 { &ROCKS } else { &ROCKS[..6] },
-            vignette: [grow(30.0, 20.0, 15.0), wf / 2.0, 84.0 + tall, 102.0 + tall],
-            band: [grow(0.32, -0.06, 0.0) * lift, grow(120.0, 50.0, 56.0), grow(70.0, 30.0, 40.0)],
+            vignette: [s.grow(30.0, 20.0, 15.0), wf / 2.0, 84.0 + tall, 102.0 + tall],
+            band: [s.grow(0.32, -0.06, 0.0) * lift, s.grow(120.0, 50.0, 56.0), s.grow(70.0, 30.0, 40.0)],
         }
     }
 

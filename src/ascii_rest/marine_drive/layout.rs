@@ -1,7 +1,8 @@
 //! Where marine drive's things sit in a `w x h` frame. Upstream's 200x100 is
 //! the anchor every value moves from, so there it is exact.
 
-use super::super::math::{clamp, smooth};
+use crate::ascii_rest::math::smooth;
+use crate::ascii_rest::stretch::Stretch;
 
 /// Towers at the point, by distance back from it: [offset, half width, top
 /// row, warm light]. Upstream's cluster.
@@ -87,26 +88,16 @@ pub(super) struct Layout {
 
 impl Layout {
     pub fn new(w: usize, h: usize) -> Self {
-        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
-        // at square; `tall` is the rows past upstream's 100.
-        let (wf, tall) = (w as f64, h as f64 - 100.0);
-        let wide = (wf - 200.0) / 120.0;
-        let narrow = clamp((200.0 - wf) / 100.0);
-        let grow = |at: f64, by_wide: f64, by_narrow: f64| {
-            if wf >= 200.0 {
-                at + by_wide * wide
-            } else {
-                at - by_narrow * narrow
-            }
-        };
+        let s = Stretch::new(w, h);
+        let Stretch { w: wf, tall, .. } = s;
         // Whole rows and columns, so tower floors and ship lights stay on the grid.
         let sky = (tall * 0.55).round();
         let hz = 40.0 + sky;
-        let tip = grow(176.0, 64.0, 104.0).round();
-        let moon = [grow(189.0, 98.0, 104.0).round(), 13.0 + (sky * 0.6).round()];
+        let tip = s.grow(176.0, 64.0, 104.0).round();
+        let moon = [s.grow(189.0, 98.0, 104.0).round(), 13.0 + (sky * 0.6).round()];
         let shift = tip - 176.0;
         // How far back from the point the towers reach.
-        let reach = grow(79.0, 43.0, 39.0);
+        let reach = s.grow(79.0, 43.0, 39.0);
         let mut towers = vec![HILL_TOWER];
         for &[off, hw, top, warm] in MID_CURVE.iter().chain(&CLUSTER) {
             if -off <= reach {
@@ -144,9 +135,9 @@ impl Layout {
             towers,
             ship_lights,
             hulls,
-            point_glow: [grow(84.0, 24.0, 65.0), grow(98.0, 30.0, 65.0), 186.0 + shift, 174.0 + shift],
-            point_haze: [grow(84.0, 24.0, 65.0), grow(104.0, 30.0, 65.0), 188.0 + shift, 172.0 + shift],
-            point_clear: [grow(84.0, 24.0, 65.0), grow(96.0, 24.0, 65.0), 186.0 + shift, 176.0 + shift],
+            point_glow: [s.grow(84.0, 24.0, 65.0), s.grow(98.0, 30.0, 65.0), 186.0 + shift, 174.0 + shift],
+            point_haze: [s.grow(84.0, 24.0, 65.0), s.grow(104.0, 30.0, 65.0), 188.0 + shift, 172.0 + shift],
+            point_clear: [s.grow(84.0, 24.0, 65.0), s.grow(96.0, 24.0, 65.0), 186.0 + shift, 176.0 + shift],
             open_sea: [172.0 + shift, 186.0 + shift],
         }
     }

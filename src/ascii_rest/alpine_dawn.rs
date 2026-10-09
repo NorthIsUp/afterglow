@@ -20,6 +20,7 @@ use std::f64::consts::PI;
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, js_hypot, js_round, mix, noise, smooth};
+use super::stretch::Stretch;
 use super::{hex, Piece};
 use crate::grid::Cell;
 
@@ -224,7 +225,7 @@ impl Layout {
             cx,
             // closed in, the range hides the low notch the sun clears upstream,
             // so it stands higher over the ridge
-            sun: [at(151.0), 50.0 - 14.0 * clamp((200.0 - wf) / 100.0) + top as f64],
+            sun: [at(151.0), 50.0 - 14.0 * Stretch::new(w, h).narrow + top as f64],
             peaks,
             pines,
             east: at(190.0),

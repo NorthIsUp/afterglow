@@ -76,7 +76,7 @@
 //! * `RETRY_SECONDS`  — wait between attempts when no display is present (default 30)
 //! * `SAVER_HTTP`     — address the web mirror listens on (default
 //!   `127.0.0.1:8080`, which is the `tailscale-auth` sidecar's default upstream;
-//!   `off` disables it). See `mirror.rs`.
+//!   `off` disables it). See `src/mirror/`.
 //! * `SAVER_DUMP`     — render to PPM files in this directory instead of to a
 //!   display, then exit. Not with `SAVER_TERM`. Also honours `SAVER_DUMP_FRAMES`, `SAVER_DUMP_EVERY`,
 //!   `SAVER_WIDTH`, `SAVER_HEIGHT`.

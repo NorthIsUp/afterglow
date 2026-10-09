@@ -16,6 +16,7 @@ use std::f64::consts::PI;
 
 use super::halftone::{bayer, Dots};
 use super::math::{clamp, fbm, hash, mix, noise, smooth};
+use super::stretch::Stretch;
 use super::{hex, Piece};
 use crate::grid::Cell;
 
@@ -85,10 +86,9 @@ struct Layout {
 
 impl Layout {
     fn new(w: usize, h: usize) -> Self {
-        let wf = w as f64;
+        let Stretch { w: wf, narrow, .. } = Stretch::new(w, h);
         let sky = (h - 100) / 2;
         let skyf = sky as f64;
-        let narrow = clamp((200.0 - wf) / 100.0);
         // the old 3.2:1 recomposition moved the sun 87 columns for 120 more
         let sun = 146.0 + (wf - 200.0) * 0.725;
         // narrower, the giants stand further out so they frame rather than wall

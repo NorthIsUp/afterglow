@@ -1,6 +1,7 @@
 //! Where the dive's reefs, coral and kelp sit in a `w x h` frame.
 
-use crate::ascii_rest::math::{clamp, fbm};
+use crate::ascii_rest::math::fbm;
+use crate::ascii_rest::stretch::Stretch;
 
 // both reefs are rounded masses, shouldering down toward the open sand
 fn dome(u: f64) -> f64 {
@@ -109,27 +110,17 @@ fn domes_at(
 
 impl Layout {
     pub fn new(w: usize, h: usize) -> Self {
-        // `wide` is 1 at 3.2:1, the old `-wide` recomposition; `narrow` is 1
-        // at square.
-        let (wf, tall) = (w as f64, h as f64 - 100.0);
-        let wide = (wf - 200.0) / 120.0;
-        let narrow = clamp((200.0 - wf) / 100.0);
-        let grow = |at: f64, by_wide: f64, by_narrow: f64| {
-            if wf >= 200.0 {
-                at + by_wide * wide
-            } else {
-                at - by_narrow * narrow
-            }
-        };
+        let s = Stretch::new(w, h);
+        let Stretch { w: wf, tall, .. } = s;
         // a portrait panel looks up through more water, and a little nearer
         let top = (tall * 0.75).round();
         let bot = tall - top;
-        let left = [grow(86.0, 44.0, 50.0), grow(80.0, 40.0, 46.0)];
-        let right = [wf - 4.0, grow(48.0, 32.0, 22.0), wf - 9.0];
+        let left = [s.grow(86.0, 44.0, 50.0), s.grow(80.0, 40.0, 46.0)];
+        let right = [wf - 4.0, s.grow(48.0, 32.0, 22.0), wf - 9.0];
         let open_sand = [left[0] + 1.0, right[0] - right[1] - 1.0];
         // the reefs' furniture stretches with them
         let (ls, rs) = (left[0] / 86.0, right[1] / 48.0);
-        let mid = [grow(112.0, 60.0, 56.0), grow(100.0, 60.0, 50.0), grow(104.0, 60.0, 52.0)];
+        let mid = [s.grow(112.0, 60.0, 56.0), s.grow(100.0, 60.0, 50.0), s.grow(104.0, 60.0, 52.0)];
         let mut domes = domes_at(&LEFT_DOMES, wf, [0.0, left[0]], |x| 16.0 + (x - 16.0) * ls);
         let reef = [right[0] - right[1], wf];
         domes.extend(domes_at(&RIGHT_DOMES, wf, reef, |x| right[0] - x * rs));
@@ -157,16 +148,16 @@ impl Layout {
             top,
             bot,
             hz: 61 + top as usize,
-            sunx: grow(136.0, 60.0, 72.0),
+            sunx: s.grow(136.0, 60.0, 72.0),
             cam: wf / 2.0,
-            split: grow(100.0, 80.0, 47.0),
-            sun_side: grow(100.0, 96.0, 50.0),
+            split: s.grow(100.0, 80.0, 47.0),
+            sun_side: s.grow(100.0, 96.0, 50.0),
             left,
             right,
-            far_dip: grow(120.0, 60.0, 60.0),
+            far_dip: s.grow(120.0, 60.0, 60.0),
             mid,
-            mid_dark: grow(50.0, 30.0, 25.0),
-            lit: [grow(100.0, 60.0, 50.0), grow(130.0, 60.0, 65.0)],
+            mid_dark: s.grow(50.0, 30.0, 25.0),
+            lit: [s.grow(100.0, 60.0, 50.0), s.grow(130.0, 60.0, 65.0)],
             open_sand,
             domes,
             bommies,
@@ -178,7 +169,7 @@ impl Layout {
             far_kelp,
             streams,
             snow: 90 * w * h / 20_000,
-            school: [grow(95.0, 60.0, 48.0), grow(24.0, 10.0, 10.0), 44.0 + 0.5 * top],
+            school: [s.grow(95.0, 60.0, 48.0), s.grow(24.0, 10.0, 10.0), 44.0 + 0.5 * top],
         }
     }
 
