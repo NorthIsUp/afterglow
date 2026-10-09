@@ -5,6 +5,7 @@ use super::art::{
     self, glyph_row, ink, mini_ink, shadow, square, Lit, Mini, Sprite, ACCENT, ADVANCE, BANNER, BG,
     DIM, GOOD, PANEL, RULE, SPRITE, TEXT, TEXT_H,
 };
+use super::fighters::Body;
 use super::game::{Game, Phase};
 use super::rules::{kind, side, Move, CASTLE};
 use super::search::MATE;
@@ -171,6 +172,7 @@ pub fn bar_share(score: i32) -> i32 {
 pub struct Art {
     pub big: [Sprite; 6],
     pub mini: [Mini; 6],
+    pub bodies: [Body; 6],
 }
 
 impl Layout {
@@ -198,7 +200,7 @@ impl Layout {
 /// Every square's colour this frame: the check test is a scan of the board,
 /// too dear to repeat per shadow pixel.
 pub fn square_colours(g: &Game) -> [u16; 64] {
-    let gliding = matches!(g.phase, Phase::Glide { .. });
+    let gliding = matches!(g.phase, Phase::Glide { .. }) || g.fight.is_some();
     let check = (!gliding && g.pos.in_check()).then_some(g.pos.kings[g.pos.stm]);
     std::array::from_fn(|i| {
         let s = i as u8;

@@ -249,6 +249,7 @@ fn knobs(think: u64, games: usize, level: u8) -> Knobs {
         games,
         level,
         result: 1,
+        fight_secs: 1,
         seed: 11,
     }
 }
@@ -380,10 +381,100 @@ fn a_thinking_frame_touches_a_sliver_of_the_panel() {
     let mut worst = 0;
     for _ in 0..400 {
         let d = saver::frame(&mut c, &mut buf, &p);
-        if matches!(c.games[0].phase, Phase::Think { asked: Some(_), .. }) {
+        let fighting = c.games[0].fight.is_some();
+        if !fighting && matches!(c.games[0].phase, Phase::Think { asked: Some(_), .. }) {
             worst = worst.max(d.px());
         }
     }
     assert!(worst > 0, "never reached a think");
     assert!(worst < p.w * p.h / 20, "{worst} px a thinking frame");
+}
+
+/// One of each fight, staged from a position: `(name, FEN, capture)`.
+const FIGHTS: [(&str, &str, &str); 13] = [
+    ("jab", "4k3/8/8/3n4/4P3/8/8/4K3 w - -", "e4d5"),
+    ("charge", "4k3/8/8/3b4/8/4N3/8/4K3 w - -", "e3d5"),
+    ("cast", "4k3/8/8/3p4/8/1B6/8/4K3 w - -", "b3d5"),
+    ("slam", "4k3/8/8/3n4/8/8/3R4/4K3 w - -", "d2d5"),
+    ("zap", "4k3/8/8/8/3r4/8/8/Q3K3 w - -", "a1d4"),
+    ("swing", "4k3/8/8/8/8/8/3p4/4K3 w - -", "e1d2"),
+    ("duel", "4k3/8/8/3q4/8/8/8/3QK3 w - -", "d1d5"),
+    ("crumble", "4k3/8/8/3r4/8/4N3/8/4K3 w - -", "e3d5"),
+    ("comedy", "4k3/8/8/3q4/4P3/8/8/4K3 w - -", "e4d5"),
+    ("en-passant", "4k3/8/8/3pP3/8/8/8/4K3 w - d6", "e5d6"),
+    ("promotion", "3r1k2/4P3/8/8/8/8/8/4K3 w - -", "e7d8q"),
+    ("black", "4k3/8/8/3p4/4N3/8/8/4K3 b - -", "d5e4"),
+    ("mate", "3r2k1/5ppp/8/8/8/8/5PPP/3R2K1 w - -", "d1d8"),
+];
+
+/// A capture is fought out, the fight ends, and the game goes on: the board
+/// shows the position after the move and the next move comes.
+#[test]
+fn every_fight_ends_and_the_game_goes_on() {
+    let dir = std::env::var("FIGHT_SHEET_DIR").ok();
+    for (name, f, uci) in FIGHTS {
+        let mut k = knobs(100, 1, 1);
+        if dir.is_some() {
+            k.fight_secs = 3;
+        }
+        let (p, mut c) = build(1920, 1080, 100, &k);
+        let mut buf = vec![0x00AB_CDEFu32; p.buf_len()];
+        saver::frame(&mut c, &mut buf, &p);
+        let pos = fen(f);
+        let m = pos.parse_uci(uci).unwrap();
+        let g = &mut c.games[0];
+        g.pos = pos;
+        g.hist[0] = pos.hash;
+        g.phase = Phase::Wait { until: u64::MAX };
+        g.glide(m, c.now);
+        assert!(c.games[0].fight.is_some(), "{name}: no fight");
+        let mut prev = buf.clone();
+        let mut frames = 0;
+        while c.games[0].fight.is_some() {
+            let mut d = None;
+            let n = allocs_during(|| d = Some(saver::frame(&mut c, &mut buf, &p)));
+            assert_eq!(n, 0, "{name}: frame {frames} allocated");
+            crate::dump::verify(&prev, &buf, &d.unwrap(), &p, frames).unwrap();
+            prev.copy_from_slice(&buf);
+            if let Some(dir) = &dir {
+                if frames % 5 == 0 {
+                    write_board(&c, &buf, &p, &format!("{dir}/{name}-{frames:03}.ppm"));
+                }
+            }
+            frames += 1;
+            assert!(frames < 200, "{name}: fight never ended");
+        }
+        let after = c.games[0].pos.sq;
+        assert_ne!(after, pos.sq, "{name}: move not played");
+        c.games[0].phase = Phase::Wait { until: 0 };
+        let plies = c.games[0].plies;
+        let t0 = Instant::now();
+        while c.games[0].plies == plies && c.games[0].end.is_none() {
+            saver::frame(&mut c, &mut buf, &p);
+            std::thread::sleep(Duration::from_millis(1));
+            assert!(
+                t0.elapsed() < Duration::from_secs(20),
+                "{name}: game stalled"
+            );
+        }
+    }
+}
+
+/// The board's pixels, for `FIGHT_SHEET_DIR` contact sheets.
+fn write_board(c: &Chess, buf: &[u32], p: &Panel, path: &str) {
+    let l = &c.layouts[0];
+    let cell = p.w / c.canvas.grid.cols();
+    let (x0, y0, side) = (
+        l.bx as usize * cell,
+        l.by as usize * cell,
+        l.sq as usize * 8 * cell,
+    );
+    let stride = buf.len() / p.h;
+    let mut out = format!("P6 {side} {side} 255\n").into_bytes();
+    for y in y0..y0 + side {
+        for &px in &buf[y * stride + x0..][..side] {
+            out.extend([(px >> 16) as u8, (px >> 8) as u8, px as u8]);
+        }
+    }
+    std::fs::write(path, out).unwrap();
 }

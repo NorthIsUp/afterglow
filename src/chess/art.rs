@@ -10,17 +10,26 @@ pub const ACCENT: u16 = 4;
 pub const GOOD: u16 = 5;
 pub const RULE: u16 = 7;
 pub const BANNER: u16 = 8;
+pub const SPARK: u16 = 12;
+pub const FIRE: u16 = 17;
+pub const FIRE_HOT: u16 = 18;
+pub const MAGIC: u16 = 19;
+pub const MAGIC_HOT: u16 = 20;
+pub const ASH: u16 = 21;
+pub const WOOD: u16 = 22;
+pub const STEEL: u16 = 23;
 /// Per side: outline, fill, shade, highlight.
 pub const INK: [[u16; 4]; 2] = [[9, 10, 11, 12], [13, 14, 15, 16]];
 /// The captured-piece minis: rim and fill per side, lighter than the board
 /// inks because they sit on the dark panel.
 pub const MINI: [[u16; 2]; 2] = [[11, 10], [16, 14]];
-const THEMES_AT: u16 = 20;
+const THEMES_AT: u16 = 32;
 const PER_THEME: u16 = 8;
 
-pub const FIXED: [u32; 17] = [
+pub const FIXED: [u32; 24] = [
     0x0d1017, 0x151a25, 0xe9e6df, 0x7d8597, 0xf2c14e, 0x6cc58a, 0xe2645a, 0x262c3a, 0x090b10,
-    0x1b1b22, 0xf7f3e9, 0xc9bfac, 0xffffff, 0x0b0b0f, 0x383844, 0x24242c, 0x6a6a82,
+    0x1b1b22, 0xf7f3e9, 0xc9bfac, 0xffffff, 0x0b0b0f, 0x383844, 0x24242c, 0x6a6a82, 0xff7a2a,
+    0xffe36b, 0x6fe3ff, 0xe4fbff, 0x4a4a52, 0x9a6a3a, 0xcfd6e0,
 ];
 
 /// Board colours, light and dark square: lichess brown, tournament green,
@@ -208,7 +217,7 @@ pub type Mini = [[u8; 8]; 8];
 
 /// Outline wherever the body meets the outside, so the art is drawn as a
 /// silhouette; a light edge on the left and a shade on the right of the fill.
-fn classify<const N: usize>(body: &[[u8; N]; N]) -> [[u8; N]; N] {
+pub fn classify<const N: usize>(body: &[[u8; N]; N]) -> [[u8; N]; N] {
     let at = |x: isize, y: isize| -> u8 {
         if x < 0 || y < 0 || x >= N as isize || y >= N as isize {
             0

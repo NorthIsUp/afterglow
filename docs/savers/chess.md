@@ -16,6 +16,37 @@ the opening's name and the engine's eval in figures, and each player's
 strength as five pips. While an engine thinks, its depth so far and a clock bar
 filling over its time budget show next to its name.
 
+## Fights
+
+A capture is fought out, in the spirit of Interplay's Battle Chess (1988) with
+art of our own. The board zooms in three times on the two squares, the pieces
+come alive as 32x32 fighters drawn at twice the board sprites' resolution (the
+same colours, outline and shading), the attacker walks over, they fight, the
+victim is defeated, the attacker takes the square and the board zooms back out.
+Three seconds by default.
+
+Each attacker has its own fight, and three pairings have their own:
+
+| Attacker  | Fight                                                                |
+| --------- | -------------------------------------------------------------------- |
+| Pawn      | Two spear jabs; the victim topples and fades                         |
+| Knight    | Backs off and charges with a lance; the victim goes flying, spinning |
+| Bishop    | A fireball from the staff; the victim burns to ash                   |
+| Rook      | Leaps and lands on the victim, flattening it; a shock ring           |
+| Queen     | Lightning from the wand; the victim dissolves into sparks            |
+| King      | Sceptre blows; the victim shatters                                   |
+| Q takes Q | A duel: two bolts meet and the attacker's pushes through             |
+| N takes R | The tower crumbles to a pile of bricks                               |
+| P takes Q | A poke, a startled hop, a faint under circling stars                 |
+
+En passant is fought beside the pawn being taken, then the attacker steps to
+its square; a promotion turns into its new piece in a burst of sparks; a capture
+that gives check or mate ends with the word over the victor.
+
+The move is played the moment the fight starts, so the next search runs during
+it; only showing the answer waits for the fight to finish. With two boards each
+fights on its own.
+
 ## Layout
 
 The board is pixel art: every logical pixel is a solid cell, sized so a square
@@ -53,4 +84,6 @@ Source: [`src/chess/`](../../src/chess/).
 - `CHESS_GAMES` (boards, 0..4, default 0 = fit the panel's shape)
 - `CHESS_LEVEL` (both engines' strength, 0..5, default 0 = varied per game)
 - `CHESS_RESULT_SECS` (seconds the result stays up, 1..60, default 6)
+- `CHESS_FIGHTS` (captures fought out, 0..1, default 1)
+- `CHESS_FIGHT_SECS` (seconds a fight lasts, 1..10, default 3)
 - `CHESS_SEED` (0 = random each build)

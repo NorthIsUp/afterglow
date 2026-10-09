@@ -5,7 +5,8 @@
 use std::time::Duration;
 
 use super::book::BOOK;
-use super::rules::{ended, kind, side, End, Move, Pos, San, EN_PASSANT};
+use super::fight::{Fight, Flourish};
+use super::rules::{ended, kind, side, End, Move, Pos, San, CASTLE, EN_PASSANT};
 use super::search::{level_limits, Engine, Job, HIST};
 use crate::next_rand;
 
@@ -41,6 +42,8 @@ pub struct Pace {
     pub result: u64,
     pub think: Duration,
     pub fps: u64,
+    /// Frames a capture's fight runs; 0 glides captures like any move.
+    pub fight: u32,
 }
 
 /// What `paint` must redraw this frame.
@@ -70,6 +73,9 @@ pub struct Game {
     pub depth: u8,
     pub end: Option<End>,
     pub dirty: Dirty,
+    /// The capture being fought out. The move is already played: the next
+    /// search runs meanwhile, and only showing its answer waits.
+    pub fight: Option<Fight>,
     engine: Option<Engine>,
     next_id: u32,
     fixed_level: u8,
@@ -97,6 +103,7 @@ impl Game {
             depth: 0,
             end: None,
             dirty: Dirty::default(),
+            fight: None,
             engine: None,
             next_id: 1,
             fixed_level,
@@ -168,13 +175,24 @@ impl Game {
     }
 
     pub fn update(&mut self, now: u64) {
+        if let Some(f) = &mut self.fight {
+            f.t += 1;
+            self.dirty.board = true;
+            if f.done() {
+                self.fight = None;
+            }
+        }
+        let fighting = self.fight.is_some();
         match self.phase {
             Phase::Wait { until } => {
                 if now < until {
                     return;
                 }
                 if let Some(m) = self.book_move() {
-                    self.glide(m);
+                    if fighting {
+                        return;
+                    }
+                    self.glide(m, now);
                 } else {
                     self.next_id = self.next_id.wrapping_add(1);
                     self.phase = Phase::Think {
@@ -208,7 +226,7 @@ impl Game {
                 id,
                 asked: Some(at),
             } => {
-                if now < at + self.pace.min_think {
+                if fighting || now < at + self.pace.min_think {
                     return;
                 }
                 let Some(a) = self.engine.as_ref().and_then(|e| e.poll(id)) else {
@@ -216,7 +234,7 @@ impl Game {
                 };
                 self.eval = a.score;
                 self.depth = a.depth;
-                self.glide(a.mv);
+                self.glide(a.mv, now);
             }
             Phase::Glide { m, t } => {
                 if t + 1 < self.pace.glide {
@@ -234,11 +252,30 @@ impl Game {
         }
     }
 
-    fn glide(&mut self, m: Move) {
-        self.phase = Phase::Glide { m, t: 0 };
+    pub(super) fn glide(&mut self, m: Move, now: u64) {
         self.last = Some(m);
         self.dirty.board = true;
         self.dirty.info = true;
+        let captures =
+            m.flag == EN_PASSANT || (m.flag != CASTLE && self.pos.sq[m.to as usize] != 0);
+        if self.pace.fight == 0 || !captures {
+            self.phase = Phase::Glide { m, t: 0 };
+            return;
+        }
+        let before = self.pos.sq;
+        self.land(m, now);
+        let flourish = match self.end {
+            Some(End::Mate(_)) => Flourish::Mate,
+            _ if self.pos.in_check() => Flourish::Check,
+            _ => Flourish::None,
+        };
+        self.fight = Some(Fight::new(&before, m, flourish, self.pace.fight));
+        if let Phase::Over { until, end } = self.phase {
+            self.phase = Phase::Over {
+                until: until + u64::from(self.pace.fight),
+                end,
+            };
+        }
     }
 
     /// Play the glided move into the record and see whether that ends it.
