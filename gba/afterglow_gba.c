@@ -1,9 +1,12 @@
 // The C side of the `gba` saver: one mGBA core behind a handful of calls,
 // with a setjmp boundary around everything that runs core code. build.rs
-// defines `abort` to `agb_abort`, so mGBA's few aborts land back here and
-// the call fails instead of ending the process.
+// defines `abort` to `agb_abort`, and a SIGSEGV or SIGBUS on the engine
+// thread inside the boundary jumps back too, so a broken core fails the call
+// instead of ending the process.
 
+#include <pthread.h>
 #include <setjmp.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -29,6 +32,36 @@ void agb_abort(void) {
 		longjmp(*boundary, 1);
 	}
 	_Exit(134);
+}
+
+static struct sigaction prev_segv, prev_bus;
+
+// Anything outside the boundary goes to the handler that was there (Rust's
+// stack-overflow report, or the default), which ends the process as before.
+static void fault(int sig, siginfo_t* info, void* ctx) {
+	if (boundary) {
+		longjmp(*boundary, 1);
+	}
+	struct sigaction* prev = sig == SIGSEGV ? &prev_segv : &prev_bus;
+	if (prev->sa_flags & SA_SIGINFO) {
+		prev->sa_sigaction(sig, info, ctx);
+	} else if (prev->sa_handler != SIG_DFL && prev->sa_handler != SIG_IGN) {
+		prev->sa_handler(sig);
+	} else {
+		signal(sig, SIG_DFL);
+	}
+}
+
+// Late, from the first `agb_new`, so std has already installed its handler
+// to chain to. SA_NODEFER leaves the signal unblocked after the longjmp;
+// SA_ONSTACK runs on std's alternate stack when the fault is an overflow.
+static void install_fault_handler(void) {
+	struct sigaction sa = { 0 };
+	sa.sa_sigaction = fault;
+	sa.sa_flags = SA_SIGINFO | SA_NODEFER | SA_ONSTACK;
+	sigemptyset(&sa.sa_mask);
+	sigaction(SIGSEGV, &sa, &prev_segv);
+	sigaction(SIGBUS, &sa, &prev_bus);
 }
 
 static void quiet(struct mLogger* l, int category, enum mLogLevel level, const char* fmt, va_list args) {
@@ -80,6 +113,8 @@ static struct mCore* boot(color_t* pix, const uint8_t* rom, size_t rom_len, cons
 // cartridge twice over would not fit the pod), so it must outlive the
 // machine. A NULL `bios` runs mGBA's own HLE BIOS.
 struct agb* agb_new(const uint8_t* rom, size_t rom_len, const uint8_t* bios, size_t bios_len) {
+	static pthread_once_t once = PTHREAD_ONCE_INIT;
+	pthread_once(&once, install_fault_handler);
 	mLogSetDefaultLogger(&silent);
 	struct agb* a = calloc(1, sizeof(*a));
 	if (!a) {

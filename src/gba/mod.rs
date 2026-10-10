@@ -6,9 +6,8 @@
 //! the `gba` feature. It runs on its own thread (`engine.rs`) with mGBA's HLE
 //! BIOS unless `GBA_BIOS` names a real one; nothing Nintendo ships with this
 //! code. No ROM is bundled either: without one the saver shows a card saying
-//! where to put them. The last finished view is scaled onto the panel as
-//! `gameboy` does (`scaled.rs`), and the grid is for the mirror and the
-//! terminal, a solid cell per view pixel in RGB444.
+//! where to put them. The last finished view reaches the panel through
+//! `rgb555.rs`.
 
 mod agb;
 mod carts;
@@ -22,33 +21,18 @@ use crate::engine_slot::Claim;
 use crate::font;
 use crate::glyph;
 use crate::grid::{pixel_aspect, Grid};
+use crate::rgb555::Screen;
 use crate::saver::Saver;
-use crate::scaled::{self, Scaled};
+use crate::scaled;
 use crate::surface::{Panel, Surface};
-use crate::{env_num, env_str, next_rand, saver_seed};
+use crate::{env_num, env_str, saver_seed};
 
 use agb::{H, W};
 use engine::{Engine, Want, MAX_W};
-use view::DIM;
-
-/// The grid palette: RGB444, then the same dimmed.
-const GRID_COLOURS: usize = 2 * 4096;
-const STATIC_LEVELS: u32 = 16;
 
 pub struct Gba {
-    grid: Grid,
-    grid_palette: Vec<u32>,
-    /// A view pixel (RGB555, bit 15 dim) to the panel's XRGB8888.
-    lut: Vec<u32>,
+    screen: Screen,
     claim: Claim<Engine>,
-    view: Scaled<u16>,
-    pix: Vec<u16>,
-    seq: u32,
-    /// `pix` is the engine's view (or the card), not static.
-    shown: bool,
-    /// `pix` holds a view the panel has not shown yet.
-    fresh: bool,
-    rng: u32,
 }
 
 /// The view's width for a panel, in GBA pixels at the screen's full height,
@@ -57,70 +41,38 @@ fn layout(panel: &Panel, aspect: usize) -> (usize, usize, usize) {
     scaled::layout(panel, aspect, H as f32, W, MAX_W)
 }
 
-/// RGB555 to XRGB8888, at full strength or dimmed to the glow's level.
-fn xrgb(c: u16) -> u32 {
-    let k = if c & DIM != 0 { 85 } else { 256 };
-    let ch = |s: u32| {
-        let c5 = u32::from(c) >> s & 31;
-        ((c5 << 3 | c5 >> 2) * k) >> 8
-    };
-    ch(0) << 16 | ch(5) << 8 | ch(10)
-}
-
-/// RGB555 (bit 15 dim) to a grid colour index.
-fn grid_colour(c: u16) -> u16 {
-    let (r, g, b) = (c >> 1 & 15, c >> 6 & 15, c >> 11 & 15);
-    (r << 8 | g << 4 | b) + if c & DIM != 0 { 4096 } else { 0 }
-}
-
 impl Gba {
     pub fn new(panel: &Panel, _fps: u32) -> Self {
-        let rom = env_str(&["GBA_ROM"], "/roms/gba");
-        let bios = env_str(&["GBA_BIOS"], "");
-        let fps = env_num(&["GBA_FPS"], 60, 1, 60) as u32;
         let rotate = env_num(&["GBA_ROTATE_SECS"], 900, 0, 86_400) as u64;
-        let seed = saver_seed(&["GBA_SEED"], 1);
         let aspect = pixel_aspect();
-        let (width, ..) = layout(panel, aspect);
-        let want = (!carts::files(&rom).is_empty()).then(|| Want {
-            rom: rom.clone(),
-            bios,
-            width,
-            fps,
+        let want = Want {
+            rom: env_str(&["GBA_ROM"], "/roms/gba"),
+            bios: env_str(&["GBA_BIOS"], ""),
+            width: layout(panel, aspect).0,
+            fps: env_num(&["GBA_FPS"], 60, 1, 60) as u32,
             rotate: (rotate > 0).then(|| Duration::from_secs(rotate)),
-            seed,
+            seed: saver_seed(&["GBA_SEED"], 1),
             restart: crate::saver::restarts("gba"),
-        });
-        let mut s = Self::build(panel, aspect, want);
-        if s.claim.want.is_none() {
-            let lines = ["No GBA ROMs found.", "", "Put .gba files in", &rom];
-            card(&lines, &mut s.pix, s.view.width());
-            s.shown = true;
-        }
-        s
+        };
+        Self::build(panel, aspect, want)
     }
 
-    fn build(panel: &Panel, aspect: usize, want: Option<Want>) -> Self {
-        let (grid, view) = Scaled::new(panel, aspect, layout(panel, aspect), H, MAX_W);
-        let grid_palette = (0..GRID_COLOURS)
-            .map(|i| {
-                let (dim, c) = (i >= 4096, i % 4096);
-                let k = if dim { 85 } else { 255 };
-                let ch = |s: usize| ((c >> s & 15) as u32 * 17 * k) / 255;
-                ch(8) << 16 | ch(4) << 8 | ch(0)
-            })
-            .collect();
+    /// The saver for `want`, or the card naming its folder when that holds
+    /// no ROM, in which case the engine never starts.
+    fn build(panel: &Panel, aspect: usize, want: Want) -> Self {
+        let mut screen = Screen::new(panel, aspect, layout(panel, aspect), H, MAX_W);
+        let want = if carts::files(&want.rom).is_empty() {
+            let lines = ["No GBA ROMs found.", "", "Put .gba files in", &want.rom];
+            let w = screen.width();
+            card(&lines, &mut screen.pix, w);
+            screen.shown = true;
+            None
+        } else {
+            Some(want)
+        };
         Self {
-            grid,
-            grid_palette,
-            lut: (0..=u16::MAX).map(xrgb).collect(),
+            screen,
             claim: Claim::new(want),
-            view,
-            pix: vec![0; MAX_W * H],
-            seq: 0,
-            shown: false,
-            fresh: true,
-            rng: 0x2545_F491,
         }
     }
 }
@@ -161,35 +113,9 @@ fn card(lines: &[&str], pix: &mut [u16], w: usize) {
 
 impl Saver for Gba {
     fn render(&mut self, s: &mut Surface<'_>) {
-        let w = self.view.width();
-        if let Some(e) = self.claim.engine(Engine::get) {
-            if let Some((seq, shown)) = e.latest(self.seq, &mut self.pix) {
-                // A view composed for an older width (a knob change in
-                // flight) would scale wrong; static until it catches up.
-                (self.seq, self.shown, self.fresh) = (seq, shown == Some(w), true);
-            }
-        }
-        if !self.shown {
-            for p in &mut self.pix[..w * H] {
-                let v =
-                    (next_rand(&mut self.rng) % STATIC_LEVELS * 31 / (STATIC_LEVELS - 1)) as u16;
-                *p = v | v << 5 | v << 10;
-            }
-            self.fresh = true;
-        }
-        if !self.fresh {
-            return;
-        }
-        self.fresh = false;
-        let lut = &self.lut;
-        self.view.draw(
-            s,
-            &mut self.grid,
-            &self.pix,
-            false,
-            |p| lut[p as usize],
-            grid_colour,
-        );
+        let claim = &mut self.claim;
+        self.screen
+            .render(s, |seen, dst| claim.engine(Engine::get)?.latest(seen, dst));
     }
 
     fn name(&self) -> &'static str {
@@ -197,11 +123,11 @@ impl Saver for Gba {
     }
 
     fn grid(&self) -> &Grid {
-        &self.grid
+        self.screen.grid()
     }
 
     fn palette(&self) -> &[u32] {
-        &self.grid_palette
+        self.screen.palette()
     }
 }
 

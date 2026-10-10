@@ -72,6 +72,7 @@ COPY micropolis/COPYING /licenses/micropolis-GPL-3.0.txt
 COPY micropolis/MicropolisPublicNameLicense.txt /licenses/micropolis-public-name-license.txt
 COPY mac/minivmac/COPYING.txt /licenses/minivmac-GPL-2.0.txt
 COPY gba/mgba/LICENSE /licenses/mgba-MPL-2.0.txt
+COPY gba/mgba/src/third-party/inih/LICENSE.txt /licenses/inih-BSD-3-Clause.txt
 COPY LICENSE /licenses/afterglow-MIT.txt
 ENTRYPOINT ["/screensaver"]
 
@@ -79,4 +80,5 @@ ENTRYPOINT ["/screensaver"]
 FROM scratch
 COPY --from=build /src/target/release/screensaver /screensaver
 COPY gba/mgba/LICENSE /licenses/mgba-MPL-2.0.txt
+COPY gba/mgba/src/third-party/inih/LICENSE.txt /licenses/inih-BSD-3-Clause.txt
 ENTRYPOINT ["/screensaver"]

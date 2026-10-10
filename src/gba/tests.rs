@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
-use super::carts::{files, pokemon, Pokemon};
+use super::carts::{files, pokemon, sha1_hex, Pokemon};
 use super::engine::{Runner, Session, PANIC_NEXT};
 use super::pilot::{Phase, Pilot};
 use super::*;
 use crate::grid::with_test_aspect;
+use crate::next_rand;
+use crate::rgb555::DIM;
 use crate::saver;
 use crate::testalloc::allocs_during;
 
@@ -91,11 +93,10 @@ fn views_scale_onto_the_panel_and_report_exactly_what_moved() {
     use crate::dump::verify;
     for (w, h, aspect) in [(1920, 1080, 180), (1920, 1080, 100), (1080, 1920, 100)] {
         let p = Panel::new(w, h, w);
-        let mut g = with_test_aspect(aspect, || Gba::build(&p, aspect, None));
-        g.shown = true;
-        let vw = g.view.width();
+        let mut g = with_test_aspect(aspect, || Gba::build(&p, aspect, want("", 0)));
+        let vw = g.screen.width();
         let mut rng = 3u32;
-        for px in &mut g.pix[..vw * H] {
+        for px in &mut g.screen.pix[..vw * H] {
             *px = next_rand(&mut rng) as u16;
         }
         let mut buf = vec![0u32; p.buf_len()];
@@ -103,10 +104,10 @@ fn views_scale_onto_the_panel_and_report_exactly_what_moved() {
         let mut prev = usize::MAX;
         for step in 0..3 {
             if step == 1 {
-                g.pix[17 * vw + 5] ^= 1;
-                g.pix[150 * vw + vw - 1] ^= 1;
+                g.screen.pix[17 * vw + 5] ^= 1;
+                g.screen.pix[150 * vw + vw - 1] ^= 1;
             }
-            g.fresh = step != 2;
+            g.screen.fresh = step != 2;
             let before = buf.clone();
             let mut dmg = None;
             let n = allocs_during(|| dmg = Some(saver::frame(&mut g, &mut buf, &p)));
@@ -127,12 +128,10 @@ fn views_scale_onto_the_panel_and_report_exactly_what_moved() {
 #[test]
 fn no_roms_show_a_card_and_never_start_the_engine() {
     let p = Panel::new(1920, 1080, 1920);
-    std::env::set_var("GBA_ROM", "/nonexistent/gba");
-    let mut g = with_test_aspect(100, || Gba::new(&p, 30));
-    std::env::remove_var("GBA_ROM");
-    assert!(g.claim.want.is_none() && g.shown);
-    let vw = g.view.width();
-    assert!(g.pix[..vw * H].contains(&CARD_INK) && g.pix[..vw * H].contains(&CARD_BG));
+    let mut g = with_test_aspect(100, || Gba::build(&p, 100, want("/nonexistent/gba", 284)));
+    assert!(g.claim.want.is_none() && g.screen.shown);
+    let pix = &g.screen.pix[..g.screen.width() * H];
+    assert!(pix.contains(&CARD_INK) && pix.contains(&CARD_BG));
     let mut buf = vec![0u32; p.buf_len()];
     let first = saver::frame(&mut g, &mut buf, &p);
     assert!(!first.is_empty());
@@ -169,7 +168,7 @@ fn only_gba_files_are_roms_sorted_by_name() {
 fn the_stripes_rom_plays_on_the_hle_bios() {
     let dir = folder("play", &[("stripes.gba", &stripes_rom())]);
     let mut s = Session::boot(&dir.join("stripes.gba"), &[], 1).expect("boots");
-    assert_eq!(pokemon(&stripes_rom()), None);
+    assert_eq!(pokemon(&sha1_hex(&stripes_rom())), None);
     let w = 512;
     let mut view = vec![0u16; MAX_W * H];
     for _ in 0..30 {
@@ -208,7 +207,7 @@ fn bad_and_crashing_roms_move_on() {
     r.take(None, &w);
     assert!(r.frame(&w), "the good ROM plays");
     assert_eq!(r.session.as_ref().unwrap().name, "b-stripes");
-    PANIC_NEXT.store(true, std::sync::atomic::Ordering::Relaxed);
+    PANIC_NEXT.set(true);
     assert!(
         !r.frame(&w),
         "a crash with nothing left to play shows nothing"
@@ -267,7 +266,7 @@ fn pokemon_reaches_the_overworld() {
     };
     let path = PathBuf::from(path);
     let mut s = Session::boot(&path, &[], 7).expect("boots");
-    let Some(game) = pokemon(&std::fs::read(&path).unwrap()) else {
+    let Some(game) = pokemon(&sha1_hex(&std::fs::read(&path).unwrap())) else {
         return;
     };
     let mut view = vec![0u16; MAX_W * H];

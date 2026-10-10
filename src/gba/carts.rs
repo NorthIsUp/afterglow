@@ -29,16 +29,15 @@ const POKEMON: &[(&str, Pokemon)] = &[
     ("f3ae088181bf583e55daf962a92bb46f4f1d07b7", Pokemon::Emerald),
 ];
 
-fn sha1_hex(rom: &[u8]) -> String {
+pub fn sha1_hex(rom: &[u8]) -> String {
     Sha1::digest(rom).iter().fold(String::new(), |mut s, b| {
         let _ = write!(s, "{b:02x}");
         s
     })
 }
 
-pub fn pokemon(rom: &[u8]) -> Option<Pokemon> {
-    let hex = sha1_hex(rom);
-    POKEMON.iter().find(|(h, _)| *h == hex).map(|&(_, p)| p)
+pub fn pokemon(sha1: &str) -> Option<Pokemon> {
+    POKEMON.iter().find(|(h, _)| *h == sha1).map(|&(_, p)| p)
 }
 
 pub struct Cart {
@@ -70,13 +69,14 @@ pub fn read(path: &Path) -> Option<Cart> {
     let rom = std::fs::read(path)
         .map_err(|e| eprintln!("[screensaver] gba: {}: {e}", path.display()))
         .ok()?;
-    let pokemon = pokemon(&rom);
+    // Once: a 32 MiB cartridge is a noticeable hash on a Pi.
+    let sha1 = sha1_hex(&rom);
+    let pokemon = pokemon(&sha1);
     let name = path
         .file_stem()
         .map_or(String::new(), |s| s.to_string_lossy().into());
     eprintln!(
-        "[screensaver] gba: {name}: sha1 {}{}",
-        sha1_hex(&rom),
+        "[screensaver] gba: {name}: sha1 {sha1}{}",
         pokemon.map_or(String::new(), |p| format!(", Pokémon {p:?}"))
     );
     Some(Cart { name, rom, pokemon })

@@ -6,8 +6,7 @@
 //! A view pixel is RGB555, bit 15 marking it dimmed.
 
 use super::agb::{H, W};
-
-pub const DIM: u16 = 0x8000;
+use crate::rgb555::DIM;
 
 /// Columns of the screen's edge the glow averages, and rows it blurs over.
 const GLOW_COLS: usize = 8;

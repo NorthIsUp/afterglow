@@ -83,3 +83,23 @@ impl Drop for Core {
         unsafe { agb_free(self.agb.as_ptr()) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A wild pointer in core code fails that call instead of killing the
+    /// screensaver: the C boundary catches SIGSEGV as it catches an abort.
+    #[test]
+    fn a_segfault_in_the_core_fails_the_call_not_the_process() {
+        // Any machine: the first one installs the fault handler.
+        let _core = Core::new(vec![0; 0xC0].into_boxed_slice(), &[]);
+        // SAFETY: deliberately not; the boundary is what is under test.
+        assert_eq!(unsafe { agb_read8(std::ptr::null_mut(), 0) }, 0);
+        assert_eq!(
+            unsafe { agb_read8(std::ptr::null_mut(), 0) },
+            0,
+            "and again"
+        );
+    }
+}
