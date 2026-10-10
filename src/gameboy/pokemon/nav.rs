@@ -39,7 +39,7 @@ const LAST_MAP: u8 = 0xFF;
 /// Frames a held direction gets to start a step (a turn on the spot takes
 /// a few) before it counts as a bump.
 const STEP: u32 = 24;
-/// `wJoyIgnore`: buttons the game is ignoring, below `wFontLoaded` so the
+/// `wJoyIgnore`: buttons the game is ignoring, below `wOnSGB` so the
 /// same address in every revision.
 pub const JOY_IGNORE: u16 = 0xCD6B;
 /// `wSpritePlayerStateData1FacingDirection`.
@@ -192,8 +192,8 @@ impl Nav {
             leg: None,
             bfs: Bfs::default(),
             people: Vec::new(),
-            skip_sprite: (rev == Revision::Yellow).then_some(15),
-            ball: if rev == Revision::Yellow { 0x47 } else { 0x3D },
+            skip_sprite: rev.yellow().then_some(15),
+            ball: if rev.yellow() { 0x47 } else { 0x3D },
             balls: Vec::new(),
             still: Vec::new(),
             stills: (0xFF, [None; 16]),

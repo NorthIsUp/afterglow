@@ -27,8 +27,12 @@ const WALK_BIKE_SURF: u16 = 0xD700;
 const BALLS: u8 = 5;
 const PARTY_MON: u16 = 44;
 const BAG_COUNT: u16 = 0xD31D;
+/// EvoYellow's holds 30, Red, Blue and Yellow's 20.
+const BAG_CAPACITY: u8 = 30;
+/// `wItemList`: what a mart sells, a count and then item ids.
+const ITEM_LIST: u16 = 0xCF7B;
 const BAG: u16 = 0xD31E;
-/// `wListScrollOffset`, below `wFontLoaded` so the same in every revision.
+/// `wListScrollOffset`, below `wOnSGB` so the same in every revision.
 const LIST_SCROLL: u16 = 0xCC36;
 /// Long enough for any errand; past it something unexpected is open.
 const GIVE_UP: u32 = 60 * 90;
@@ -142,12 +146,13 @@ impl Errand {
                 .any(|w| w == label)
         };
         let key = if screen::shows(gb, b"OPTION") {
-            let want: &[u8] = match self.kind {
+            let want: &[&[u8]] = match self.kind {
                 _ if self.kind.faced() => return Some(keys.tap(B, GAP)),
-                Kind::Cut(_) => b"POKeMON",
-                _ => b"ITEM",
+                Kind::Cut(_) => &[b"POKeMON"],
+                // EvoYellow's bag is the PACK.
+                _ => &[b"ITEM", b"PACK"],
             };
-            if on(gb, want) {
+            if want.iter().any(|w| on(gb, w)) {
                 A
             } else {
                 DOWN
@@ -189,14 +194,23 @@ impl Errand {
             match self.kind {
                 Kind::Floor(i, _) => toward_item(gb, m.item, i),
                 Kind::Drink => screen::toward(m.item, 0),
-                Kind::Buy if on(gb, b"POKe BALL") => A,
-                Kind::Stock if on(gb, b"POTION") => A,
-                // The end of the list, and no potion on it.
-                Kind::Stock if on(gb, b"CANCEL") => {
-                    self.used = true;
-                    B
+                // By item id: EvoYellow renames them (a Potion is a Salve).
+                Kind::Buy | Kind::Stock => {
+                    let buy = self.kind == Kind::Buy;
+                    let want = |id: u8| {
+                        if buy {
+                            id == POKE_BALL
+                        } else {
+                            POTIONS.contains(&id)
+                        }
+                    };
+                    if let Some(i) = stock_index(gb, ram, want) {
+                        toward_item(gb, m.item, i)
+                    } else {
+                        self.used = true;
+                        B
+                    }
                 }
-                Kind::Buy | Kind::Stock => DOWN,
                 Kind::Cut(_) | Kind::Teach(_) | Kind::Use(_) | Kind::Potion(_) => B,
             }
         };
@@ -208,6 +222,13 @@ impl Errand {
 /// heading for entry `i`.
 pub fn toward_item(gb: &mut GameBoy, at: u8, i: u8) -> u8 {
     screen::toward(at.wrapping_add(gb.peek(LIST_SCROLL)), i)
+}
+
+/// Where on the open mart's list the first item `want` takes is.
+fn stock_index(gb: &mut GameBoy, ram: Ram, want: impl Fn(u8) -> bool) -> Option<u8> {
+    let at = ram.at(ITEM_LIST);
+    let n = gb.peek(at).min(15);
+    (0..n).find(|&i| want(gb.peek(at + 1 + u16::from(i))))
 }
 
 /// `wPartyMons`' entry for this slot.
@@ -225,7 +246,7 @@ pub fn slot(gb: &mut GameBoy, ram: Ram, f: impl Fn(&mut GameBoy, u8) -> bool) ->
 }
 
 pub fn bag_index(gb: &mut GameBoy, ram: Ram, item: u8) -> Option<u8> {
-    let n = gb.peek(ram.at(BAG_COUNT)).min(20);
+    let n = gb.peek(ram.at(BAG_COUNT)).min(BAG_CAPACITY);
     (0..n).find(|&i| gb.peek(ram.at(BAG) + 2 * u16::from(i)) == item)
 }
 

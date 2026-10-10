@@ -6,8 +6,9 @@ use mizu_core::GameBoy;
 
 use super::screen;
 
-/// Frames a tap holds its button.
-const HOLD: u8 = 2;
+/// Frames a tap holds its button: in GBC mode Yellow's options screen
+/// misses a two-frame press.
+const HOLD: u8 = 3;
 /// Released frames after a menu tap: enough for any menu to take the press.
 pub const GAP: u8 = 4;
 

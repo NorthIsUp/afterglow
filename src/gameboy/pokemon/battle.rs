@@ -21,7 +21,7 @@ const DEFENSE: u16 = 19;
 const SPECIAL: u16 = 23;
 const PP: u16 = 25;
 const MAX_HP: u16 = 15;
-/// `wPlayerMonNumber`: the party slot fighting, below `wFontLoaded` so the
+/// `wPlayerMonNumber`: the party slot fighting, below `wOnSGB` so the
 /// same in every revision.
 const PLAYER_MON_NUMBER: u16 = 0xCC2F;
 /// `party_struct`'s moves sit at the battle struct's offset, its PP and
@@ -30,15 +30,16 @@ const PARTY_PP: u16 = 0x1D;
 const PARTY_ATTACK: u16 = 0x24;
 /// The slot Disable stopped, 1-based, in the high nibble.
 const PLAYER_DISABLED_MOVE: u16 = 0xD06D;
-/// `wMoveMenuType`, below `wFontLoaded` so the same in every revision.
+/// `wMoveMenuType`, below `wOnSGB` so the same in every revision.
 const MOVE_MENU_TYPE: u16 = 0xCCDB;
 /// `wIsInBattle`: 1 wild, 2 trainer.
 const WILD: u8 = 1;
 /// `TypeEffects`' first entries (water on fire, fire on grass, both
-/// double), and the moves table's first two rows (Pound, Karate Chop): how
-/// both are found in any revision.
+/// double): how it is found in any revision.
 const TYPE_CHART: [u8; 6] = [0x15, 0x14, 0x14, 0x14, 0x16, 0x14];
-const MOVE_TABLE: [u8; 12] = [1, 0, 40, 0, 255, 35, 2, 0, 50, 0, 255, 25];
+/// The moves table's first three rows (Pound, Karate Chop, DoubleSlap) as
+/// id, effect and PP: EvoYellow changes their power and types.
+const MOVE_TABLE: [(usize, u8); 7] = [(0, 1), (1, 0), (5, 35), (6, 2), (11, 25), (12, 3), (17, 10)];
 /// Types from this one up hit with Special.
 const FIRST_SPECIAL_TYPE: u8 = 0x14;
 /// The move rows' first line on the FIGHT screen.
@@ -69,7 +70,9 @@ impl Battle {
             return;
         }
         self.learned = true;
-        self.moves = rom.windows(MOVE_TABLE.len()).position(|w| w == MOVE_TABLE);
+        self.moves = rom
+            .windows(18)
+            .position(|w| MOVE_TABLE.iter().all(|&(i, b)| w[i] == b));
         if let Some(at) = rom.windows(TYPE_CHART.len()).position(|w| w == TYPE_CHART) {
             self.chart = rom[at..]
                 .chunks(3)

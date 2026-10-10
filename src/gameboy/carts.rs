@@ -51,13 +51,28 @@ pub enum Revision {
     Red,
     Blue,
     Yellow,
+    /// longlostsoul's EvoYellow 3.9, patched onto Yellow: every Pokémon
+    /// follows the player the way Yellow's Pikachu does.
+    EvoYellow,
 }
 
-/// pret's `roms.sha1` for pokered and pokeyellow: the USA/Europe releases.
+impl Revision {
+    /// Yellow's story and its follower in sprite slot 15.
+    pub fn yellow(self) -> bool {
+        matches!(self, Self::Yellow | Self::EvoYellow)
+    }
+}
+
+/// pret's `roms.sha1` for pokered and pokeyellow: the USA/Europe releases;
+/// then EvoYellow's 3.9 UPS applied to that Yellow.
 const POKEMON: &[(&str, Revision)] = &[
     ("ea9bcae617fdf159b045185467ae58b2e4a48b9a", Revision::Red),
     ("d7037c83e1ae5b39bde3c30787637ba1d4c48ce2", Revision::Blue),
     ("cc7d03262ebfaf2f06772c1a480c7d9d5f4a38e1", Revision::Yellow),
+    (
+        "6184bf164c3a7dc116432278fe141de75457c434",
+        Revision::EvoYellow,
+    ),
 ];
 
 pub fn sha1_hex(rom: &[u8]) -> String {

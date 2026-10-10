@@ -1,6 +1,6 @@
 //! The bot against a user's own ROM, read in place from `POKEMON_TEST_ROM`
-//! and never copied; every test here skips when it is unset, so CI needs no
-//! commercial ROM.
+//! (or a patched one from `POKEMON_TEST_HACKS`) and never copied; every test
+//! here skips when they are unset, so CI needs no commercial ROM.
 
 use std::fmt::Write as _;
 use std::time::Instant;
@@ -329,17 +329,22 @@ fn shot(gb: &GameBoy, path: &str) {
 /// order, checked in RAM (`intro.rs`), and the run ends in Pallet Town at
 /// the house door with both names set, inside a frame bound; ten times,
 /// each from a different number of idle frames after power-on, so it does
-/// not depend on timing luck. Every Pokémon ROM `POKEMON_TEST_ROM` names
-/// (a file or a folder) is run.
+/// not depend on timing luck. Every Pokémon ROM `POKEMON_TEST_ROM` and
+/// `POKEMON_TEST_HACKS` (patched ROMs, EvoYellow) name, each a file or a
+/// folder, is run.
 #[test]
 fn pokemon_intro_passes_every_step() {
     const BOUND: u64 = 60 * 60 * 4;
-    let Ok(path) = std::env::var("POKEMON_TEST_ROM") else {
-        eprintln!("POKEMON_TEST_ROM unset; skipping");
+    let paths: Vec<String> = ["POKEMON_TEST_ROM", "POKEMON_TEST_HACKS"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .collect();
+    if paths.is_empty() {
+        eprintln!("POKEMON_TEST_ROM and POKEMON_TEST_HACKS unset; skipping");
         return;
-    };
+    }
     let shots = std::env::var("POKEBOT_SHOT_DIR").ok();
-    for cart in load(&path, "") {
+    for cart in paths.iter().flat_map(|p| load(p, "")) {
         let Pilot::Pokemon(rev) = cart.pilot else {
             continue;
         };
