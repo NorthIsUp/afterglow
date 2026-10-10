@@ -10,11 +10,17 @@ use mizu_core::GameBoy;
 
 use super::super::carts::Revision;
 use super::super::kanto::{self, Kanto};
-use super::super::pilot::{DOWN, LEFT, RIGHT, UP};
-use super::Ram;
+use super::super::pilot::{A, B, DOWN, LEFT, RIGHT, UP};
+use super::grid::{is_tree, Bfs, Grid, Rules, Side, WALL};
+use super::{screen, Ram};
 
 /// A map and a square on it.
 pub type Square = (u8, u8, u8);
+
+/// A route's step across the live map: the square to reach, the button
+/// that leaves the map from it (`None`: the goal is that square), and the
+/// map it leaves for.
+type Leg = (Square, Option<u8>, u8);
 
 /// A step under way: the direction, frames since it was pressed, where
 /// it started, whether it has begun, and whether a script held the
@@ -28,13 +34,8 @@ struct Walk {
     held: bool,
 }
 
-/// One side of a square: where a step in that direction would leave it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Side(Square, u8);
-
 /// A warp's destination map that means "the map you came in from".
 const LAST_MAP: u8 = 0xFF;
-const OVERWORLD: u8 = 0;
 /// Frames a held direction gets to start a step (a turn on the spot takes
 /// a few) before it counts as a bump.
 const STEP: u32 = 24;
@@ -43,102 +44,69 @@ const STEP: u32 = 24;
 pub const JOY_IGNORE: u16 = 0xCD6B;
 /// `wSpritePlayerStateData1FacingDirection`.
 pub const FACING: u16 = 0xC109;
+/// A sprite's first movement byte for one who stands still.
+const STAY: u8 = 0xFF;
 /// Extra steps worth walking around people rather than waiting on them.
 const DETOUR: u32 = 6;
-/// Bumps into a side of a square before it counts as a wall.
-const WALL: u16 = 2;
 /// Map entrances a route search expands before it gives up.
 const ROUTE_LIMIT: u32 = 4000;
-/// Saffron's gatehouses: a thirsty guard turns the player back, and the
-/// bot never brings him a drink.
+/// The tiles a Card Key opens, as `PrintCardKeyText` knows them.
+const DOOR_TILES: [u8; 3] = [0x18, 0x24, 0x5E];
+/// Warps that never fire: Celadon's into the Mart's fifth floor, Silph
+/// Co.'s on 1F and 11F.
+const DEAD_WARPS: [Square; 3] = [(0x06, 39, 19), (0xB5, 16, 10), (0xEB, 5, 5)];
+/// Saffron's gatehouses: a thirsty guard turns the player back.
 const CLOSED: [u8; 4] = [0x46, 0x49, 0x4C, 0x4F];
-/// The Snorlax asleep on Routes 12 and 16: no Poké Flute, no way past.
-const SNORLAX: [Square; 2] = [(0x17, 10, 62), (0x1B, 26, 10)];
-/// The tiles `UsedCut` cuts: a tree outdoors, and a gym's.
-const TREE: u8 = 0x3D;
-const GYM: u8 = 7;
-const GYM_TREE: u8 = 0x50;
-
-/// One map, as the planner sees it.
-pub struct Grid {
-    pub w: usize,
-    pub h: usize,
-    walk: Vec<bool>,
-    /// The tile the game tests on each square.
-    pub tile: Vec<u8>,
-    pub grass: u8,
-    pub tileset: u8,
-    /// Square, destination map (resolved), destination warp index.
-    pub warps: Vec<(u8, u8, u8, u8)>,
-    /// Direction flag, joined map, the player's shift along the edge.
-    links: Vec<(u8, u8, i32)>,
-}
-
-impl Grid {
-    pub fn walkable(&self, x: usize, y: usize) -> bool {
-        x < self.w && y < self.h && self.walk[y * self.w + x]
-    }
-}
-
-/// Movement rules beyond the walkable tiles, from tables the game reads:
-/// ledges (`HandleLedges`: facing, tile stood on, ledge tile) and tile
-/// pairs no step may cross (`TilePairCollisionsLand`: a cave's raised
-/// floor and its edge). The same bytes in all three revisions, found by
-/// their first entries.
-#[derive(Default)]
-struct Rules {
-    ledges: Vec<(u8, u8, u8)>,
-    pairs: Vec<(u8, u8, u8)>,
-    /// The party can cut trees, so they are a way through.
-    cut: bool,
-}
-
-impl Rules {
-    fn of(rom: &[u8]) -> Self {
-        let table = |first: &[u8], width: usize| -> Vec<&[u8]> {
-            let Some(at) = rom.windows(first.len()).position(|w| w == first) else {
-                return Vec::new();
-            };
-            rom[at..]
-                .chunks(width)
-                .take_while(|c| c[0] != 0xFF && c.len() == width)
-                .collect()
-        };
-        let ledges = table(&[0x00, 0x2C, 0x37, 0x80], 4)
-            .into_iter()
-            .map(|c| (facing(c[0]), c[1], c[2]))
-            .collect();
-        let pairs = table(&[0x11, 0x20, 0x05, 0x11, 0x41, 0x05], 3)
-            .into_iter()
-            .map(|c| (c[0], c[1], c[2]))
-            .collect();
-        Self {
-            ledges,
-            pairs,
-            cut: false,
-        }
-    }
-
-    fn ledge(&self, g: &Grid, dir: u8, on: u8, next: u8) -> bool {
-        g.tileset == OVERWORLD
-            && self
-                .ledges
-                .iter()
-                .any(|&(d, o, l)| d == dir && o == on && l == next)
-    }
-
-    fn tree(&self, g: &Grid, tile: u8) -> bool {
-        self.cut && is_tree(g, tile)
-    }
-
-    fn crossing(&self, g: &Grid, a: u8, b: u8) -> bool {
-        self.pairs
-            .iter()
-            .any(|&(ts, x, y)| ts == g.tileset && ((x, y) == (a, b) || (x, y) == (b, a)))
-    }
-}
-
+/// `wNumberOfWarps`, the live map's warps after it.
+const NUM_WARPS: u16 = 0xD3AE;
+type Floors = &'static [(u8, u8)];
+/// Elevators (Rocket Hideout, Celadon Mart, Silph Co.): the map, where to
+/// stand at its panel (facing up), and each floor in the panel's order as
+/// the map and warp its doors open onto.
+const LIFTS: [(u8, (u8, u8), Floors); 3] = [
+    (0xCB, (1, 2), &[(0xC7, 4), (0xC8, 4), (0xCA, 2)]),
+    (
+        0x7F,
+        (3, 1),
+        &[(0x7A, 5), (0x7B, 2), (0x7C, 2), (0x7D, 2), (0x88, 2)],
+    ),
+    (
+        0xEC,
+        (3, 1),
+        &[
+            (0xB5, 3),
+            (0xCF, 2),
+            (0xD0, 2),
+            (0xD1, 2),
+            (0xD2, 2),
+            (0xD3, 2),
+            (0xD4, 2),
+            (0xD5, 2),
+            (0xE9, 2),
+            (0xEA, 2),
+            (0xEB, 1),
+        ],
+    ),
+];
 pub const DIRS: [u8; 4] = [UP, DOWN, LEFT, RIGHT];
+
+/// Where the live map's first warp leads: an elevator's, wherever its
+/// panel last sent it.
+pub fn lift(gb: &mut GameBoy, ram: Ram) -> u8 {
+    gb.peek(ram.at(NUM_WARPS) + 4)
+}
+
+/// The tile on screen in `dir` from the player, where
+/// `GetTileAndCoordsInFrontOfPlayer` reads it.
+fn tile_ahead(gb: &mut GameBoy, dir: u8) -> u8 {
+    let (x, y) = match dir {
+        UP => (8, 7),
+        DOWN => (8, 11),
+        LEFT => (6, 9),
+        _ => (10, 9),
+    };
+    gb.peek(screen::TILE_MAP + y * screen::COLS as u16 + x)
+}
 
 /// A direction as the game stores a facing (`SPRITE_FACING_*`).
 pub fn facing(b: u8) -> u8 {
@@ -175,101 +143,37 @@ pub struct Nav {
     last_dir: u8,
     /// The live route: the square to reach on this map, and the button
     /// that leaves the map from it (`None` for the target itself).
-    leg: Option<(Square, Option<u8>)>,
+    leg: Option<Leg>,
     /// Scratch for the live search.
     bfs: Bfs,
     /// Squares a person stands on, this map.
     people: Vec<(usize, usize)>,
     /// Yellow's Pikachu walks behind the player in this sprite slot.
     skip_sprite: Option<u16>,
+    /// The Poké Ball picture's id, and the squares of the ones on this map:
+    /// an item lying in a corridor is picked up, not waited out.
+    ball: u8,
+    balls: Vec<(usize, usize)>,
+    /// Squares of people who never move by themselves, this map's, kept
+    /// per sprite slot while they are off screen.
+    still: Vec<(usize, usize)>,
+    stills: (u8, [Option<(usize, usize)>; 16]),
     /// Trees cut on the map the player is on: they grow back when it
     /// leaves.
     cut: Vec<Square>,
     /// A tree in the way, faced, and already counted as cut: the bot
     /// should cut it.
     pub tree: Option<Square>,
-}
-
-/// One breadth-first search's result, kept to reuse its buffers: the steps
-/// to each square of a grid and the first direction toward it.
-#[derive(Default)]
-struct Bfs {
-    dist: Vec<u32>,
-    first: Vec<u8>,
-    queue: Vec<(usize, usize)>,
-}
-
-impl Bfs {
-    /// Squares reachable from `(x, y)` on a grid and the steps to each,
-    /// ledges hopped one way, `blocked` squares and learned walls avoided;
-    /// `first` holds the first direction toward each.
-    fn run(
-        &mut self,
-        g: &Grid,
-        rules: &Rules,
-        walls: &HashMap<Side, u16>,
-        map: u8,
-        from: (usize, usize),
-        blocked: &[(usize, usize)],
-    ) {
-        let Self { dist, first, queue } = self;
-        dist.clear();
-        dist.resize(g.w * g.h, u32::MAX);
-        first.clear();
-        first.resize(g.w * g.h, 0);
-        queue.clear();
-        if from.0 >= g.w || from.1 >= g.h {
-            return;
-        }
-        dist[from.1 * g.w + from.0] = 0;
-        queue.push(from);
-        let mut head = 0;
-        while head < queue.len() {
-            let (x, y) = queue[head];
-            head += 1;
-            let here = y * g.w + x;
-            for dir in DIRS {
-                if walls
-                    .get(&Side((map, x as u8, y as u8), dir))
-                    .copied()
-                    .unwrap_or(0)
-                    > WALL
-                {
-                    continue;
-                }
-                let (dx, dy) = delta(dir);
-                let (nx, ny) = (x.wrapping_add_signed(dx), y.wrapping_add_signed(dy));
-                if nx >= g.w || ny >= g.h {
-                    continue;
-                }
-                let mut to = (nx, ny);
-                let mut cost = 1;
-                let next = g.tile[ny * g.w + nx];
-                if rules.crossing(g, g.tile[here], next) {
-                    continue;
-                }
-                if !g.walk[ny * g.w + nx] && !rules.tree(g, next) {
-                    let ledge = rules.ledge(g, dir, g.tile[here], next);
-                    let (jx, jy) = (nx.wrapping_add_signed(dx), ny.wrapping_add_signed(dy));
-                    if !ledge || !g.walkable(jx, jy) {
-                        continue;
-                    }
-                    to = (jx, jy);
-                    cost = 2;
-                }
-                if blocked.contains(&to) {
-                    continue;
-                }
-                let i = to.1 * g.w + to.0;
-                if dist[i] != u32::MAX {
-                    continue;
-                }
-                dist[i] = dist[here] + cost;
-                first[i] = if (x, y) == from { dir } else { first[here] };
-                queue.push(to);
-            }
-        }
-    }
+    /// At an elevator's panel, facing it: the floor the route wants, as
+    /// its place in the panel's list and its map.
+    pub floor: Option<(u8, u8)>,
+    /// The guards at Saffron's gates let the player by.
+    pub saffron: bool,
+    /// Shut doors on the live map that open when faced and pressed.
+    pub doors: Vec<Square>,
+    /// The live route goes through people who stand still for good:
+    /// there was no other.
+    pushy: bool,
 }
 
 impl Nav {
@@ -289,8 +193,16 @@ impl Nav {
             bfs: Bfs::default(),
             people: Vec::new(),
             skip_sprite: (rev == Revision::Yellow).then_some(15),
+            ball: if rev == Revision::Yellow { 0x47 } else { 0x3D },
+            balls: Vec::new(),
+            still: Vec::new(),
+            stills: (0xFF, [None; 16]),
             cut: Vec::new(),
             tree: None,
+            floor: None,
+            saffron: false,
+            doors: Vec::new(),
+            pushy: false,
         }
     }
 
@@ -301,10 +213,9 @@ impl Nav {
             return;
         }
         self.learned = true;
-        self.rules = Rules {
-            cut: self.rules.cut,
-            ..Rules::of(rom)
-        };
+        let cut = self.rules.cut;
+        self.rules = Rules::of(rom);
+        self.rules.cut = cut;
         for m in 0..=0xF7u8 {
             let Some(h) = self.kanto.header(rom, m) else {
                 continue;
@@ -362,11 +273,6 @@ impl Nav {
                 *s = true;
             }
         }
-        for &(m, x, y) in &SNORLAX {
-            if m == map {
-                walk[usize::from(y) * w + usize::from(x)] = false;
-            }
-        }
         Some(Grid {
             w,
             h: hh,
@@ -410,19 +316,23 @@ impl Nav {
                 0
             }
         };
+        let lift = LIFTS.iter().find(|l| l.0 == from.0).map(|l| l.2);
         for (x, y, to, id) in warps {
             let d = dist
                 .get(usize::from(y) * w + usize::from(x))
                 .copied()
                 .unwrap_or(u32::MAX);
-            if d == u32::MAX {
+            if d == u32::MAX || DEAD_WARPS.contains(&(from.0, x, y)) {
                 continue;
             }
-            if CLOSED.contains(&to) {
-                continue;
-            }
-            if let Some(land) = self.landing(rom, to, id) {
-                out.push(((from.0, x, y), edge_dir(x.into(), y.into()), land, d));
+            // An elevator's doors open onto whichever floor its panel picks.
+            for &(to, id) in lift.unwrap_or(&[(to, id)]) {
+                if CLOSED.contains(&to) && !self.saffron {
+                    continue;
+                }
+                if let Some(land) = self.landing(rom, to, id) {
+                    out.push(((from.0, x, y), edge_dir(x.into(), y.into()), land, d));
+                }
             }
         }
         for (flag, to, off) in links {
@@ -473,11 +383,12 @@ impl Nav {
         rom: &[u8],
         from: Square,
         goal: &dyn Fn(&Grid, Square) -> bool,
-    ) -> Option<(Square, Option<u8>)> {
+        still: &[(usize, usize)],
+    ) -> Option<Leg> {
         let mut heap = BinaryHeap::new();
         let mut best: HashMap<Square, u32> = HashMap::new();
         // Per entrance: the first leg out of `from`'s map.
-        let mut via: HashMap<Square, (Square, Option<u8>)> = HashMap::new();
+        let mut via: HashMap<Square, Leg> = HashMap::new();
         heap.push(Reverse((0u32, from)));
         best.insert(from, 0);
         let mut bfs = Bfs::default();
@@ -496,14 +407,18 @@ impl Nav {
                 // Only the live square avoids learned walls: elsewhere they
                 // are stale.
                 let none = HashMap::new();
-                let walls = if node == from { &self.walls } else { &none };
+                let (walls, still) = if node == from {
+                    (&self.walls, still)
+                } else {
+                    (&none, &[][..])
+                };
                 bfs.run(
                     g,
                     &self.rules,
                     walls,
                     node.0,
                     (node.1.into(), node.2.into()),
-                    &[],
+                    still,
                 );
                 // The goal on this map: done if it is the cheapest thing
                 // left (the heap is ordered, and no exit can make it
@@ -520,7 +435,11 @@ impl Nav {
                     }
                 }
                 if let Some((_, s)) = near {
-                    return Some(if node == from { (s, None) } else { via[&node] });
+                    return Some(if node == from {
+                        (s, None, s.0)
+                    } else {
+                        via[&node]
+                    });
                 }
             }
             for (sq, dir, land, d) in self.exits(rom, node, &bfs.dist) {
@@ -528,7 +447,7 @@ impl Nav {
                 if best.get(&land).is_none_or(|&b| c < b) {
                     best.insert(land, c);
                     let leg = if node == from {
-                        (sq, Some(dir))
+                        (sq, Some(dir), land.0)
                     } else {
                         via[&node]
                     };
@@ -583,6 +502,16 @@ impl Nav {
         None
     }
 
+    /// The player stands where the map allows: not mid-warp, where the new
+    /// map's number shows a frame or more before the square it lands on.
+    pub fn settled(&mut self, gb: &mut GameBoy) -> bool {
+        let here = self.here(gb);
+        let rom = gb.rom();
+        let cut = self.cut.contains(&here);
+        self.grid(rom, here.0)
+            .is_none_or(|g| cut || g.walkable(here.1.into(), here.2.into()))
+    }
+
     /// A square the game hangs on (a script that never ends): never
     /// stand on it again.
     pub fn trap(&mut self, s: Square) {
@@ -607,13 +536,23 @@ impl Nav {
         }
     }
 
-    /// Squares a script opens by changing the map's blocks in RAM, which
-    /// the cartridge's copy never shows.
-    pub fn open(&mut self, rom: &[u8], map: u8, squares: &[(u8, u8)]) {
-        if self.grid(rom, map).is_some() {
+    /// Squares a script opens or shuts by changing the map's blocks in RAM,
+    /// which the cartridge's copy never shows.
+    pub fn set_open(&mut self, rom: &[u8], map: u8, squares: &[(u8, u8)], open: bool) {
+        let Some(g) = self.grid(rom, map) else {
+            return;
+        };
+        let w = g.w;
+        let changed = squares.iter().any(|&(x, y)| {
+            g.walk
+                .get(usize::from(y) * w + usize::from(x))
+                .is_some_and(|&s| s != open)
+        });
+        if changed {
             for &(x, y) in squares {
-                self.set_walk((map, x, y), true);
+                self.set_walk((map, x, y), open);
             }
+            self.leg = None;
         }
     }
 
@@ -647,23 +586,44 @@ impl Nav {
         dir
     }
 
-    fn read_people(&mut self, gb: &mut GameBoy, w: usize, h: usize) {
+    fn read_people(&mut self, gb: &mut GameBoy, map: u8, w: usize, h: usize) {
         let r = self.ram;
         self.people.clear();
+        self.balls.clear();
+        if self.stills.0 != map {
+            self.stills = (map, [None; 16]);
+        }
         for n in 1..16u16 {
             if Some(n) == self.skip_sprite {
                 continue;
             }
             let base = r.sprite_data2 + n * 16;
             let (y, x) = (gb.peek(base + 4), gb.peek(base + 5));
-            // A picture, and on screen: hidden people keep their slots.
-            let shown = gb.peek(r.sprite_data1 + n * 16) != 0
-                && gb.peek(r.sprite_data1 + n * 16 + 2) != 0xFF;
+            let picture = gb.peek(r.sprite_data1 + n * 16);
+            let slot = &mut self.stills.1[usize::from(n)];
+            if picture == 0 {
+                *slot = None;
+            }
+            // On screen: hidden people keep their slots, and so do people
+            // off screen, so those who stand still are remembered.
+            let shown = picture != 0 && gb.peek(r.sprite_data1 + n * 16 + 2) != 0xFF;
             if shown && x >= 4 && y >= 4 {
                 let (x, y) = (usize::from(x - 4), usize::from(y - 4));
                 if x < w && y < h {
                     self.people.push((x, y));
+                    let ball = picture == self.ball;
+                    if ball {
+                        self.balls.push((x, y));
+                    }
+                    *slot = (!ball && gb.peek(base + 6) == STAY).then_some((x, y));
                 }
+            }
+        }
+        self.still.clear();
+        self.still.extend(self.stills.1.iter().flatten());
+        for &s in &self.still {
+            if !self.people.contains(&s) {
+                self.people.push(s);
             }
         }
     }
@@ -683,19 +643,22 @@ impl Nav {
         // A trainer who walked up to battle stays where he stopped: a goal
         // square with someone on it is no goal.
         let (w, h) = self.grids.get(&here.0).map_or((0, 0), |g| (g.w, g.h));
-        self.read_people(gb, w, h);
+        self.read_people(gb, here.0, w, h);
         let people = std::mem::take(&mut self.people);
         let free = |g: &Grid, s: Square| {
             goal(g, s) && (s.0 != here.0 || !people.contains(&(s.1.into(), s.2.into())))
         };
-        if let Some((t, None)) = self.leg {
+        if let Some((t, None, _)) = self.leg {
             if t.0 == here.0 && self.grids.get(&t.0).is_some_and(|g| !free(g, t)) {
                 self.leg = None;
             }
         }
         // Planned once per map: the live search below walks the leg.
-        if self.leg.is_none_or(|(t, _)| t.0 != here.0) {
-            self.leg = self.route(gb.rom(), here, &free);
+        if self.leg.is_none_or(|(t, ..)| t.0 != here.0) {
+            // Around anyone who stands still for good, by another floor if
+            // need be, unless there is no other way.
+            let still = std::mem::take(&mut self.still);
+            self.leg = self.route(gb.rom(), here, &free, &still);
             // Walls learned from a person who has since moved, or a trap
             // in the only corridor, can cut the only way; forget them and
             // look again.
@@ -704,11 +667,19 @@ impl Nav {
                 for s in std::mem::take(&mut self.traps) {
                     self.set_walk(s, true);
                 }
-                self.leg = self.route(gb.rom(), here, &free);
+                self.leg = self.route(gb.rom(), here, &free, &still);
             }
+            self.pushy = self.leg.is_none() && !still.is_empty();
+            if self.pushy {
+                self.leg = self.route(gb.rom(), here, &free, &[]);
+            }
+            self.still = still;
         }
         self.people = people;
-        let (target, leave) = self.leg?;
+        let (target, leave, to) = self.leg?;
+        if let Some(b) = self.panel(gb, here, leave, to) {
+            return Some(b);
+        }
         if (target.1, target.2) == (here.1, here.2) {
             let Some(leave) = leave else {
                 // The goal moved off this square (a person stood on it).
@@ -730,6 +701,17 @@ impl Nav {
             return None;
         };
         let ahead = Self::ahead(here, dir);
+        let door = self.doors.contains(&ahead) && DOOR_TILES.contains(&tile_ahead(gb, dir));
+        if self.balls.contains(&(ahead.1.into(), ahead.2.into())) || door {
+            // Turned to face it, then A held: the overworld loop polls the
+            // joypad slower than a frame, so a one-frame tap can fall
+            // between polls.
+            return Some(if facing(gb.peek(FACING)) == dir {
+                A
+            } else {
+                dir
+            });
+        }
         if self.standing_tree(gb.rom(), ahead) {
             // Turned to face it first: Cut takes the tile in front. Pushing
             // into the tree meanwhile is harmless.
@@ -740,6 +722,26 @@ impl Nav {
             return Some(dir);
         }
         Some(self.hold(gb, dir))
+    }
+
+    /// In an elevator going the wrong way: to its panel, facing it, and
+    /// then `floor` names the floor to pick.
+    fn panel(&mut self, gb: &mut GameBoy, here: Square, leave: Option<u8>, to: u8) -> Option<u8> {
+        let &(_, at, floors) = LIFTS.iter().find(|l| l.0 == here.0)?;
+        if leave.is_none() || lift(gb, self.ram) == to {
+            return None;
+        }
+        if (here.1, here.2) != at {
+            let dir = self.step_toward(gb, here, at)?;
+            return Some(self.hold(gb, dir));
+        }
+        if facing(gb.peek(FACING)) != UP {
+            return Some(self.hold(gb, UP));
+        }
+        let i = floors.iter().position(|f| f.0 == to)?;
+        self.floor = Some((i as u8, to));
+        // Not 0, which callers take for "arrived": B does nothing here.
+        Some(B)
     }
 
     /// A tree on this square that has not been cut since the player came.
@@ -762,9 +764,11 @@ impl Nav {
         let i = usize::from(to.1) * g.w + usize::from(to.0);
         // Around people, unless that is far longer than waiting for them
         // to move: the long way round can be a one-way loop over a ledge.
-        let mut steps = [(u32::MAX, 0u8); 2];
-        for (k, people) in [true, false].into_iter().enumerate() {
-            let blocked: &[(usize, usize)] = if people { &self.people } else { &[] };
+        // Never waiting on one who stands still for good, unless there is
+        // no other way.
+        let mut steps = [(u32::MAX, 0u8); 3];
+        let blocks: [&[(usize, usize)]; 3] = [&self.people, &self.still, &[]];
+        for (k, blocked) in blocks.into_iter().enumerate() {
             self.bfs.run(
                 g,
                 &self.rules,
@@ -777,11 +781,15 @@ impl Nav {
                 steps[k] = (d, f);
             }
         }
-        let [(around, a), (through, t)] = steps;
-        match (around, through) {
-            (u32::MAX, u32::MAX) => None,
-            (d, t_) if d != u32::MAX && d <= t_.saturating_add(DETOUR) => Some(a),
-            _ => Some(t),
+        let [(around, a), (past, p), (through, t)] = steps;
+        if around != u32::MAX && around <= past.min(through).saturating_add(DETOUR) {
+            Some(a)
+        } else if past != u32::MAX {
+            Some(p)
+        } else {
+            // Through someone who never moves only when the route found no
+            // way around them: otherwise the route is stale.
+            (through != u32::MAX && self.pushy).then_some(t)
         }
     }
 
@@ -794,10 +802,6 @@ impl Nav {
             s.2.wrapping_add_signed(dy as i8),
         )
     }
-}
-
-fn is_tree(g: &Grid, tile: u8) -> bool {
-    (g.tileset == OVERWORLD && tile == TREE) || (g.tileset == GYM && tile == GYM_TREE)
 }
 
 /// A map's warps from its object data: square, destination warp index,

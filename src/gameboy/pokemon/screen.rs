@@ -6,7 +6,7 @@ use mizu_core::GameBoy;
 
 use super::super::pilot::{A, DOWN, UP};
 
-const TILE_MAP: u16 = 0xC3A0;
+pub const TILE_MAP: u16 = 0xC3A0;
 pub const COLS: usize = 20;
 pub const ROWS: usize = 18;
 pub const CURSOR: u8 = 0xED;
