@@ -57,6 +57,25 @@ const MILESTONES: &[(&str, Done)] = &[
     ("cut learned", |gb, r, _| story::cutter(gb, r).is_some()),
     ("thunder badge", |gb, r, _| badge(gb, r, 2)),
     ("rainbow badge", |gb, r, _| badge(gb, r, 3)),
+    ("rocket hideout", |_, _, seen| seen[0xC7]),
+    ("silph scope", |gb, r, _| {
+        story::event(gb, r, story::BEAT_HIDEOUT_GIOVANNI)
+    }),
+    ("pokémon tower 6f", |_, _, seen| {
+        seen[usize::from(story::TOWER_6F)]
+    }),
+    ("poké flute", |gb, r, _| {
+        story::has_item(gb, r, story::POKE_FLUTE)
+    }),
+    ("snorlax", |gb, r, _| {
+        story::event(gb, r, story::ROUTE_12_SNORLAX)
+    }),
+    ("fuchsia city", |_, _, seen| seen[0x07]),
+    ("saffron city", |_, _, seen| seen[0x0A]),
+    ("silph co.", |_, _, seen| seen[0xB5]),
+    ("silph giovanni", |gb, r, _| {
+        story::event(gb, r, story::BEAT_SILPH_GIOVANNI)
+    }),
     ("soul badge", |gb, r, _| badge(gb, r, 4)),
     ("marsh badge", |gb, r, _| badge(gb, r, 5)),
     ("volcano badge", |gb, r, _| badge(gb, r, 6)),
@@ -290,7 +309,7 @@ fn pokebot_map() {
     };
     if let (Some(from), Some(to)) = (parse("POKEBOT_FROM"), parse("POKEBOT_TO")) {
         let t0 = Instant::now();
-        let r = nav.route(&rom, from, &move |_, s| s == to);
+        let r = nav.route(&rom, from, &move |_, s| s == to, &[]);
         eprintln!("route {from:?} -> {to:?}: {r:?} in {:?}", t0.elapsed());
     }
 }

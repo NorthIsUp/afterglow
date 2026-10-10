@@ -20,6 +20,10 @@ const ATTACK: u16 = 17;
 const DEFENSE: u16 = 19;
 const SPECIAL: u16 = 23;
 const PP: u16 = 25;
+const MAX_HP: u16 = 15;
+/// `wPlayerMonNumber`: the party slot fighting, below `wFontLoaded` so the
+/// same in every revision.
+const PLAYER_MON_NUMBER: u16 = 0xCC2F;
 /// `party_struct`'s moves sit at the battle struct's offset, its PP further on.
 const PARTY_PP: u16 = 0x1D;
 /// The slot Disable stopped, 1-based, in the high nibble.
@@ -171,15 +175,23 @@ impl Battle {
         let m = screen::menu(gb);
         let wild = gb.peek(self.ram.in_battle) == WILD;
         let enemy = gb.peek(self.ram.at(ENEMY_MON));
-        // The bag index of the Poké Ball to throw, if this one is worth it.
+        let (_, damage) = self.best_move(gb);
+        // A wild battle is worth it for the levels, and only when the
+        // lead can hurt it.
+        let run = wild && (!grind || damage == 0);
+        // The bag index of the item to use: a Poké Ball if this one is
+        // worth it, a potion if the one fighting is low.
+        let me = self.ram.at(BATTLE_MON);
+        let low = word(gb, me + HP) * 4 < word(gb, me + MAX_HP);
+        let potion = field::POTIONS
+            .into_iter()
+            .find_map(|p| field::bag_index(gb, self.ram, p))
+            .filter(|_| low && !run);
         let ball = field::bag_index(gb, self.ram, field::POKE_BALL)
             .filter(|_| wild && catch.contains(&enemy));
+        let item = potion.or(ball);
         if screen::shows(gb, b"FIGHT") && screen::shows(gb, b"RUN") {
-            let (_, damage) = self.best_move(gb);
-            // A wild battle is worth it for the levels, and only when the
-            // lead can hurt it.
-            let run = wild && (!grind || damage == 0);
-            let (want_x, want_item) = if ball.is_some() {
+            let (want_x, want_item) = if item.is_some() {
                 (9, 1)
             } else if run {
                 (15, 1)
@@ -208,7 +220,7 @@ impl Battle {
             return keys.tap(screen::toward(cy - MOVE_ROW, slot), GAP);
         }
         // The bag: a list in the top half, where the move list is below.
-        if let Some(i) = ball.filter(|_| cx == 5 && cy < 12) {
+        if let Some(i) = item.filter(|_| cx == 5 && cy < 12) {
             return keys.tap(field::toward_item(gb, m.item, i), GAP);
         }
         // The lead fainted: the first one standing goes in.
@@ -217,6 +229,10 @@ impl Battle {
                 word(gb, field::mon(self.ram, s) + HP) > 0
             });
             return keys.tap(screen::toward(m.item, alive.unwrap_or(0)), GAP);
+        }
+        // A potion's patient: the one fighting.
+        if screen::shows(gb, b"Use item") {
+            return keys.tap(screen::toward(m.item, gb.peek(PLAYER_MON_NUMBER)), GAP);
         }
         if screen::shows(gb, b"SWITCH") && screen::shows(gb, b"STATS") {
             return keys.tap(screen::toward(m.item, 0), GAP);

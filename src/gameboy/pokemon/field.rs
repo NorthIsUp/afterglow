@@ -8,11 +8,16 @@ use mizu_core::GameBoy;
 use super::super::pilot::{A, B, DOWN, START};
 use super::battle::{Battle, MOVES};
 use super::input::{Keys, GAP};
-use super::{screen, Ram};
+use super::{nav, screen, Ram};
 
 pub const CUT: u8 = 0x0F;
 pub const HM01: u8 = 0xC4;
 pub const POKE_BALL: u8 = 0x04;
+/// Hyper Potion, Super Potion, Potion: the best first.
+pub const POTIONS: [u8; 3] = [0x12, 0x13, 0x14];
+/// Potions bought in one visit.
+const STOCK: u8 = 4;
+const FRESH_WATER: u8 = 0x3C;
 /// Balls bought in one visit.
 const BALLS: u8 = 5;
 const PARTY_MON: u16 = 44;
@@ -31,6 +36,18 @@ pub enum Kind {
     Teach(u8),
     /// Buy Poké Balls from the clerk the player faces.
     Buy,
+    /// Use this item from the bag, on nobody.
+    Use(u8),
+    /// Pick this entry from the elevator panel the player faces, to send
+    /// it to this map.
+    Floor(u8, u8),
+    /// A drink from the vending machine the player faces.
+    Drink,
+    /// Use this potion on the lead.
+    Potion(u8),
+    /// Buy potions from the clerk the player faces, the first the shop
+    /// lists.
+    Stock,
 }
 
 pub struct Errand {
@@ -65,7 +82,10 @@ impl Errand {
             || match self.kind {
                 Kind::Teach(slot) => knows(gb, ram, slot, CUT),
                 Kind::Buy => count(gb, ram, POKE_BALL) >= BALLS,
-                Kind::Cut(_) => false,
+                Kind::Floor(_, map) => nav::lift(gb, ram) == map,
+                Kind::Drink => count(gb, ram, FRESH_WATER) > 0,
+                Kind::Stock => potions(gb, ram) >= STOCK,
+                Kind::Cut(_) | Kind::Use(_) | Kind::Potion(_) => false,
             };
         if done && !open {
             return None;
@@ -77,9 +97,16 @@ impl Errand {
             return Some(keys.tap(B, GAP));
         }
         if !open {
-            return Some(keys.tap(if self.kind == Kind::Buy { A } else { START }, GAP));
+            let talk = matches!(
+                self.kind,
+                Kind::Buy | Kind::Floor(..) | Kind::Drink | Kind::Stock
+            );
+            return Some(keys.tap(if talk { A } else { START }, GAP));
         }
-        if screen::shows(gb, b"hacked") || screen::shows(gb, b"anything to CUT") {
+        if screen::shows(gb, b"hacked")
+            || screen::shows(gb, b"anything to CUT")
+            || screen::shows(gb, b"enough money")
+        {
             self.used = true;
         }
         let Some((cx, cy)) = screen::cursor(gb) else {
@@ -93,9 +120,11 @@ impl Errand {
         };
         let key = if screen::shows(gb, b"OPTION") {
             let want: &[u8] = match self.kind {
-                Kind::Teach(_) => b"ITEM",
+                Kind::Teach(_) | Kind::Use(_) | Kind::Potion(_) => b"ITEM",
                 Kind::Cut(_) => b"POKeMON",
-                Kind::Buy => return Some(keys.tap(B, GAP)),
+                Kind::Buy | Kind::Floor(..) | Kind::Drink | Kind::Stock => {
+                    return Some(keys.tap(B, GAP))
+                }
             };
             if on(gb, want) {
                 A
@@ -107,7 +136,11 @@ impl Errand {
         } else if cx == 0 && (screen::shows(gb, b"which") || screen::shows(gb, b"Choose")) {
             match self.kind {
                 Kind::Cut(slot) | Kind::Teach(slot) => screen::toward(m.item, slot),
-                Kind::Buy => B,
+                Kind::Potion(_) => {
+                    self.used = m.item == 0;
+                    screen::toward(m.item, 0)
+                }
+                _ => B,
             }
         } else if screen::shows(gb, b"SWITCH") && screen::shows(gb, b"STATS") {
             if on(gb, b"CUT") {
@@ -116,6 +149,8 @@ impl Errand {
                 DOWN
             }
         } else if screen::shows(gb, b"TOSS") {
+            // USE: an item used on nobody is done once it is chosen.
+            self.used |= matches!(self.kind, Kind::Use(_)) && m.item == 0;
             screen::toward(m.item, 0)
         } else if screen::shows(gb, b"forgotten") {
             let Kind::Teach(slot) = self.kind else {
@@ -126,12 +161,27 @@ impl Errand {
             A
         } else {
             match self.kind {
-                Kind::Teach(_) => match bag_index(gb, ram, HM01) {
-                    Some(i) => toward_item(gb, m.item, i),
-                    None => B,
-                },
+                Kind::Teach(_) | Kind::Use(_) | Kind::Potion(_) => {
+                    let item = match self.kind {
+                        Kind::Use(item) | Kind::Potion(item) => item,
+                        _ => HM01,
+                    };
+                    match bag_index(gb, ram, item) {
+                        Some(i) => toward_item(gb, m.item, i),
+                        None => B,
+                    }
+                }
+                Kind::Floor(i, _) => toward_item(gb, m.item, i),
+                // Fresh Water, the cheapest, tops the machine's list.
+                Kind::Drink => screen::toward(m.item, 0),
                 Kind::Buy if on(gb, b"POKe BALL") => A,
-                Kind::Buy => DOWN,
+                Kind::Stock if on(gb, b"POTION") => A,
+                // The end of the list, and no potion on it.
+                Kind::Stock if on(gb, b"CANCEL") => {
+                    self.used = true;
+                    B
+                }
+                Kind::Buy | Kind::Stock => DOWN,
                 Kind::Cut(_) => B,
             }
         };
@@ -162,6 +212,11 @@ pub fn slot(gb: &mut GameBoy, ram: Ram, f: impl Fn(&mut GameBoy, u8) -> bool) ->
 pub fn bag_index(gb: &mut GameBoy, ram: Ram, item: u8) -> Option<u8> {
     let n = gb.peek(ram.at(BAG_COUNT)).min(20);
     (0..n).find(|&i| gb.peek(ram.at(BAG) + 2 * u16::from(i)) == item)
+}
+
+/// Potions of any kind in the bag.
+pub fn potions(gb: &mut GameBoy, ram: Ram) -> u8 {
+    POTIONS.iter().map(|&p| count(gb, ram, p)).sum()
 }
 
 pub fn count(gb: &mut GameBoy, ram: Ram, item: u8) -> u8 {

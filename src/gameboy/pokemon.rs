@@ -13,6 +13,7 @@
 
 mod battle;
 mod field;
+mod grid;
 mod input;
 mod intro;
 mod nav;
@@ -190,6 +191,9 @@ impl Bot {
         if self.still > 60 * 3 && self.still % 120 < 20 {
             return self.keys.tap(B, 30);
         }
+        if !self.nav.settled(gb) {
+            return 0;
+        }
         self.story.can_attack = self.battle.can_attack(gb);
         // Cut works outside battle only with the Cascade Badge.
         let cutter = story::cutter(gb, r).filter(|_| self.story.badges(gb) & 2 != 0);
@@ -200,6 +204,9 @@ impl Bot {
         }
         if let (Some(_), Some(slot)) = (self.nav.tree.take(), cutter) {
             self.errand = Some(Errand::new(Kind::Cut(slot)));
+        }
+        if let Some((i, to)) = self.nav.floor.take() {
+            self.errand = Some(Errand::new(Kind::Floor(i, to)));
         }
         if let Some(b) = b {
             return b;
