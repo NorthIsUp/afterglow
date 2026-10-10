@@ -7,7 +7,7 @@
 //!
 //! An engine that dies is started again with the Mac booting afresh; one that
 //! dies within seconds of starting, three times running, is given up on until
-//! the saver asks for different files.
+//! the next claim.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -24,6 +24,8 @@ const TICK: Duration = Duration::from_nanos(16_625_800);
 const EARLY: Duration = Duration::from_secs(20);
 const GIVE_UP: u32 = 3;
 const BACKOFF: Duration = Duration::from_millis(if cfg!(test) { 20 } else { 2000 });
+/// Off in tests: the Mac runs as fast as the host does.
+const PACED: bool = !cfg!(test);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Want {
@@ -33,8 +35,6 @@ pub struct Want {
     pub disks: Vec<PathBuf>,
     /// The game disk's name, for the Finder's type-to-select.
     pub volume: String,
-    /// Off in tests: the Mac runs as fast as the host does.
-    pub paced: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +49,7 @@ struct Ctl {
     /// The saver the engine runs for; 0 parks it.
     owner: u64,
     want: Option<Want>,
-    /// Bumped per claim, so a failed engine tries again for new files.
+    /// Bumped per claim: new files to read, and a failed engine's retry.
     rev: u64,
 }
 
@@ -149,19 +149,6 @@ impl Engine {
         f.seq = f.seq.wrapping_add(1).max(1);
         self.state.store(State::Running as u8, Ordering::Relaxed);
     }
-
-    /// Blocks until a saver owns the engine; its files and claim number.
-    fn wanted(&self, failed_rev: Option<u64>) -> (Want, u64) {
-        let mut c = lock(&self.ctl);
-        loop {
-            if c.owner != 0 && failed_rev != Some(c.rev) {
-                if let Some(w) = &c.want {
-                    return (w.clone(), c.rev);
-                }
-            }
-            c = self.wake.wait(c).unwrap_or_else(PoisonError::into_inner);
-        }
-    }
 }
 
 struct Session {
@@ -218,7 +205,7 @@ impl Session {
                 if cmd.reset { " (reset)" } else { "" }
             );
         }
-        if self.want.paced {
+        if PACED {
             let now = Instant::now();
             if self.next > now {
                 std::thread::sleep(self.next - now);
@@ -240,16 +227,26 @@ impl Drop for Session {
 
 fn run(e: &'static Engine) {
     let mut session: Option<Session> = None;
-    let mut early = 0;
-    let mut failed_rev = None;
-    let mut parked = false;
+    let mut want: Option<Want> = None;
+    let (mut rev, mut early, mut given_up) = (0, 0, false);
     loop {
-        if lock(&e.ctl).owner == 0 {
-            parked = true;
-        }
-        let (want, rev) = e.wanted(failed_rev);
-        failed_rev = None;
-        if session.as_ref().is_some_and(|s| s.want != want) {
+        // The lock only for the claim's bookkeeping: the files are cloned
+        // when a claim is new, not every sixtieth.
+        let parked = {
+            let mut c = lock(&e.ctl);
+            let parked = c.owner == 0 || given_up;
+            while c.owner == 0 || given_up && c.rev == rev {
+                c = e.wake.wait(c).unwrap_or_else(PoisonError::into_inner);
+            }
+            given_up = false;
+            if c.rev != rev {
+                rev = c.rev;
+                want.clone_from(&c.want);
+            }
+            parked
+        };
+        let want = want.as_ref().expect("set by every claim");
+        if session.as_ref().is_some_and(|s| s.want != *want) {
             session = None;
             early = 0;
             e.state.store(State::Starting as u8, Ordering::Relaxed);
@@ -259,13 +256,13 @@ fn run(e: &'static Engine) {
             None if early >= GIVE_UP => {
                 e.state.store(State::Failed as u8, Ordering::Relaxed);
                 eprintln!(
-                    "[screensaver] battlechess: the Mac would not start; waiting for new files"
+                    "[screensaver] battlechess: the Mac would not start; waiting for a new claim"
                 );
-                failed_rev = Some(rev);
+                given_up = true;
                 early = 0;
                 continue;
             }
-            None => match Session::start(&want) {
+            None => match Session::start(want) {
                 Ok(s) => session.insert(s),
                 Err(err) => {
                     eprintln!(
@@ -278,12 +275,15 @@ fn run(e: &'static Engine) {
                 }
             },
         };
-        if std::mem::take(&mut parked) {
+        if parked {
             s.next = Instant::now();
         }
         if s.tick(e).is_err() {
-            let quick = s.started.elapsed() < EARLY;
-            early = if quick { early + 1 } else { 1 };
+            early = if s.started.elapsed() < EARLY {
+                early + 1
+            } else {
+                0
+            };
             eprintln!("[screensaver] battlechess: the Mac stopped; starting it again");
             session = None;
             std::thread::sleep(BACKOFF);

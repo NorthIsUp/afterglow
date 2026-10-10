@@ -210,6 +210,10 @@ jobs:
                 echo "$b links a shared library"; exit 1
               fi
             done
+            # mac-engine is GPL-2.0 only: Doom and Micropolis (GPL-3.0) must stay out.
+            if strings target/release/mac-engine | grep -E "W_GetNumForName|showBudgetAndWait"; then
+              echo "mac-engine links Doom or Micropolis"; exit 1
+            fi
             # Paced, so the engines (wall-clock, own threads) get to draw.
             SAVER=doom SAVER_HTTP=off SAVER_DUMP=/tmp/dump-doom SAVER_DUMP_FRAMES=90 \
               SAVER_DUMP_EVERY=1 SAVER_DUMP_PACED=1 DOOM_WAD="$wad" ./target/release/screensaver

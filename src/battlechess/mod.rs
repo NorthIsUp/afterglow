@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::env_str;
 use crate::font;
+use crate::glyph;
 use crate::grid::{pixel_aspect, Grid};
 use crate::saver::Saver;
 use crate::scaled::{self, Scaled};
@@ -105,34 +106,38 @@ impl Files {
         ] {
             if !Path::new(path).is_file() {
                 out.push(format!("{key}: no {what} at"));
-                out.push(format!("  {}", tail(path, 58)));
+                out.push(path_line(path));
             }
         }
         if out.is_empty() {
             if !plus_rom(Path::new(&self.rom)) {
                 out.push("MAC_ROM is not a Mac Plus ROM:".into());
-                out.push(format!("  {}", tail(&self.rom, 58)));
+                out.push(path_line(&self.rom));
             }
             if volume_name(Path::new(&self.disk)).is_none() {
                 out.push("MAC_DISK is not an HFS disk image:".into());
-                out.push(format!("  {}", tail(&self.disk, 58)));
+                out.push(path_line(&self.disk));
             }
             if !self.engine.is_file() {
                 out.push("mac-engine is missing beside the screensaver:".into());
-                out.push(format!("  {}", tail(&self.engine.to_string_lossy(), 58)));
+                out.push(path_line(&self.engine.to_string_lossy()));
             }
         }
         out
     }
 }
 
-/// The last `n` characters, marked when cut.
-fn tail(s: &str, n: usize) -> String {
+/// A path on a card line of its own, indented, its start cut to fit.
+fn path_line(s: &str) -> String {
+    const FIT: usize = 58;
     let count = s.chars().count();
-    if count <= n {
-        s.to_string()
+    if count <= FIT {
+        format!("  {s}")
     } else {
-        format!("...{}", s.chars().skip(count - n + 3).collect::<String>())
+        format!(
+            "  ...{}",
+            s.chars().skip(count - FIT + 3).collect::<String>()
+        )
     }
 }
 
@@ -182,12 +187,12 @@ fn card<S: AsRef<str>>(lines: &[S], pix: &mut [u8], stride: usize, x0: usize) {
             .take((bw - 32) / font::GLYPH_W)
             .enumerate()
         {
-            let g = c as usize;
-            let glyph = if (32..127).contains(&g) {
-                font::GLYPHS[font::ASCII[g - 32] as usize]
+            let c = if c == ' ' || c.is_ascii_graphic() {
+                c
             } else {
-                font::GLYPHS[0]
+                '?'
             };
+            let glyph = font::GLYPHS[glyph::of(c) as usize];
             for (gy, bits) in glyph.iter().enumerate() {
                 for gx in 0..font::GLYPH_W {
                     if bits << gx & 0x80 != 0 {
@@ -217,7 +222,7 @@ impl BattleChess {
                 .unwrap_or_default(),
         };
         let tint = env_str(&["BATTLECHESS_TINT"], "paper");
-        Self::build(panel, pixel_aspect(), &files, &tint, Engine::get(), true)
+        Self::build(panel, pixel_aspect(), &files, &tint, Engine::get())
     }
 
     fn build(
@@ -226,7 +231,6 @@ impl BattleChess {
         files: &Files,
         tint_name: &str,
         engine: &'static Engine,
-        paced: bool,
     ) -> Self {
         let (grid, view) = Scaled::new(panel, aspect, layout(panel, aspect), H, MAX_W);
         let (lit, ink) = tint(tint_name);
@@ -236,7 +240,6 @@ impl BattleChess {
             rom: files.rom.clone().into(),
             disks: vec![files.system.clone().into(), files.disk.clone().into()],
             volume: volume_name(Path::new(&files.disk)).unwrap_or_default(),
-            paced,
         });
         let w = view.width();
         let mut s = Self {
