@@ -18,6 +18,9 @@ pub const POTIONS: [u8; 3] = [0x12, 0x13, 0x14];
 /// Potions bought in one visit.
 const STOCK: u8 = 4;
 const FRESH_WATER: u8 = 0x3C;
+pub const BICYCLE: u8 = 0x06;
+/// `wWalkBikeSurfState`: 0 walking.
+const WALK_BIKE_SURF: u16 = 0xD700;
 /// Balls bought in one visit.
 const BALLS: u8 = 5;
 const PARTY_MON: u16 = 44;
@@ -85,6 +88,8 @@ impl Errand {
                 Kind::Floor(_, map) => nav::lift(gb, ram) == map,
                 Kind::Drink => count(gb, ram, FRESH_WATER) > 0,
                 Kind::Stock => potions(gb, ram) >= STOCK,
+                // The bag uses the Bicycle as soon as it is picked: no USE.
+                Kind::Use(BICYCLE) => riding(gb, ram),
                 Kind::Cut(_) | Kind::Use(_) | Kind::Potion(_) => false,
             };
         if done && !open {
@@ -212,6 +217,10 @@ pub fn slot(gb: &mut GameBoy, ram: Ram, f: impl Fn(&mut GameBoy, u8) -> bool) ->
 pub fn bag_index(gb: &mut GameBoy, ram: Ram, item: u8) -> Option<u8> {
     let n = gb.peek(ram.at(BAG_COUNT)).min(20);
     (0..n).find(|&i| gb.peek(ram.at(BAG) + 2 * u16::from(i)) == item)
+}
+
+pub fn riding(gb: &mut GameBoy, ram: Ram) -> bool {
+    gb.peek(ram.at(WALK_BIKE_SURF)) != 0
 }
 
 /// Potions of any kind in the bag.

@@ -48,8 +48,8 @@ pub struct Knobs {
 /// Save states kept for rewinding, one per this many frames of play.
 const SNAPSHOTS: usize = 4;
 const SNAPSHOT_EVERY: u64 = 60 * 60 * 2;
-/// Frames on one square (battles and text boxes included) that count as
-/// stuck: longer than any battle.
+/// Frames on one square (text boxes included, battles at a quarter) that
+/// count as stuck.
 const STILL_LIMIT: u64 = 60 * 60 * 3;
 /// A text box or menu open this long is one the bot is going round in.
 const STUCK_TEXT: u32 = 60 * 20;
@@ -128,7 +128,7 @@ impl Bot {
         let r = self.ram;
         let lead = story::lead(gb, r);
         format!(
-            "map {:3} ({:2},{:2}) lv {} hp {}/{} badges {:08b} goal {:?} rewinds {} joyignore {:02x} options {:02x}",
+            "map {:3} ({:2},{:2}) lv {} hp {}/{} badges {:08b} goal {:?} rewinds {} joyignore {:02x} options {:02x} bike {:02x}",
             gb.peek(r.cur_map),
             gb.peek(r.x),
             gb.peek(r.y),
@@ -139,7 +139,8 @@ impl Bot {
             self.story.goal(gb),
             self.rewinds,
             gb.peek(nav::JOY_IGNORE),
-            gb.peek(r.options)
+            gb.peek(r.options),
+            u8::from(field::riding(gb, r))
         )
     }
 
@@ -271,7 +272,12 @@ impl Bot {
         }
         let here = self.nav.here(gb);
         if self.last_here == Some(here) {
-            self.still += 1;
+            // A gym leader's battle, potions and all, runs past the limit:
+            // it counts at a quarter.
+            let battle = gb.peek(self.ram.in_battle) != 0;
+            if !battle || frame.is_multiple_of(4) {
+                self.still += 1;
+            }
         } else {
             self.last_here = Some(here);
             self.still = 0;

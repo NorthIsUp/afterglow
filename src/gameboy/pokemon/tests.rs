@@ -11,7 +11,7 @@ use super::super::carts::{load, Pilot, Revision};
 use super::super::pilot::{A, B, DOWN, LEFT, RIGHT, START, UP};
 use super::intro::{Intro, DOOR, PALLET, STEPS};
 use super::nav::Nav;
-use super::{screen, story, Bot, Knobs, Ram};
+use super::{field, screen, story, Bot, Knobs, Ram};
 
 const FPS: f64 = 59.73;
 
@@ -56,6 +56,7 @@ const MILESTONES: &[(&str, Done)] = &[
     ("hm01", |gb, r, _| story::event(gb, r, story::GOT_HM01)),
     ("cut learned", |gb, r, _| story::cutter(gb, r).is_some()),
     ("thunder badge", |gb, r, _| badge(gb, r, 2)),
+    ("bicycle", |gb, r, _| story::has_item(gb, r, field::BICYCLE)),
     ("rainbow badge", |gb, r, _| badge(gb, r, 3)),
     ("rocket hideout", |_, _, seen| seen[0xC7]),
     ("silph scope", |gb, r, _| {

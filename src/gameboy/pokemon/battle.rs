@@ -24,8 +24,10 @@ const MAX_HP: u16 = 15;
 /// `wPlayerMonNumber`: the party slot fighting, below `wFontLoaded` so the
 /// same in every revision.
 const PLAYER_MON_NUMBER: u16 = 0xCC2F;
-/// `party_struct`'s moves sit at the battle struct's offset, its PP further on.
+/// `party_struct`'s moves sit at the battle struct's offset, its PP and
+/// stats further on.
 const PARTY_PP: u16 = 0x1D;
+const PARTY_ATTACK: u16 = 0x24;
 /// The slot Disable stopped, 1-based, in the high nibble.
 const PLAYER_DISABLED_MOVE: u16 = 0xD06D;
 /// `wMoveMenuType`, below `wFontLoaded` so the same in every revision.
@@ -95,18 +97,18 @@ impl Battle {
         (u32::from(row[2]), row[3], u32::from(row[4]))
     }
 
-    /// Expected damage of move `id` from `from`'s battle struct on `to`'s,
-    /// up to a constant.
-    fn score(&self, gb: &mut GameBoy, id: u8, from: u16, to: u16) -> u32 {
+    /// Expected damage of move `id` from `from` (a battle or party struct,
+    /// its Attack at `atk`) on `to`'s battle struct, up to a constant.
+    fn score(&self, gb: &mut GameBoy, id: u8, from: u16, atk: u16, to: u16) -> u32 {
         let (power, ty, acc) = self.move_data(gb.rom(), id);
         if power == 0 {
             return 0;
         }
         let w = |gb: &mut GameBoy, a: u16| u32::from(word(gb, a));
         let (atk, def) = if ty >= FIRST_SPECIAL_TYPE {
-            (w(gb, from + SPECIAL), w(gb, to + SPECIAL))
+            (w(gb, atk + SPECIAL - ATTACK), w(gb, to + SPECIAL))
         } else {
-            (w(gb, from + ATTACK), w(gb, to + DEFENSE))
+            (w(gb, atk), w(gb, to + DEFENSE))
         };
         let (t1, t2) = (gb.peek(to + TYPE1), gb.peek(to + TYPE1 + 1));
         let mut eff = self.effect(ty, t1);
@@ -128,13 +130,37 @@ impl Battle {
                 continue;
             }
             any.get_or_insert(slot as usize);
-            let s = self.score(gb, id, me, them);
+            let s = self.score(gb, id, me, me + ATTACK, them);
             if s > best.1 {
                 best = (slot as usize, s);
             }
         }
         if best.1 == 0 {
             best.0 = any.unwrap_or(0);
+        }
+        best
+    }
+
+    /// The party member standing, `except` aside, whose best move does the
+    /// most to the enemy, and how much.
+    fn best_member(&self, gb: &mut GameBoy, except: u8) -> Option<(u8, u32)> {
+        let them = self.ram.at(ENEMY_MON);
+        let mut best: Option<(u8, u32)> = None;
+        for s in 0..gb.peek(self.ram.party_count).min(6) {
+            let p = field::mon(self.ram, s);
+            if s == except || word(gb, p + HP) == 0 {
+                continue;
+            }
+            let mut most = 0;
+            for slot in 0..4u16 {
+                let id = gb.peek(p + MOVES + slot);
+                if id != 0 && gb.peek(p + PARTY_PP + slot) & 0x3F != 0 {
+                    most = most.max(self.score(gb, id, p, p + PARTY_ATTACK, them));
+                }
+            }
+            if best.is_none_or(|(_, d)| most > d) {
+                best = Some((s, most));
+            }
         }
         best
     }
@@ -190,11 +216,20 @@ impl Battle {
         let ball = field::bag_index(gb, self.ram, field::POKE_BALL)
             .filter(|_| wild && catch.contains(&enemy));
         let item = potion.or(ball);
+        // A trainer's Pokémon the one fighting cannot hurt: in with one
+        // who can.
+        let active = gb.peek(PLAYER_MON_NUMBER);
+        let switch = (!wild && damage == 0)
+            .then(|| self.best_member(gb, active))
+            .flatten()
+            .filter(|&(_, d)| d > 0);
         if screen::shows(gb, b"FIGHT") && screen::shows(gb, b"RUN") {
             let (want_x, want_item) = if item.is_some() {
                 (9, 1)
             } else if run {
                 (15, 1)
+            } else if switch.is_some() {
+                (15, 0)
             } else {
                 (9, 0)
             };
@@ -223,19 +258,22 @@ impl Battle {
         if let Some(i) = item.filter(|_| cx == 5 && cy < 12) {
             return keys.tap(field::toward_item(gb, m.item, i), GAP);
         }
-        // The lead fainted: the first one standing goes in.
+        // A party member's menu: SWITCH. The party list behind it still
+        // asks to choose, so this goes first.
+        if screen::shows(gb, b"SWITCH") && screen::shows(gb, b"STATS") {
+            return keys.tap(screen::toward(m.item, 0), GAP);
+        }
+        // The one fighting fainted: in with whoever does the most damage.
         if screen::shows(gb, b"Bring out") {
-            let alive = field::slot(gb, self.ram, |gb, s| {
-                word(gb, field::mon(self.ram, s) + HP) > 0
-            });
-            return keys.tap(screen::toward(m.item, alive.unwrap_or(0)), GAP);
+            let next = self.best_member(gb, active).map_or(0, |(s, _)| s);
+            return keys.tap(screen::toward(m.item, next), GAP);
         }
         // A potion's patient: the one fighting.
         if screen::shows(gb, b"Use item") {
-            return keys.tap(screen::toward(m.item, gb.peek(PLAYER_MON_NUMBER)), GAP);
+            return keys.tap(screen::toward(m.item, active), GAP);
         }
-        if screen::shows(gb, b"SWITCH") && screen::shows(gb, b"STATS") {
-            return keys.tap(screen::toward(m.item, 0), GAP);
+        if let Some((s, _)) = switch.filter(|_| screen::shows(gb, b"Choose a")) {
+            return keys.tap(screen::toward(m.item, s), GAP);
         }
         if screen::shows(gb, b"YES") {
             // Keep the lead in, never nickname; learn every new move (the

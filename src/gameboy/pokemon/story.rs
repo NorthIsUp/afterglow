@@ -50,6 +50,7 @@ const DRINKS: [u8; 3] = [0x3C, 0x3D, 0x3E];
 const STATUS_FLAGS: u16 = 0xD728;
 const GAVE_DRINK: u16 = 6;
 pub const BEAT_SILPH_GIOVANNI: u16 = 0x78F;
+const BIKE_VOUCHER: u8 = 0x2D;
 pub const OAKS_PARCEL: u8 = 0x46;
 const DOME_FOSSIL: u8 = 0x29;
 const HELIX_FOSSIL: u8 = 0x2A;
@@ -81,6 +82,8 @@ const TOWER_7F: u8 = 0x94;
 const FUJIS_HOUSE: u8 = 0x95;
 const FUCHSIA_GYM: u8 = 0x9D;
 const MART_ROOF: u8 = 0x7E;
+const BIKE_SHOP: u8 = 0x42;
+const FAN_CLUB: u8 = 0x5A;
 const SAFFRON_GYM: u8 = 0xB2;
 const SILPH_5F: u8 = 0xD2;
 const SILPH_11F: u8 = 0xEB;
@@ -143,6 +146,8 @@ const LOCKS: [(u16, u8, Squares); 6] = [
 ];
 /// Lt. Surge's index in `GYMS`: Cut and two trash cans stand before him.
 const SURGE: usize = 2;
+/// Erika's: the Bicycle first, on the way back through Cerulean.
+const ERIKA: usize = 3;
 /// Vermilion Gym's electric gate, the block the second lock clears.
 const GATE: [(u8, u8); 4] = [(4, 4), (5, 4), (4, 5), (5, 5)];
 /// Species that can learn Cut: the two starters that can, and the two
@@ -160,6 +165,7 @@ const SHOPPING_MONEY: u32 = 3000;
 /// Celadon's hotel: a Pokémon Center's tiles and counter, and no nurse.
 const CELADON_HOTEL: u8 = 0x8C;
 const CAVERN: u8 = 17;
+const OVERWORLD: u8 = 0;
 
 /// Oak's three Poké Balls, Bulbasaur's last as in pokered's
 /// `OaksLab.asm`: Charmander, Squirtle, Bulbasaur.
@@ -190,7 +196,7 @@ impl Starter {
     /// weak against one grinds longer.
     fn levels(self, rev: Revision) -> [u8; GYMS.len()] {
         if rev == Revision::Yellow {
-            return [16, 18, 30, 40, 48, 52];
+            return [16, 18, 30, 40, 48, 0];
         }
         match self {
             Self::Bulbasaur => [14, 21, 26, 32, 44, 50],
@@ -334,7 +340,8 @@ impl Story {
         }
         if me.hp * 3 < me.max || !self.can_attack {
             let potion = field::POTIONS.into_iter().find(|&p| has_item(gb, r, p));
-            return Some(match potion.filter(|_| self.can_attack) {
+            // A potion cannot raise a lead who fainted.
+            return Some(match potion.filter(|_| self.can_attack && me.hp > 0) {
                 Some(p) => Goal::Potion(p),
                 None => Goal::Heal,
             });
@@ -351,9 +358,15 @@ impl Story {
             return Some(Goal::Shop);
         }
         let next = badges.trailing_ones() as usize;
+        // Yellow's Pikachu keeps only electric moves, and Silph Co.'s
+        // Giovanni leads with ground types: no Marsh Badge there.
+        if next == SABRINA && self.rev == Revision::Yellow {
+            return None;
+        }
         let &(grind, leader) = GYMS.get(next)?;
         let errand = match next {
             SURGE => self.to_vermilion(gb),
+            ERIKA => self.bicycle(gb),
             KOGA => self.to_fuchsia(gb),
             SABRINA => self.to_saffron(gb),
             _ => None,
@@ -405,6 +418,21 @@ impl Story {
             return Some(Goal::Talk((SS_ANNE_CAPTAINS_ROOM, 4, 2)));
         }
         cutter(gb, r).is_none().then_some(Goal::Teach(learner))
+    }
+
+    /// The Bicycle, twice as fast as walking: the Fan Club chairman's
+    /// voucher in Vermilion, traded at Cerulean's bike shop across its
+    /// counter.
+    fn bicycle(&self, gb: &mut GameBoy) -> Option<Goal> {
+        let r = self.ram;
+        if has_item(gb, r, field::BICYCLE) {
+            return None;
+        }
+        Some(if has_item(gb, r, BIKE_VOUCHER) {
+            Goal::Press((BIKE_SHOP, 6, 4), UP)
+        } else {
+            Goal::Talk((FAN_CLUB, 3, 1))
+        })
     }
 
     /// The Poké Flute, to wake the Snorlax on Route 12: the Silph Scope
@@ -514,6 +542,15 @@ impl Story {
         }
         self.doors(gb, nav);
         nav.saffron = self.saffron_open(gb);
+        // On the Bicycle wherever it can be ridden: outdoors.
+        let r = self.ram;
+        if gb.peek(r.tileset) == OVERWORLD
+            && !field::riding(gb, r)
+            && has_item(gb, r, field::BICYCLE)
+        {
+            self.errand = Some(Kind::Use(field::BICYCLE));
+            return Some(0);
+        }
         match goal {
             Goal::Map(m) => nav.toward(gb, &move |_, s| s.0 == m),
             Goal::Press(at, dir) => Self::talk(gb, nav, keys, &move |_, s| s == at, &move |_| dir),

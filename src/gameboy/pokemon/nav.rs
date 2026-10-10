@@ -10,7 +10,7 @@ use mizu_core::GameBoy;
 
 use super::super::carts::Revision;
 use super::super::kanto::{self, Kanto};
-use super::super::pilot::{A, DOWN, LEFT, RIGHT, UP};
+use super::super::pilot::{A, B, DOWN, LEFT, RIGHT, UP};
 use super::grid::{is_tree, Bfs, Grid, Rules, Side, WALL};
 use super::{screen, Ram};
 
@@ -740,7 +740,8 @@ impl Nav {
         }
         let i = floors.iter().position(|f| f.0 == to)?;
         self.floor = Some((i as u8, to));
-        Some(0)
+        // Not 0, which callers take for "arrived": B does nothing here.
+        Some(B)
     }
 
     /// A tree on this square that has not been cut since the player came.
