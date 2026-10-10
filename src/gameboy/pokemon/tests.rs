@@ -8,7 +8,6 @@ use std::time::Instant;
 use mizu_core::{GameBoy, GameBoyConfig};
 
 use super::super::carts::{load, Pilot, Revision};
-use super::super::kanto::Kanto;
 use super::super::pilot::{A, B, DOWN, LEFT, RIGHT, START, UP};
 use super::intro::{Intro, DOOR, PALLET, STEPS};
 use super::nav::Nav;
@@ -53,9 +52,8 @@ const MILESTONES: &[&str] = &[
 fn reached(gb: &mut GameBoy, r: Ram, seen_maps: &mut [bool; 256]) -> Vec<bool> {
     let map = gb.peek(r.cur_map);
     seen_maps[map as usize] = true;
-    let badges = gb.peek(r.at(0xD356));
-    let n = gb.peek(r.at(0xD31D)).min(20);
-    let parcel = (0..n).any(|i| gb.peek(r.at(0xD31E) + 2 * u16::from(i)) == 0x46);
+    let badges = gb.peek(r.at(story::BADGES));
+    let parcel = story::has_item(gb, r, story::OAKS_PARCEL);
     let dex = story::event(gb, r, story::EVENT_GOT_POKEDEX);
     let mut out = vec![
         gb.peek(r.party_count) > 0,
@@ -95,10 +93,12 @@ fn pokebot_bench() {
         text_ms: 200,
         starter,
     };
+    let r = Ram::of(rev);
+    let save_frame: Option<u64> = env("POKEBOT_SAVE_FRAME", "").parse().ok();
     let mut bot = Bot::new(rev, seed, knobs);
     eprintln!("starter {:?}", bot.starter());
     let mut seen_maps = [false; 256];
-    let mut done = reached(&mut gb, Ram::of(rev), &mut seen_maps);
+    let mut done = reached(&mut gb, r, &mut seen_maps);
     let frames = (hours * 3600.0 * FPS) as u64;
     let t0 = Instant::now();
     let trace = env("POKEBOT_TRACE", "") == "1";
@@ -114,30 +114,24 @@ fn pokebot_bench() {
         if keytrace > f && b != 0 {
             eprintln!(
                 "{f} keys {b:02x} font {:02x} battle {} at {},{} map {}",
-                gb.peek(0xCFC4),
-                gb.peek(0xD057),
-                gb.peek(0xD362),
-                gb.peek(0xD361),
-                gb.peek(0xD35E)
+                gb.peek(r.font_loaded),
+                gb.peek(r.in_battle),
+                gb.peek(r.x),
+                gb.peek(r.y),
+                gb.peek(r.cur_map)
             );
         }
         gb.set_buttons(b);
         gb.clock_for_frame().unwrap();
         if !save_at.is_empty()
-            && save_at
-                == format!(
-                    "{},{},{}",
-                    gb.peek(0xD35E),
-                    gb.peek(0xD362),
-                    gb.peek(0xD361)
-                )
+            && save_at == format!("{},{},{}", gb.peek(r.cur_map), gb.peek(r.x), gb.peek(r.y))
         {
             gb.save_state(std::fs::File::create(format!("{dir}/at.state")).unwrap())
                 .unwrap();
             eprintln!("saved at {save_at} frame {f}");
             save_at.clear();
         }
-        if env("POKEBOT_SAVE_FRAME", "x") == f.to_string() {
+        if save_frame == Some(f) {
             gb.save_state(std::fs::File::create(format!("{dir}/frame.state")).unwrap())
                 .unwrap();
         }
@@ -158,7 +152,7 @@ fn pokebot_bench() {
         if f % 60 != 0 {
             continue;
         }
-        let now = reached(&mut gb, Ram::of(rev), &mut seen_maps);
+        let now = reached(&mut gb, r, &mut seen_maps);
         let mins = f as f64 / FPS / 60.0;
         for (i, (&n, d)) in now.iter().zip(done.iter_mut()).enumerate() {
             if n && !*d {
@@ -240,7 +234,7 @@ fn pokebot_explore() {
 #[ignore = "a viewer, run by hand"]
 fn pokebot_map() {
     let Some((rom, rev)) = rom() else { return };
-    let mut nav = Nav::new(Kanto::new(rev), Ram::of(rev));
+    let mut nav = Nav::new(rev);
     let map: u8 = env("POKEBOT_MAP", "0").parse().unwrap();
     let g = nav.grid(&rom, map).unwrap();
     eprintln!(

@@ -5,7 +5,8 @@
 
 use mizu_core::GameBoy;
 
-use super::super::pilot::{A, B, DOWN, LEFT, RIGHT, UP};
+use super::super::pilot::{A, B, LEFT, RIGHT};
+use super::super::ram::word;
 use super::input::{Keys, GAP};
 use super::{screen, Ram};
 
@@ -18,8 +19,7 @@ const ATTACK: u16 = 17;
 const DEFENSE: u16 = 19;
 const SPECIAL: u16 = 23;
 const PP: u16 = 25;
-/// `wPartyMons`, `party_struct`: moves at the same offset, PP further on.
-const PARTY_MONS: u16 = 0xD16B;
+/// `party_struct`'s moves sit at the battle struct's offset, its PP further on.
 const PARTY_PP: u16 = 0x1D;
 /// The slot Disable stopped, 1-based, in the high nibble.
 const PLAYER_DISABLED_MOVE: u16 = 0xD06D;
@@ -43,6 +43,8 @@ pub struct Battle {
     chart: Vec<(u8, u8, u8)>,
     /// ROM offset of the moves table, 6 bytes per move from move 1.
     moves: Option<usize>,
+    /// The ROM has been searched, found or not: a miss is not searched again.
+    learned: bool,
 }
 
 impl Battle {
@@ -51,13 +53,15 @@ impl Battle {
             ram,
             chart: Vec::new(),
             moves: None,
+            learned: false,
         }
     }
 
     fn learn(&mut self, rom: &[u8]) {
-        if self.moves.is_some() {
+        if self.learned {
             return;
         }
+        self.learned = true;
         self.moves = rom.windows(MOVE_TABLE.len()).position(|w| w == MOVE_TABLE);
         if let Some(at) = rom.windows(TYPE_CHART.len()).position(|w| w == TYPE_CHART) {
             self.chart = rom[at..]
@@ -93,7 +97,7 @@ impl Battle {
         if power == 0 {
             return 0;
         }
-        let w = |gb: &mut GameBoy, a: u16| u32::from(gb.peek(a)) << 8 | u32::from(gb.peek(a + 1));
+        let w = |gb: &mut GameBoy, a: u16| u32::from(word(gb, a));
         let (atk, def) = if ty >= FIRST_SPECIAL_TYPE {
             (w(gb, from + SPECIAL), w(gb, to + SPECIAL))
         } else {
@@ -104,9 +108,7 @@ impl Battle {
         if t2 != t1 {
             eff = eff * self.effect(ty, t2) / 10;
         }
-        let mine = [gb.peek(from + TYPE1), gb.peek(from + TYPE1 + 1)];
-        let stab = if mine.contains(&ty) { 3 } else { 2 };
-        power * eff * stab * acc * atk.max(1) / def.max(1) / 8
+        power * eff * stab(gb, from, ty) * acc * atk.max(1) / def.max(1) / 8
     }
 
     /// The move slot to use: best expected damage among moves with PP.
@@ -141,12 +143,7 @@ impl Battle {
             .min_by_key(|&slot| {
                 let id = gb.peek(me + MOVES + slot);
                 let (power, ty, acc) = self.move_data(gb.rom(), id);
-                let stab = if [gb.peek(me + TYPE1), gb.peek(me + TYPE1 + 1)].contains(&ty) {
-                    3
-                } else {
-                    2
-                };
-                power * stab * acc
+                power * stab(gb, me, ty) * acc
             })
             .unwrap_or(0) as u8
     }
@@ -154,7 +151,7 @@ impl Battle {
     /// Whether the party's lead has a damaging move with PP left.
     pub fn can_attack(&mut self, gb: &mut GameBoy) -> bool {
         self.learn(gb.rom());
-        let p = self.ram.at(PARTY_MONS);
+        let p = self.ram.party_mons;
         (0..4u16).any(|slot| {
             let id = gb.peek(p + MOVES + slot);
             id != 0
@@ -177,20 +174,10 @@ impl Battle {
             // lead can hurt it.
             let run = wild && (!grind || damage == 0);
             let (want_x, want_item) = if run { (15, 1) } else { (9, 0) };
-            let key = if m.x != want_x {
-                if m.x < want_x {
-                    RIGHT
-                } else {
-                    LEFT
-                }
-            } else if m.item != want_item {
-                if m.item < want_item {
-                    DOWN
-                } else {
-                    UP
-                }
-            } else {
-                A
+            let key = match m.x.cmp(&want_x) {
+                std::cmp::Ordering::Less => RIGHT,
+                std::cmp::Ordering::Greater => LEFT,
+                std::cmp::Ordering::Equal => screen::toward(m.item, want_item),
             };
             return keys.tap(key, GAP);
         }
@@ -199,17 +186,11 @@ impl Battle {
         // TYPE box, so it is known by where its cursor sits.
         let in_list = cx == 5 && (MOVE_ROW..MOVE_ROW + 4).contains(&cy);
         if in_list && gb.peek(MOVE_MENU_TYPE) != 0 {
-            return keys.tap(screen::toward(m, self.worst_move(gb)), GAP);
+            return keys.tap(screen::toward(m.item, self.worst_move(gb)), GAP);
         }
         if in_list {
             let (slot, _) = self.best_move(gb);
-            let at = cy.saturating_sub(MOVE_ROW);
-            let key = match at.cmp(&slot) {
-                std::cmp::Ordering::Less => DOWN,
-                std::cmp::Ordering::Greater => UP,
-                std::cmp::Ordering::Equal => A,
-            };
-            return keys.tap(key, GAP);
+            return keys.tap(screen::toward(cy - MOVE_ROW, slot), GAP);
         }
         if screen::shows(gb, b"YES") {
             // Keep the lead in, never nickname; learn every new move (the
@@ -218,12 +199,21 @@ impl Battle {
             return keys.tap(if no { B } else { A }, GAP);
         }
         if screen::shows(gb, b"forgotten") {
-            return keys.tap(screen::toward(m, self.worst_move(gb)), GAP);
+            return keys.tap(screen::toward(m.item, self.worst_move(gb)), GAP);
         }
         // The bag, the party screen or anything else it did not open.
         if text {
             return keys.tap(B, GAP);
         }
         0
+    }
+}
+
+/// The same-type bonus, in halves: a move of one of the attacker's types.
+fn stab(gb: &mut GameBoy, mon: u16, ty: u8) -> u32 {
+    if [gb.peek(mon + TYPE1), gb.peek(mon + TYPE1 + 1)].contains(&ty) {
+        3
+    } else {
+        2
     }
 }

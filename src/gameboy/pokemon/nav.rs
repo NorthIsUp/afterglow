@@ -8,6 +8,7 @@ use std::collections::{BinaryHeap, HashMap};
 
 use mizu_core::GameBoy;
 
+use super::super::carts::Revision;
 use super::super::kanto::{self, Kanto};
 use super::super::pilot::{DOWN, LEFT, RIGHT, UP};
 use super::Ram;
@@ -39,11 +40,13 @@ const OVERWORLD: u8 = 0;
 const STEP: u32 = 24;
 /// `wJoyIgnore`: buttons the game is ignoring, below `wFontLoaded` so the
 /// same address in every revision.
-const JOY_IGNORE: u16 = 0xCD6B;
+pub const JOY_IGNORE: u16 = 0xCD6B;
 /// Extra steps worth walking around people rather than waiting on them.
 const DETOUR: u32 = 6;
 /// Bumps into a side of a square before it counts as a wall.
 const WALL: u16 = 2;
+/// Map entrances a route search expands before it gives up.
+const ROUTE_LIMIT: u32 = 4000;
 
 /// One map, as the planner sees it.
 pub struct Grid {
@@ -90,15 +93,7 @@ impl Rules {
         };
         let ledges = table(&[0x00, 0x2C, 0x37, 0x80], 4)
             .into_iter()
-            .map(|c| {
-                let dir = match c[0] {
-                    0x00 => DOWN,
-                    0x04 => UP,
-                    0x08 => LEFT,
-                    _ => RIGHT,
-                };
-                (dir, c[1], c[2])
-            })
+            .map(|c| (facing(c[0]), c[1], c[2]))
             .collect();
         let pairs = table(&[0x11, 0x20, 0x05, 0x11, 0x41, 0x05], 3)
             .into_iter()
@@ -124,6 +119,16 @@ impl Rules {
 
 pub const DIRS: [u8; 4] = [UP, DOWN, LEFT, RIGHT];
 
+/// A direction as the game stores a facing (`SPRITE_FACING_*`).
+pub fn facing(b: u8) -> u8 {
+    match b {
+        0x04 => UP,
+        0x08 => LEFT,
+        0x0C => RIGHT,
+        _ => DOWN,
+    }
+}
+
 pub fn delta(dir: u8) -> (isize, isize) {
     match dir {
         UP => (0, -1),
@@ -138,6 +143,7 @@ pub struct Nav {
     ram: Ram,
     grids: HashMap<u8, Grid>,
     rules: Rules,
+    learned: bool,
     /// Squares taken out of their grids by `trap`.
     traps: Vec<Square>,
     /// The map each indoor map's "last map" exits lead to.
@@ -149,42 +155,123 @@ pub struct Nav {
     /// The live route: the square to reach on this map, and the button
     /// that leaves the map from it (`None` for the target itself).
     leg: Option<(Square, Option<u8>)>,
-    /// Scratch for the live search: first step toward each square.
-    first: Vec<u8>,
-    dist: Vec<u32>,
-    queue: Vec<(usize, usize)>,
+    /// Scratch for the live search.
+    bfs: Bfs,
     /// Squares a person stands on, this map.
     people: Vec<(usize, usize)>,
-    pub skip_sprite: Option<u16>,
+    /// Yellow's Pikachu walks behind the player in this sprite slot.
+    skip_sprite: Option<u16>,
+}
+
+/// One breadth-first search's result, kept to reuse its buffers: the steps
+/// to each square of a grid and the first direction toward it.
+#[derive(Default)]
+struct Bfs {
+    dist: Vec<u32>,
+    first: Vec<u8>,
+    queue: Vec<(usize, usize)>,
+}
+
+impl Bfs {
+    /// Squares reachable from `(x, y)` on a grid and the steps to each,
+    /// ledges hopped one way, `blocked` squares and learned walls avoided;
+    /// `first` holds the first direction toward each.
+    fn run(
+        &mut self,
+        g: &Grid,
+        rules: &Rules,
+        walls: &HashMap<Side, u16>,
+        map: u8,
+        from: (usize, usize),
+        blocked: &[(usize, usize)],
+    ) {
+        let Self { dist, first, queue } = self;
+        dist.clear();
+        dist.resize(g.w * g.h, u32::MAX);
+        first.clear();
+        first.resize(g.w * g.h, 0);
+        queue.clear();
+        if from.0 >= g.w || from.1 >= g.h {
+            return;
+        }
+        dist[from.1 * g.w + from.0] = 0;
+        queue.push(from);
+        let mut head = 0;
+        while head < queue.len() {
+            let (x, y) = queue[head];
+            head += 1;
+            let here = y * g.w + x;
+            for dir in DIRS {
+                if walls
+                    .get(&Side((map, x as u8, y as u8), dir))
+                    .copied()
+                    .unwrap_or(0)
+                    > WALL
+                {
+                    continue;
+                }
+                let (dx, dy) = delta(dir);
+                let (nx, ny) = (x.wrapping_add_signed(dx), y.wrapping_add_signed(dy));
+                if nx >= g.w || ny >= g.h {
+                    continue;
+                }
+                let mut to = (nx, ny);
+                let mut cost = 1;
+                let next = g.tile[ny * g.w + nx];
+                if rules.crossing(g, g.tile[here], next) {
+                    continue;
+                }
+                if !g.walk[ny * g.w + nx] {
+                    let ledge = rules.ledge(g, dir, g.tile[here], next);
+                    let (jx, jy) = (nx.wrapping_add_signed(dx), ny.wrapping_add_signed(dy));
+                    if !ledge || !g.walkable(jx, jy) {
+                        continue;
+                    }
+                    to = (jx, jy);
+                    cost = 2;
+                }
+                if blocked.contains(&to) {
+                    continue;
+                }
+                let i = to.1 * g.w + to.0;
+                if dist[i] != u32::MAX {
+                    continue;
+                }
+                dist[i] = dist[here] + cost;
+                first[i] = if (x, y) == from { dir } else { first[here] };
+                queue.push(to);
+            }
+        }
+    }
 }
 
 impl Nav {
-    pub fn new(kanto: Kanto, ram: Ram) -> Self {
+    pub fn new(rev: Revision) -> Self {
         Self {
-            kanto,
-            ram,
+            kanto: Kanto::new(rev),
+            ram: Ram::of(rev),
             grids: HashMap::new(),
             rules: Rules::default(),
+            learned: false,
             traps: Vec::new(),
             outside: HashMap::new(),
             walls: HashMap::new(),
             walking: None,
             last_dir: DOWN,
             leg: None,
-            first: Vec::new(),
-            dist: Vec::new(),
-            queue: Vec::new(),
+            bfs: Bfs::default(),
             people: Vec::new(),
-            skip_sprite: None,
+            skip_sprite: (rev == Revision::Yellow).then_some(15),
         }
     }
 
     /// Learns the ledge table and which outdoor map every building opens
-    /// onto, once.
+    /// onto, once, found or not.
     fn learn(&mut self, rom: &[u8]) {
-        if !self.rules.ledges.is_empty() {
+        if self.learned {
             return;
         }
+        self.learned = true;
         self.rules = Rules::of(rom);
         for m in 0..=0xF7u8 {
             let Some(h) = self.kanto.header(rom, m) else {
@@ -262,79 +349,6 @@ impl Nav {
         Some((to, x, y))
     }
 
-    /// Squares reachable from `(x, y)` on a grid and the steps to each,
-    /// ledges hopped one way, `blocked` squares and learned walls avoided;
-    /// `first` gets the first direction toward each.
-    #[allow(clippy::too_many_arguments)]
-    fn search(
-        g: &Grid,
-        rules: &Rules,
-        walls: &HashMap<Side, u16>,
-        map: u8,
-        from: (usize, usize),
-        blocked: &[(usize, usize)],
-        dist: &mut Vec<u32>,
-        first: &mut Vec<u8>,
-        queue: &mut Vec<(usize, usize)>,
-    ) {
-        dist.clear();
-        dist.resize(g.w * g.h, u32::MAX);
-        first.clear();
-        first.resize(g.w * g.h, 0);
-        queue.clear();
-        if from.0 >= g.w || from.1 >= g.h {
-            return;
-        }
-        dist[from.1 * g.w + from.0] = 0;
-        queue.push(from);
-        let mut head = 0;
-        while head < queue.len() {
-            let (x, y) = queue[head];
-            head += 1;
-            let here = y * g.w + x;
-            for dir in DIRS {
-                if walls
-                    .get(&Side((map, x as u8, y as u8), dir))
-                    .copied()
-                    .unwrap_or(0)
-                    > WALL
-                {
-                    continue;
-                }
-                let (dx, dy) = delta(dir);
-                let (nx, ny) = (x.wrapping_add_signed(dx), y.wrapping_add_signed(dy));
-                if nx >= g.w || ny >= g.h {
-                    continue;
-                }
-                let mut to = (nx, ny);
-                let mut cost = 1;
-                let next = g.tile[ny * g.w + nx];
-                if rules.crossing(g, g.tile[here], next) {
-                    continue;
-                }
-                if !g.walk[ny * g.w + nx] {
-                    let ledge = rules.ledge(g, dir, g.tile[here], next);
-                    let (jx, jy) = (nx.wrapping_add_signed(dx), ny.wrapping_add_signed(dy));
-                    if !ledge || !g.walkable(jx, jy) {
-                        continue;
-                    }
-                    to = (jx, jy);
-                    cost = 2;
-                }
-                if blocked.contains(&to) {
-                    continue;
-                }
-                let i = to.1 * g.w + to.0;
-                if dist[i] != u32::MAX {
-                    continue;
-                }
-                dist[i] = dist[here] + cost;
-                first[i] = if (x, y) == from { dir } else { first[here] };
-                queue.push(to);
-            }
-        }
-    }
-
     /// The exits a square can reach: the warp or edge square, the button
     /// that leaves from it, where it lands, and the steps.
     fn exits(&mut self, rom: &[u8], from: Square, dist: &[u32]) -> Vec<(Square, u8, Square, u32)> {
@@ -409,7 +423,7 @@ impl Nav {
     /// The cheapest route from `from` to any square `goal` accepts, as the
     /// square to reach on `from`'s map and the button that leaves the map
     /// there (`None`: the goal is on this map). Searched over map
-    /// entrances; `limit` caps the entrances expanded.
+    /// entrances, at most `ROUTE_LIMIT` of them.
     pub fn route(
         &mut self,
         rom: &[u8],
@@ -422,14 +436,14 @@ impl Nav {
         let mut via: HashMap<Square, (Square, Option<u8>)> = HashMap::new();
         heap.push(Reverse((0u32, from)));
         best.insert(from, 0);
-        let (mut dist, mut first, mut queue) = (Vec::new(), Vec::new(), Vec::new());
+        let mut bfs = Bfs::default();
         let mut expanded = 0;
         while let Some(Reverse((cost, node))) = heap.pop() {
             if best.get(&node).is_some_and(|&c| c < cost) {
                 continue;
             }
             expanded += 1;
-            if expanded > 4000 {
+            if expanded > ROUTE_LIMIT {
                 return None;
             }
             {
@@ -439,23 +453,20 @@ impl Nav {
                 // are stale.
                 let none = HashMap::new();
                 let walls = if node == from { &self.walls } else { &none };
-                Self::search(
+                bfs.run(
                     g,
                     &self.rules,
                     walls,
                     node.0,
                     (node.1.into(), node.2.into()),
                     &[],
-                    &mut dist,
-                    &mut first,
-                    &mut queue,
                 );
                 // The goal on this map: done if it is the cheapest thing
                 // left (the heap is ordered, and no exit can make it
                 // cheaper than walking to it here).
                 let w = g.w;
                 let mut near: Option<(u32, Square)> = None;
-                for (i, &d) in dist.iter().enumerate() {
+                for (i, &d) in bfs.dist.iter().enumerate() {
                     if d == u32::MAX {
                         continue;
                     }
@@ -468,7 +479,7 @@ impl Nav {
                     return Some(if node == from { (s, None) } else { via[&node] });
                 }
             }
-            for (sq, dir, land, d) in self.exits(rom, node, &dist) {
+            for (sq, dir, land, d) in self.exits(rom, node, &bfs.dist) {
                 let c = cost + d + 2;
                 if best.get(&land).is_none_or(|&b| c < b) {
                     best.insert(land, c);
@@ -654,18 +665,15 @@ impl Nav {
         let mut steps = [(u32::MAX, 0u8); 2];
         for (k, people) in [true, false].into_iter().enumerate() {
             let blocked: &[(usize, usize)] = if people { &self.people } else { &[] };
-            Self::search(
+            self.bfs.run(
                 g,
                 &self.rules,
                 &self.walls,
                 here.0,
                 (here.1.into(), here.2.into()),
                 blocked,
-                &mut self.dist,
-                &mut self.first,
-                &mut self.queue,
             );
-            if let (Some(&d), Some(&f)) = (self.dist.get(i), self.first.get(i)) {
+            if let (Some(&d), Some(&f)) = (self.bfs.dist.get(i), self.bfs.first.get(i)) {
                 steps[k] = (d, f);
             }
         }

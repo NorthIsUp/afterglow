@@ -7,19 +7,19 @@ use mizu_core::GameBoy;
 
 use super::super::carts::Revision;
 use super::super::pilot::{A, DOWN, LEFT, RIGHT, UP};
+use super::super::ram::word;
 use super::input::{Keys, GAP};
-use super::nav::{Grid, Nav, Square};
+use super::nav::{self, Grid, Nav, Square};
 use super::Ram;
 
 const EVENT_FLAGS: u16 = 0xD747;
 pub const EVENT_GOT_POKEDEX: u16 = 0x25;
 const BAG_COUNT: u16 = 0xD31D;
 const BAG: u16 = 0xD31E;
-const BADGES: u16 = 0xD356;
-const PARTY_MONS: u16 = 0xD16B;
+pub const BADGES: u16 = 0xD356;
 /// `wSpritePlayerStateData1FacingDirection`.
 const FACING: u16 = 0xC109;
-const OAKS_PARCEL: u8 = 0x46;
+pub const OAKS_PARCEL: u8 = 0x46;
 const DOME_FOSSIL: u8 = 0x29;
 const HELIX_FOSSIL: u8 = 0x2A;
 const MT_MOON_B2F: u8 = 0x3D;
@@ -91,16 +91,15 @@ pub struct Lead {
 }
 
 pub fn lead(gb: &mut GameBoy, ram: Ram) -> Lead {
-    let p = ram.at(PARTY_MONS);
-    let w = |gb: &mut GameBoy, a: u16| u16::from(gb.peek(a)) << 8 | u16::from(gb.peek(a + 1));
+    let p = ram.party_mons;
     Lead {
-        hp: w(gb, p + 1),
-        max: w(gb, p + 0x22),
+        hp: word(gb, p + 1),
+        max: word(gb, p + 0x22),
         level: gb.peek(p + 0x21),
     }
 }
 
-fn has_item(gb: &mut GameBoy, ram: Ram, item: u8) -> bool {
+pub fn has_item(gb: &mut GameBoy, ram: Ram, item: u8) -> bool {
     let n = gb.peek(ram.at(BAG_COUNT)).min(20);
     (0..n).any(|i| gb.peek(ram.at(BAG) + 2 * u16::from(i)) == item)
 }
@@ -252,12 +251,7 @@ impl Story {
         match nav.toward(gb, at)? {
             0 => {
                 let face = face(nav.here(gb));
-                let facing = match gb.peek(FACING) {
-                    0x04 => UP,
-                    0x08 => LEFT,
-                    0x0C => RIGHT,
-                    _ => DOWN,
-                };
+                let facing = nav::facing(gb.peek(FACING));
                 Some(keys.tap(if facing == face { A } else { face }, GAP * 3))
             }
             b => Some(b),
@@ -292,14 +286,5 @@ impl Story {
 
 /// The direction from `s` to the square beside it, `to`.
 fn toward(s: Square, to: Square) -> Option<u8> {
-    match (
-        i16::from(to.1) - i16::from(s.1),
-        i16::from(to.2) - i16::from(s.2),
-    ) {
-        (0, -1) => Some(UP),
-        (0, 1) => Some(DOWN),
-        (-1, 0) => Some(LEFT),
-        (1, 0) => Some(RIGHT),
-        _ => None,
-    }
+    nav::DIRS.into_iter().find(|&d| Nav::ahead(s, d) == to)
 }
