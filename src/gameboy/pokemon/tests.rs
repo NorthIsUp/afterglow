@@ -39,6 +39,9 @@ const MILESTONES: &[&str] = &[
     "mt. moon",
     "cerulean city",
     "cascade badge",
+    "s.s. ticket",
+    "hm01",
+    "cut learned",
     "thunder badge",
     "rainbow badge",
     "soul badge",
@@ -63,8 +66,12 @@ fn reached(gb: &mut GameBoy, r: Ram, seen_maps: &mut [bool; 256]) -> Vec<bool> {
         badges & 1 != 0,
         seen_maps[0x3B],
         seen_maps[0x03],
+        badges & 2 != 0,
     ];
-    out.extend((1..8).map(|b| badges & 1 << b != 0));
+    out.push(story::event(gb, r, story::GOT_SS_TICKET));
+    out.push(story::event(gb, r, story::GOT_HM01));
+    out.push(story::cutter(gb, r).is_some());
+    out.extend((2..8).map(|b| badges & 1 << b != 0));
     out.push(seen_maps[0x76]);
     out
 }
@@ -180,8 +187,8 @@ fn pokebot_bench() {
 }
 
 /// Not a check: taps `POKEBOT_KEYS` (one letter per tap: a b s u d l r, `.`
-/// waits) every 20 frames from power-on and dumps the screen and menu
-/// after each.
+/// waits) every 20 frames from power-on and dumps the screen, the menu and
+/// the `POKEBOT_PEEK` addresses (hex, comma-separated) after each.
 #[test]
 #[ignore = "an explorer, run by hand"]
 fn pokebot_explore() {
@@ -191,6 +198,10 @@ fn pokebot_explore() {
     if !load.is_empty() {
         gb.load_state(std::fs::File::open(&load).unwrap()).unwrap();
     }
+    let peek: Vec<u16> = env("POKEBOT_PEEK", "")
+        .split(',')
+        .filter_map(|s| u16::from_str_radix(s, 16).ok())
+        .collect();
     let keys = env("POKEBOT_KEYS", "");
     let every: u64 = env("POKEBOT_EVERY", "20").parse().unwrap();
     for (i, k) in keys.bytes().enumerate() {
@@ -223,6 +234,12 @@ fn pokebot_explore() {
                 gb.peek(0xD355),
                 screen::dump(&mut gb)
             );
+            if !peek.is_empty() {
+                eprintln!(
+                    "peek {:02x?}",
+                    peek.iter().map(|&a| gb.peek(a)).collect::<Vec<_>>()
+                );
+            }
         }
     }
 }
@@ -235,6 +252,7 @@ fn pokebot_explore() {
 fn pokebot_map() {
     let Some((rom, rev)) = rom() else { return };
     let mut nav = Nav::new(rev);
+    nav.set_cut(env("POKEBOT_CUT", "") == "1");
     let map: u8 = env("POKEBOT_MAP", "0").parse().unwrap();
     let g = nav.grid(&rom, map).unwrap();
     eprintln!(
@@ -367,5 +385,31 @@ fn pokemon_intro_passes_every_step() {
             "{}: 10/10 passed every step; frames to the door {frames:?}",
             cart.name
         );
+    }
+}
+
+/// The trash cans where pokered's `hidden_events_for VERMILION_GYM` puts
+/// them, in its order.
+#[test]
+fn trash_cans_match_pokered() {
+    let pret = [
+        (1, 7),
+        (1, 9),
+        (1, 11),
+        (3, 7),
+        (3, 9),
+        (3, 11),
+        (5, 7),
+        (5, 9),
+        (5, 11),
+        (7, 7),
+        (7, 9),
+        (7, 11),
+        (9, 7),
+        (9, 9),
+        (9, 11),
+    ];
+    for (i, &at) in pret.iter().enumerate() {
+        assert_eq!(story::trash_can(i as u8), at, "can {i}");
     }
 }

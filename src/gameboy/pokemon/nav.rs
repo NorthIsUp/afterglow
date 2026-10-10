@@ -41,12 +41,23 @@ const STEP: u32 = 24;
 /// `wJoyIgnore`: buttons the game is ignoring, below `wFontLoaded` so the
 /// same address in every revision.
 pub const JOY_IGNORE: u16 = 0xCD6B;
+/// `wSpritePlayerStateData1FacingDirection`.
+pub const FACING: u16 = 0xC109;
 /// Extra steps worth walking around people rather than waiting on them.
 const DETOUR: u32 = 6;
 /// Bumps into a side of a square before it counts as a wall.
 const WALL: u16 = 2;
 /// Map entrances a route search expands before it gives up.
 const ROUTE_LIMIT: u32 = 4000;
+/// Saffron's gatehouses: a thirsty guard turns the player back, and the
+/// bot never brings him a drink.
+const CLOSED: [u8; 4] = [0x46, 0x49, 0x4C, 0x4F];
+/// The Snorlax asleep on Routes 12 and 16: no Poké Flute, no way past.
+const SNORLAX: [Square; 2] = [(0x17, 10, 62), (0x1B, 26, 10)];
+/// The tiles `UsedCut` cuts: a tree outdoors, and a gym's.
+const TREE: u8 = 0x3D;
+const GYM: u8 = 7;
+const GYM_TREE: u8 = 0x50;
 
 /// One map, as the planner sees it.
 pub struct Grid {
@@ -78,6 +89,8 @@ impl Grid {
 struct Rules {
     ledges: Vec<(u8, u8, u8)>,
     pairs: Vec<(u8, u8, u8)>,
+    /// The party can cut trees, so they are a way through.
+    cut: bool,
 }
 
 impl Rules {
@@ -99,7 +112,11 @@ impl Rules {
             .into_iter()
             .map(|c| (c[0], c[1], c[2]))
             .collect();
-        Self { ledges, pairs }
+        Self {
+            ledges,
+            pairs,
+            cut: false,
+        }
     }
 
     fn ledge(&self, g: &Grid, dir: u8, on: u8, next: u8) -> bool {
@@ -108,6 +125,10 @@ impl Rules {
                 .ledges
                 .iter()
                 .any(|&(d, o, l)| d == dir && o == on && l == next)
+    }
+
+    fn tree(&self, g: &Grid, tile: u8) -> bool {
+        self.cut && is_tree(g, tile)
     }
 
     fn crossing(&self, g: &Grid, a: u8, b: u8) -> bool {
@@ -161,6 +182,11 @@ pub struct Nav {
     people: Vec<(usize, usize)>,
     /// Yellow's Pikachu walks behind the player in this sprite slot.
     skip_sprite: Option<u16>,
+    /// Trees cut on the map the player is on: they grow back when it
+    /// leaves.
+    cut: Vec<Square>,
+    /// A tree in the way, faced: the bot should cut it.
+    pub tree: Option<Square>,
 }
 
 /// One breadth-first search's result, kept to reuse its buffers: the steps
@@ -221,7 +247,7 @@ impl Bfs {
                 if rules.crossing(g, g.tile[here], next) {
                     continue;
                 }
-                if !g.walk[ny * g.w + nx] {
+                if !g.walk[ny * g.w + nx] && !rules.tree(g, next) {
                     let ledge = rules.ledge(g, dir, g.tile[here], next);
                     let (jx, jy) = (nx.wrapping_add_signed(dx), ny.wrapping_add_signed(dy));
                     if !ledge || !g.walkable(jx, jy) {
@@ -262,6 +288,8 @@ impl Nav {
             bfs: Bfs::default(),
             people: Vec::new(),
             skip_sprite: (rev == Revision::Yellow).then_some(15),
+            cut: Vec::new(),
+            tree: None,
         }
     }
 
@@ -272,7 +300,10 @@ impl Nav {
             return;
         }
         self.learned = true;
-        self.rules = Rules::of(rom);
+        self.rules = Rules {
+            cut: self.rules.cut,
+            ..Rules::of(rom)
+        };
         for m in 0..=0xF7u8 {
             let Some(h) = self.kanto.header(rom, m) else {
                 continue;
@@ -330,6 +361,11 @@ impl Nav {
                 *s = true;
             }
         }
+        for &(m, x, y) in &SNORLAX {
+            if m == map {
+                walk[usize::from(y) * w + usize::from(x)] = false;
+            }
+        }
         Some(Grid {
             w,
             h: hh,
@@ -381,6 +417,9 @@ impl Nav {
             if d == u32::MAX {
                 continue;
             }
+            if CLOSED.contains(&to) {
+                continue;
+            }
             if let Some(land) = self.landing(rom, to, id) {
                 out.push(((from.0, x, y), edge_dir(x.into(), y.into()), land, d));
             }
@@ -412,7 +451,11 @@ impl Nav {
                     kanto::WEST => (tw - 1, y as i32 - 2 * off, LEFT),
                     _ => (0, y as i32 - 2 * off, RIGHT),
                 };
-                if (0..tw).contains(&lx) && (0..th).contains(&ly) {
+                // The game tests the square stepped onto in the joined map.
+                if tg.walkable(lx as usize, ly as usize)
+                    && (0..tw).contains(&lx)
+                    && (0..th).contains(&ly)
+                {
                     out.push(((from.0, x as u8, y as u8), dir, (to, lx as u8, ly as u8), d));
                 }
             }
@@ -555,6 +598,34 @@ impl Nav {
         }
     }
 
+    /// Whether trees are a way through: the party knows Cut.
+    pub fn set_cut(&mut self, cut: bool) {
+        if self.rules.cut != cut {
+            self.rules.cut = cut;
+            self.leg = None;
+        }
+    }
+
+    /// Squares a script opens by changing the map's blocks in RAM, which
+    /// the cartridge's copy never shows.
+    pub fn open(&mut self, rom: &[u8], map: u8, squares: &[(u8, u8)]) {
+        if self.grid(rom, map).is_some() {
+            for &(x, y) in squares {
+                self.set_walk((map, x, y), true);
+            }
+        }
+    }
+
+    /// Someone stood on this square of the live map, last time it looked.
+    pub fn person(&self, s: Square) -> bool {
+        self.people.contains(&(s.1.into(), s.2.into()))
+    }
+
+    /// A tree the bot has just cut: walk through it until the map changes.
+    pub fn felled(&mut self, s: Square) {
+        self.cut.push(s);
+    }
+
     pub fn stop(&mut self) {
         self.walking = None;
     }
@@ -605,6 +676,7 @@ impl Nav {
     /// standing on one, `None` when nothing it accepts can be reached.
     pub fn toward(&mut self, gb: &mut GameBoy, goal: &dyn Fn(&Grid, Square) -> bool) -> Option<u8> {
         let here = self.here(gb);
+        self.cut.retain(|s| s.0 == here.0);
         let rom = gb.rom();
         if let Some(g) = self.grid(rom, here.0) {
             if goal(g, here) {
@@ -612,9 +684,26 @@ impl Nav {
                 return Some(0);
             }
         }
+        // A trainer who walked up to battle stays where he stopped: a goal
+        // square with someone on it is no goal.
+        let (w, h) = self.grids.get(&here.0).map_or((0, 0), |g| (g.w, g.h));
+        self.read_people(gb, w, h);
+        let people = std::mem::take(&mut self.people);
+        let free = |g: &Grid, s: Square| {
+            goal(g, s) && (s.0 != here.0 || !people.contains(&(s.1.into(), s.2.into())))
+        };
+        if self.leg.is_some_and(|(t, l)| {
+            l.is_none()
+                && self
+                    .grids
+                    .get(&t.0)
+                    .is_some_and(|g| t.0 == here.0 && !free(g, t))
+        }) {
+            self.leg = None;
+        }
         // Planned once per map: the live search below walks the leg.
         if self.leg.is_none_or(|(t, _)| t.0 != here.0) {
-            self.leg = self.route(gb.rom(), here, goal);
+            self.leg = self.route(gb.rom(), here, &free);
             // Walls learned from a person who has since moved, or a trap
             // in the only corridor, can cut the only way; forget them and
             // look again.
@@ -623,9 +712,10 @@ impl Nav {
                 for s in std::mem::take(&mut self.traps) {
                     self.set_walk(s, true);
                 }
-                self.leg = self.route(gb.rom(), here, goal);
+                self.leg = self.route(gb.rom(), here, &free);
             }
         }
+        self.people = people;
         let (target, leave) = self.leg?;
         if (target.1, target.2) == (here.1, here.2) {
             let Some(leave) = leave else {
@@ -647,7 +737,27 @@ impl Nav {
             self.leg = None;
             return None;
         };
+        let ahead = Self::ahead(here, dir);
+        if self.standing_tree(gb.rom(), ahead) {
+            // Turned to face it first: Cut takes the tile in front. Pushing
+            // into the tree meanwhile is harmless.
+            if facing(gb.peek(FACING)) == dir {
+                self.tree = Some(ahead);
+            }
+            return Some(dir);
+        }
         Some(self.hold(gb, dir))
+    }
+
+    /// A tree on this square that has not been cut since the player came.
+    fn standing_tree(&mut self, rom: &[u8], s: Square) -> bool {
+        if !self.rules.cut || self.cut.contains(&s) {
+            return false;
+        }
+        self.grid(rom, s.0).is_some_and(|g| {
+            let i = usize::from(s.2) * g.w + usize::from(s.1);
+            g.walk.get(i) == Some(&false) && g.tile.get(i).is_some_and(|&t| is_tree(g, t))
+        })
     }
 
     /// The first step toward `to` on the live map, people avoided; failing
@@ -694,6 +804,10 @@ impl Nav {
             s.2.wrapping_add_signed(dy as i8),
         )
     }
+}
+
+fn is_tree(g: &Grid, tile: u8) -> bool {
+    (g.tileset == OVERWORLD && tile == TREE) || (g.tileset == GYM && tile == GYM_TREE)
 }
 
 /// A map's warps from its object data: square, destination warp index,

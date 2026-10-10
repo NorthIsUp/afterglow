@@ -8,17 +8,22 @@ use mizu_core::GameBoy;
 use super::super::carts::Revision;
 use super::super::pilot::{A, DOWN, LEFT, RIGHT, UP};
 use super::super::ram::word;
+use super::field::{self, Kind};
 use super::input::{Keys, GAP};
 use super::nav::{self, Grid, Nav, Square};
 use super::Ram;
 
 const EVENT_FLAGS: u16 = 0xD747;
 pub const EVENT_GOT_POKEDEX: u16 = 0x25;
-const BAG_COUNT: u16 = 0xD31D;
-const BAG: u16 = 0xD31E;
+const BILL_ASKED: u16 = 0x55E;
+const CELL_SEPARATOR: u16 = 0x55B;
+pub const GOT_SS_TICKET: u16 = 0x55C;
+pub const GOT_HM01: u16 = 0x5E0;
+const FIRST_LOCK: u16 = 0x161;
+const SECOND_LOCK: u16 = 0x160;
+/// `wFirstLockTrashCanIndex`, the second lock's after it.
+const TRASH_CAN: u16 = 0xD743;
 pub const BADGES: u16 = 0xD356;
-/// `wSpritePlayerStateData1FacingDirection`.
-const FACING: u16 = 0xC109;
 pub const OAKS_PARCEL: u8 = 0x46;
 const DOME_FOSSIL: u8 = 0x29;
 const HELIX_FOSSIL: u8 = 0x2A;
@@ -31,7 +36,23 @@ const VIRIDIAN_MART: u8 = 0x2A;
 const VIRIDIAN_FOREST: u8 = 0x33;
 const PEWTER_GYM: u8 = 0x36;
 const CERULEAN_GYM: u8 = 0x41;
+const ROUTE_6: u8 = 0x11;
+const ROUTE_7: u8 = 0x12;
+const ROUTE_24: u8 = 0x23;
+const CERULEAN_MART: u8 = 0x43;
+const BILLS_HOUSE: u8 = 0x58;
+const VERMILION_GYM: u8 = 0x5C;
+const SS_ANNE_CAPTAINS_ROOM: u8 = 0x65;
+const CELADON_GYM: u8 = 0x86;
+/// Vermilion Gym's electric gate, the block the second lock clears.
+const GATE: [(u8, u8); 4] = [(4, 4), (5, 4), (4, 5), (5, 5)];
+/// Species that can learn Cut: the two starters that can, and the two
+/// grass Pokémon on Route 24 in every revision, Oddish and Bellsprout.
+const CUTTERS: [u8; 10] = [0x99, 0x09, 0x9A, 0xB0, 0xB2, 0xB4, 0xB9, 0xBA, 0xBC, 0xBD];
+const CATCH: [u8; 2] = [0xB9, 0xBC];
 const POKECENTER: u8 = 6;
+/// Celadon's hotel: a Pokémon Center's tiles and counter, and no nurse.
+const CELADON_HOTEL: u8 = 0x8C;
 const CAVERN: u8 = 17;
 
 /// Oak's three Poké Balls, Bulbasaur's last as in pokered's
@@ -55,16 +76,16 @@ impl Starter {
         [Self::Bulbasaur, Self::Charmander, Self::Squirtle][n as usize % 3]
     }
 
-    /// The level the lead should reach before Brock and before Misty: a
-    /// starter weak against them grinds longer.
-    fn levels(self, rev: Revision) -> [u8; 2] {
+    /// The level the lead should reach before each gym: Brock, Misty,
+    /// Surge, Erika. A starter weak against one grinds longer.
+    fn levels(self, rev: Revision) -> [u8; 4] {
         if rev == Revision::Yellow {
-            return [16, 18];
+            return [16, 18, 30, 40];
         }
         match self {
-            Self::Bulbasaur => [14, 21],
-            Self::Squirtle => [14, 24],
-            Self::Charmander => [20, 28],
+            Self::Bulbasaur => [14, 21, 26, 32],
+            Self::Squirtle => [14, 24, 30, 40],
+            Self::Charmander => [20, 28, 26, 28],
         }
     }
 }
@@ -77,6 +98,15 @@ pub enum Goal {
     /// Stand next to whoever (or whatever) is on this square, face them
     /// and press A.
     Talk(Square),
+    /// Stand on this square, face this way and press A: something only
+    /// answers from one side, or across a counter.
+    Press(Square, u8),
+    /// Poké Balls from Cerulean's mart.
+    Buy,
+    /// Teach Cut to this party slot.
+    Teach(u8),
+    /// Walk this map's grass with a Poké Ball for anything in `CATCH`.
+    Catch(u8),
     /// A Pokémon Center's nurse, whichever is nearest.
     Heal,
     /// Walk the grass (or a cave's floor) of this map until the lead levels.
@@ -100,8 +130,12 @@ pub fn lead(gb: &mut GameBoy, ram: Ram) -> Lead {
 }
 
 pub fn has_item(gb: &mut GameBoy, ram: Ram, item: u8) -> bool {
-    let n = gb.peek(ram.at(BAG_COUNT)).min(20);
-    (0..n).any(|i| gb.peek(ram.at(BAG) + 2 * u16::from(i)) == item)
+    field::bag_index(gb, ram, item).is_some()
+}
+
+/// The party slot that knows Cut.
+pub fn cutter(gb: &mut GameBoy, ram: Ram) -> Option<u8> {
+    field::slot(gb, ram, |gb, s| field::knows(gb, ram, s, field::CUT))
 }
 
 pub struct Story {
@@ -113,6 +147,8 @@ pub struct Story {
     /// The lead has a damaging move with PP left: kept by the bot, which
     /// knows the moves table.
     pub can_attack: bool,
+    /// An errand the bot should run through the menus.
+    pub errand: Option<Kind>,
 }
 
 impl Story {
@@ -124,6 +160,7 @@ impl Story {
             goal: None,
             pace: 0,
             can_attack: true,
+            errand: None,
         }
     }
 
@@ -131,13 +168,22 @@ impl Story {
         gb.peek(self.ram.at(BADGES))
     }
 
+    /// Species worth a Poké Ball now.
+    pub fn catching(&self) -> &'static [u8] {
+        if matches!(self.goal, Some(Goal::Catch(_))) {
+            &CATCH
+        } else {
+            &[]
+        }
+    }
+
     /// Whether wild battles are worth fighting now: the lead is behind the
     /// level the next gym wants.
     pub fn grinding(&self, gb: &mut GameBoy) -> bool {
         matches!(self.goal, Some(Goal::Grind(_))) || {
             let b = self.badges(gb);
-            let [brock, misty] = self.starter.levels(self.rev);
-            let want = if b & 1 == 0 { brock } else { misty };
+            let levels = self.starter.levels(self.rev);
+            let want = levels[(b.trailing_ones() as usize).min(levels.len() - 1)];
             lead(gb, self.ram).level < want
         }
     }
@@ -179,11 +225,18 @@ impl Story {
                 Goal::Map(VIRIDIAN_MART)
             });
         }
-        let [brock, misty] = self.starter.levels(self.rev);
+        let [brock, misty, surge, erika] = self.starter.levels(self.rev);
         let (want, grind, gym) = if badges & 1 == 0 {
             (brock, VIRIDIAN_FOREST, Goal::Talk((PEWTER_GYM, 4, 1)))
         } else if badges & 2 == 0 {
             (misty, ROUTE_3, Goal::Talk((CERULEAN_GYM, 4, 2)))
+        } else if badges & 4 == 0 {
+            if let Some(g) = self.to_vermilion(gb) {
+                return Some(g);
+            }
+            (surge, ROUTE_6, self.surge(gb))
+        } else if badges & 8 == 0 {
+            (erika, ROUTE_7, Goal::Talk((CELADON_GYM, 4, 3)))
         } else {
             return None;
         };
@@ -200,6 +253,47 @@ impl Story {
         Some(gym)
     }
 
+    /// Cut, the way speedrun routes get it: a Pokémon that can learn it
+    /// (caught on Route 24 if the starter cannot), Bill's S.S. Ticket, and
+    /// HM01 from the S.S. Anne's captain.
+    fn to_vermilion(&self, gb: &mut GameBoy) -> Option<Goal> {
+        let r = self.ram;
+        let Some(learner) =
+            field::slot(gb, r, |gb, s| CUTTERS.contains(&gb.peek(field::mon(r, s))))
+        else {
+            return Some(if has_item(gb, r, field::POKE_BALL) {
+                Goal::Catch(ROUTE_24)
+            } else {
+                Goal::Buy
+            });
+        };
+        if !event(gb, r, BILL_ASKED) {
+            return Some(Goal::Talk((BILLS_HOUSE, 6, 5)));
+        }
+        if !event(gb, r, CELL_SEPARATOR) {
+            return Some(Goal::Press((BILLS_HOUSE, 1, 5), UP));
+        }
+        if !event(gb, r, GOT_SS_TICKET) {
+            return Some(Goal::Talk((BILLS_HOUSE, 4, 4)));
+        }
+        if !event(gb, r, GOT_HM01) {
+            return Some(Goal::Talk((SS_ANNE_CAPTAINS_ROOM, 4, 2)));
+        }
+        cutter(gb, r).is_none().then_some(Goal::Teach(learner))
+    }
+
+    /// Lt. Surge, behind a gate two trash cans open: the first can's
+    /// number is in RAM from the start, the second's once the first opens.
+    fn surge(&self, gb: &mut GameBoy) -> Goal {
+        let r = self.ram;
+        if event(gb, r, SECOND_LOCK) {
+            return Goal::Talk((VERMILION_GYM, 5, 1));
+        }
+        let second = u16::from(event(gb, r, FIRST_LOCK));
+        let (x, y) = trash_can(gb.peek(r.at(TRASH_CAN) + second));
+        Goal::Talk((VERMILION_GYM, x, y))
+    }
+
     /// The buttons toward the current goal; `None` when there is no goal
     /// or it cannot be reached from here.
     pub fn buttons(&mut self, gb: &mut GameBoy, nav: &mut Nav, keys: &mut Keys) -> Option<u8> {
@@ -208,8 +302,27 @@ impl Story {
             nav.reset();
             self.goal = Some(goal);
         }
+        if event(gb, self.ram, SECOND_LOCK) {
+            nav.open(gb.rom(), VERMILION_GYM, &GATE);
+        }
         match goal {
             Goal::Map(m) => nav.toward(gb, &move |_, s| s.0 == m),
+            Goal::Press(at, dir) => Self::talk(gb, nav, keys, &move |_, s| s == at, &move |_| dir),
+            Goal::Buy => {
+                let at = (CERULEAN_MART, 2, 5);
+                match nav.toward(gb, &move |_, s| s == at)? {
+                    0 if nav::facing(gb.peek(nav::FACING)) == LEFT => {
+                        self.errand = Some(Kind::Buy);
+                        Some(0)
+                    }
+                    0 => Some(keys.tap(LEFT, GAP * 3)),
+                    b => Some(b),
+                }
+            }
+            Goal::Teach(slot) => {
+                self.errand = Some(Kind::Teach(slot));
+                Some(0)
+            }
             Goal::Talk(npc) => Self::talk(
                 gb,
                 nav,
@@ -223,10 +336,10 @@ impl Story {
                 gb,
                 nav,
                 keys,
-                &|g, s| g.tileset == POKECENTER && (s.1, s.2) == (3, 3),
+                &|g, s| g.tileset == POKECENTER && s.0 != CELADON_HOTEL && (s.1, s.2) == (3, 3),
                 &|_| UP,
             ),
-            Goal::Grind(m) => {
+            Goal::Grind(m) | Goal::Catch(m) => {
                 let grind = move |g: &Grid, s: Square| {
                     s.0 == m
                         && (g.tileset == CAVERN
@@ -251,7 +364,7 @@ impl Story {
         match nav.toward(gb, at)? {
             0 => {
                 let face = face(nav.here(gb));
-                let facing = nav::facing(gb.peek(FACING));
+                let facing = nav::facing(gb.peek(nav::FACING));
                 Some(keys.tap(if facing == face { A } else { face }, GAP * 3))
             }
             b => Some(b),
@@ -267,21 +380,28 @@ impl Story {
     ) -> u8 {
         let here = nav.here(gb);
         self.pace = self.pace.wrapping_add(1);
-        let rom = gb.rom();
-        let Some(g) = nav.grid(rom, here.0) else {
-            return 0;
-        };
         let dirs = if (self.pace / 4).is_multiple_of(2) {
             [LEFT, RIGHT, UP, DOWN]
         } else {
             [RIGHT, LEFT, DOWN, UP]
         };
-        let dir = dirs.into_iter().find(|&d| {
+        let free = dirs.map(|d| !nav.person(Nav::ahead(here, d)));
+        let rom = gb.rom();
+        let Some(g) = nav.grid(rom, here.0) else {
+            return 0;
+        };
+        let dir = dirs.into_iter().zip(free).find_map(|(d, free)| {
             let n = Nav::ahead(here, d);
-            g.walkable(n.1.into(), n.2.into()) && grind(g, n)
+            (free && g.walkable(n.1.into(), n.2.into()) && grind(g, n)).then_some(d)
         });
         dir.map_or(0, |d| nav.hold(gb, d))
     }
+}
+
+/// Vermilion Gym's trash can `i`: three to a column, five columns, as
+/// pokered's hidden events number them.
+pub fn trash_can(i: u8) -> (u8, u8) {
+    (1 + 2 * (i / 3), 7 + 2 * (i % 3))
 }
 
 /// The direction from `s` to the square beside it, `to`.

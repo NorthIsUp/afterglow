@@ -4,12 +4,15 @@
 //! `intro.rs` gets from power-on out of the house; `story.rs` names the
 //! next thing the game needs (a starter, Oak's Parcel, the Pokédex, levels,
 //! a badge) as a square to stand on; `nav.rs` routes there across maps;
-//! `battle.rs` picks moves by expected damage and runs from wild battles it
-//! has no use for. Text is answered `POKEMON_TEXT_MS` after it stops
-//! printing, menus by reading their cursor. Held still for minutes, it
-//! rewinds to a recent save state and never stands on that square again.
+//! `battle.rs` picks moves by expected damage, runs from wild battles it
+//! has no use for and throws Poké Balls at ones it does; `field.rs` runs
+//! errands through the menus: cutting a tree, teaching Cut, buying balls.
+//! Text is answered `POKEMON_TEXT_MS` after it stops printing, menus by
+//! reading their cursor. Held still for minutes, it rewinds to a recent
+//! save state and never stands on that square again.
 
 mod battle;
+mod field;
 mod input;
 mod intro;
 mod nav;
@@ -26,6 +29,7 @@ use super::carts::Revision;
 use super::pilot::{A, B, START};
 use super::ram::Ram;
 use battle::Battle;
+use field::{Errand, Kind};
 use input::{Keys, GAP};
 use intro::Intro;
 use nav::Nav;
@@ -59,6 +63,7 @@ pub struct Bot {
     nav: Nav,
     story: Story,
     battle: Battle,
+    errand: Option<Errand>,
     text_frames: u32,
     wander: u32,
     last_here: Option<nav::Square>,
@@ -86,6 +91,7 @@ impl Bot {
             nav: Nav::new(rev),
             story: Story::new(rev, starter),
             battle: Battle::new(ram),
+            errand: None,
             text_frames: 0,
             wander: 0,
             last_here: None,
@@ -156,7 +162,15 @@ impl Bot {
             self.nav.reset();
             self.text_frames = 0;
             let grind = self.story.grinding(gb);
-            return self.battle.buttons(gb, &mut self.keys, grind);
+            let catch = self.story.catching();
+            return self.battle.buttons(gb, &mut self.keys, grind, catch);
+        }
+        if let Some(e) = &mut self.errand {
+            if let Some(b) = e.buttons(gb, r, &mut self.keys, &self.battle) {
+                return b;
+            }
+            self.errand = None;
+            self.nav.reset();
         }
         if gb.peek(r.font_loaded) & 1 != 0 {
             self.nav.stop();
@@ -177,7 +191,17 @@ impl Bot {
             return self.keys.tap(B, 30);
         }
         self.story.can_attack = self.battle.can_attack(gb);
-        if let Some(b) = self.story.buttons(gb, &mut self.nav, &mut self.keys) {
+        let cutter = story::cutter(gb, r).filter(|_| self.story.badges(gb) & 2 != 0);
+        self.nav.set_cut(cutter.is_some());
+        let b = self.story.buttons(gb, &mut self.nav, &mut self.keys);
+        if let Some(kind) = self.story.errand.take() {
+            self.errand = Some(Errand::new(kind));
+        }
+        if let (Some(tree), Some(slot)) = (self.nav.tree.take(), cutter) {
+            self.nav.felled(tree);
+            self.errand = Some(Errand::new(Kind::Cut(slot)));
+        }
+        if let Some(b) = b {
             return b;
         }
         self.roam(gb)
