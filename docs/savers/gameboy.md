@@ -124,15 +124,16 @@ somewhere else.
 
 In the author's tests on Red, from power-on (game time):
 
-| Starter    | Pokédex | Boulder Badge | Cascade Badge |
-| ---------- | ------- | ------------- | ------------- |
-| Bulbasaur  | 13 min  | 55 min        | 106 min       |
-| Charmander | 10 min  | 102 min       | 186 min       |
-| Squirtle   | 11 min  | 47 min        | 112 min       |
+| Game, starter   | Pokédex | Boulder Badge | Cascade Badge |
+| --------------- | ------- | ------------- | ------------- |
+| Red, Bulbasaur  | 7 min   | 45 min        | 85 min        |
+| Red, Charmander | 8 min   | 91 min        | 183 min       |
+| Red, Squirtle   | 8 min   | 44 min        | 110 min       |
+| Yellow, Pikachu | 6 min   | 118 min       | 138 min       |
 
-After Misty it has no further story and wanders. Yellow's Pikachu cannot
-hurt Brock's rock types and the bot does not yet catch a partner, so Yellow
-stops at Brock.
+Charmander and Pikachu grind longer: Brock's rock types shrug off fire and
+electricity. After Misty there is no further story yet, and the bot
+wanders.
 
 The mirror page's **↺ Restart** (`POST /restart?saver=gameboy`) is a
 power-on reset: the cartridge boots again with no battery save, so the bot
