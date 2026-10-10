@@ -187,6 +187,9 @@ impl<P: Copy + Default, T: Copy + Default> View<P, T> {
     }
 }
 
+/// How far behind `pace` may fall before it drops the backlog.
+const BACKLOG: Duration = Duration::from_millis(250);
+
 /// Sleep until `next` plus a `period`; a step that ran long drops the backlog
 /// rather than fast-forwarding through it.
 pub fn pace(next: &mut Instant, period: Duration) {
@@ -194,7 +197,7 @@ pub fn pace(next: &mut Instant, period: Duration) {
     let now = Instant::now();
     match next.checked_duration_since(now) {
         Some(d) => std::thread::sleep(d),
-        None if now - *next > Duration::from_millis(250) => *next = now,
+        None if now - *next > BACKLOG => *next = now,
         None => {}
     }
 }
@@ -246,5 +249,90 @@ impl<E: Engine> Drop for Claim<E> {
         if let Some(e) = self.engine {
             e.release(self.id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Fake(Slot<u8, (), ()>);
+
+    impl Engine for Fake {
+        type Want = u8;
+        fn claim(&self, id: u64, want: u8) {
+            self.0.claim(id, want);
+        }
+        fn release(&self, id: u64) {
+            self.0.release(id);
+        }
+    }
+
+    fn owner(e: &Fake) -> u64 {
+        lock(&e.0.ctl).owner
+    }
+
+    #[test]
+    fn a_stale_release_leaves_the_new_claim_running() {
+        let e: &'static Fake = Box::leak(Box::new(Fake(Slot::new((), ()))));
+        let mut old = Claim::<Fake>::new(Some(1));
+        let mut new = Claim::<Fake>::new(Some(2));
+        assert!(old.engine(|| e).is_some());
+        assert!(new.engine(|| e).is_some());
+        drop(old);
+        assert_eq!(owner(e), new.id);
+        let (c, parked) = e.0.wait(|_| false);
+        assert_eq!((c.want, parked), (Some(2), false));
+        drop(c);
+        drop(new);
+        assert_eq!(owner(e), 0);
+        assert!(lock(&e.0.ctl).released.is_some());
+    }
+
+    #[test]
+    fn a_claim_without_a_want_never_touches_the_engine() {
+        let mut c = Claim::<Fake>::new(None);
+        assert!(c.engine(|| unreachable!("no want, no engine")).is_none());
+        drop(c);
+    }
+
+    #[test]
+    fn take_copies_only_a_newer_claim() {
+        let s: Slot<u8, (), ()> = Slot::new((), ());
+        s.claim(1, 7);
+        let (mut rev, mut want) = (0, None);
+        assert!(lock(&s.ctl).take(&mut rev, &mut want));
+        assert_eq!(want, Some(7));
+        want = None;
+        assert!(!lock(&s.ctl).take(&mut rev, &mut want));
+        assert_eq!(want, None);
+    }
+
+    #[test]
+    fn a_view_reports_each_change_once_and_blanks_without_copying() {
+        let mut v = View::<u8, u8>::new(4, 2);
+        let mut dst = [0u8; 8];
+        assert_eq!(v.read(0, &mut dst), None, "a new view is blank at seq 0");
+        v.publish(&[1, 2, 3, 4, 5, 6], 3, 9);
+        assert_eq!(v.read(0, &mut dst), Some((1, Some((3, 9)))));
+        assert_eq!(dst, [1, 2, 3, 4, 5, 6, 0, 0]);
+        assert_eq!(v.read(1, &mut dst), None);
+        v.blank();
+        dst = [0; 8];
+        assert_eq!(v.read(1, &mut dst), Some((2, None)));
+        assert_eq!(dst, [0; 8]);
+    }
+
+    #[test]
+    fn pace_drops_a_backlog_longer_than_the_bound() {
+        let period = Duration::from_millis(10);
+        let mut next = Instant::now().checked_sub(4 * BACKLOG).unwrap();
+        pace(&mut next, period);
+        assert!(next.elapsed() < BACKLOG, "a long stall restarts the clock");
+
+        let behind = Instant::now().checked_sub(BACKLOG / 2).unwrap();
+        let mut next = behind;
+        pace(&mut next, period);
+        assert_eq!(next, behind + period, "a short one is caught up");
     }
 }

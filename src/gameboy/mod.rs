@@ -137,7 +137,7 @@ impl Saver for GameBoySaver {
                 // A view the engine composed for an older width (a knob
                 // change in flight) would scale wrong; static until it
                 // catches up.
-                (self.seq, self.shown, self.fresh) = (seq, shown == Some((w, ())), true);
+                (self.seq, self.shown, self.fresh) = (seq, shown == Some(w), true);
             }
         }
         if !self.shown {
