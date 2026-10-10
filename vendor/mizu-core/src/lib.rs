@@ -84,17 +84,6 @@ impl GameBoy {
         Ok(())
     }
 
-    /// afterglow: run whole instructions until at least `dots` PPU cycles
-    /// pass; returns how many did, so a caller can carry the overshoot.
-    pub fn clock_for_dots(&mut self, dots: u32) -> Result<u32, RunError> {
-        let mut cycles = 0u32;
-        while cycles < dots {
-            self.cpu.next_instruction(&mut self.bus)?;
-            cycles += self.bus.elapsed_ppu_cycles();
-        }
-        Ok(cycles)
-    }
-
     /// Return the game title string extracted from the cartridge.
     pub fn game_title(&self) -> &str {
         self.bus.cartridge().game_title()
@@ -130,6 +119,7 @@ impl GameBoy {
         self.bus.line_scroll()
     }
 
+    /// afterglow: LCDC's display enable.
     pub fn lcd_on(&self) -> bool {
         self.bus.lcd_on()
     }

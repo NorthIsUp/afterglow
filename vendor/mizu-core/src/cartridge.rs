@@ -217,6 +217,8 @@ impl Cartridge {
             return Err(CartridgeError::InvalidNintendoLogo);
         }
 
+        // afterglow: a title that is not UTF-8 is not a reason to refuse a
+        // ROM, and the header logging (println) is gone.
         let game_title = String::from_utf8_lossy(
             &data[0x134..=0x142]
                 .iter()

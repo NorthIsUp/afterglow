@@ -475,6 +475,7 @@ impl Cpu {
             Opcode::Ld => Ok(src),
             Opcode::LdBB => {
                 // self.reg_b = self.reg_b;
+                // afterglow: no println; a screensaver has no console.
                 cpu_state = CpuState::Breakpoint(self.registers());
 
                 Ok(0)

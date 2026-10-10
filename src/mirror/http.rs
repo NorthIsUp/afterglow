@@ -136,10 +136,9 @@ pub(super) fn handle(mirror: &Mirror, mut s: TcpStream) -> std::io::Result<()> {
         // As `/select`, but a rebuild from scratch even of the saver showing:
         // a saver whose engine outlives a rebuild (gameboy) starts over too.
         ("POST", "/restart") => {
-            match param(&query, "saver").filter(|n| saver::index_of(n).is_some()) {
-                Some(name) => {
-                    saver::request_restart();
-                    let i = saver::index_of(&name).expect("filtered above");
+            match param(&query, "saver").and_then(|n| Some((saver::index_of(&n)?, n))) {
+                Some((i, name)) => {
+                    saver::request_restart(i);
                     if !mirror.reselect(i) {
                         mirror.select(&name);
                     }

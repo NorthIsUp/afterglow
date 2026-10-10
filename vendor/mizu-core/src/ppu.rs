@@ -494,6 +494,7 @@ impl Ppu {
         self.lcd_control = LcdControl::from_bits_truncate(data);
 
         if !self.lcd_control.display_enable() && old_disply_enable {
+            // afterglow: no println when the display goes off mid-frame.
             self.ly = 0;
             self.cycle = 4;
             self.scanline = 0;
@@ -643,6 +644,8 @@ impl Ppu {
         self.lcd_status.current_mode()
     }
 
+    // afterglow: RGB555 frames, and VRAM, the background layer, per-line
+    // scroll and LCD enable for the front end; `raw_screen_buffer` is gone.
     pub fn vram(&self) -> &[u8] {
         &self.vram
     }
@@ -927,6 +930,7 @@ impl Ppu {
     /// mixing here does not mean using the two pixels and output something in the middle
     /// mixing just means check priorities and all stuff and pick which should be
     /// rendered, the other is just discarded
+    /// afterglow: also the background pixel, as if no sprite covered it.
     fn get_next_color(&mut self) -> (Color, Color) {
         let bg_pixel = self.bg_fifo.pop();
         let sprite_pixel = self.sprite_fifo.pop();

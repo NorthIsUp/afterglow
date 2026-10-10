@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use super::*;
-use crate::grid::with_test_aspect;
+use crate::grid::{with_test_aspect, Cell};
 use crate::mirror::codec::Encoder;
 use crate::saver;
 use crate::testalloc::allocs_during;
@@ -68,16 +68,11 @@ fn the_screen_width_follows_the_glass_shape() {
     }
 }
 
-/// Pine's 768 Doom columns spread over 960 cells, every one of them used,
-/// in order, none skipped.
+/// Pine gets a 768-wide game over 960 cells (`scaled.rs` checks the spread).
 #[test]
 fn pine_maps_the_whole_width() {
     let (_, d) = build(1920, 1080, 180, "/nonexistent.wad", &knobs(0, 100));
-    assert_eq!((d.grid.cols(), d.col_w), (960, 768));
-    let used: std::collections::BTreeSet<_> = d.col_src.iter().copied().collect();
-    assert_eq!(used.len(), 768);
-    assert!(d.col_src.windows(2).all(|p| p[0] <= p[1]));
-    assert!(d.row_src.iter().all(|&r| (r as usize) < H));
+    assert_eq!((d.grid.cols(), d.view.width()), (960, 768));
 }
 
 /// The panel path: every panel pixel is the source pixel its column and row
@@ -92,7 +87,7 @@ fn frames_scale_onto_the_panel_and_report_exactly_what_moved() {
         for (i, c) in d.palette.iter_mut().enumerate() {
             *c = (i as u32).wrapping_mul(0x0001_0307) & 0xFF_FFFF;
         }
-        let sw = d.col_w;
+        let sw = d.view.width();
         let mut rng = 3u32;
         for px in &mut d.pix[..sw * H] {
             *px = next_rand(&mut rng) as u8;
@@ -132,7 +127,7 @@ fn frames_scale_onto_the_panel_and_report_exactly_what_moved() {
                 2 => assert!(dmg.is_empty(), "{case}: an old frame dirtied rows"),
                 _ => {}
             }
-            let (x0, x1, y0, y1) = d.px_rect;
+            let (x0, x1, y0, y1) = d.view.px_rect();
             let base = d.shown.map_or(0, |s| s.1 as usize * 256);
             for y in 0..h {
                 for x in 0..w {

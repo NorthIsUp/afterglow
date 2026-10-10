@@ -37,7 +37,7 @@ pub struct Want {
     pub mode: Mode,
     pub rotate: Option<Duration>,
     pub seed: u32,
-    /// `saver::restarts()` when built: a new value is a power-on reset.
+    /// `saver::restarts("gameboy")` when built: a new value is a power-on reset.
     pub restart: u64,
 }
 
@@ -189,7 +189,11 @@ impl Session {
         // colour it with a palette of its own choosing.
         let color = cart.rom.get(0x143).is_some_and(|b| b & 0x80 != 0);
         let config = GameBoyConfig { is_dmg: !color };
-        let gb = GameBoy::from_rom(cart.rom.clone(), cart.sram.as_deref(), config)
+        // The core asserts on headers and battery saves it cannot map: a
+        // user's ROM or GAMEBOY_SAV, so a panic here is a cartridge that
+        // will not boot, not a dead engine thread.
+        let gb = catch_unwind(|| GameBoy::from_rom(cart.rom.clone(), cart.sram.as_deref(), config))
+            .map_err(|_| "the core panicked loading it".to_string())?
             .map_err(|e| e.to_string())?;
         Ok(Self {
             gb,
@@ -233,27 +237,7 @@ impl Session {
 pub static PANIC_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(test)]
-pub fn tests_runner(carts: Vec<Cart>) -> Runner {
-    Runner {
-        carts,
-        idx: 0,
-        session: None,
-        started: Instant::now(),
-        seed: 1,
-        view: vec![0; MAX_W * H],
-    }
-}
-
-#[cfg(test)]
 impl Runner {
-    pub fn frame_for_test(&mut self, want: &Want) -> bool {
-        self.frame(want)
-    }
-
-    pub fn take_for_test(&mut self, old: Option<&Want>, w: &Want) {
-        self.take(old, w);
-    }
-
     pub fn frames(&self) -> u64 {
         self.session.as_ref().map_or(0, |s| s.frames)
     }
@@ -275,6 +259,17 @@ pub struct Runner {
 }
 
 impl Runner {
+    pub(super) fn new(carts: Vec<Cart>) -> Self {
+        Self {
+            carts,
+            idx: 0,
+            session: None,
+            started: Instant::now(),
+            seed: 1,
+            view: vec![0; MAX_W * H],
+        }
+    }
+
     /// Boot the current cartridge, skipping any that will not load. False
     /// when none will.
     fn ensure(&mut self, want: &Want) -> bool {
@@ -302,7 +297,7 @@ impl Runner {
 
     /// A new want from the saver: reload the cartridges when they changed
     /// (or on a restart), else keep the game going under the new view.
-    fn take(&mut self, old: Option<&Want>, w: &Want) {
+    pub(super) fn take(&mut self, old: Option<&Want>, w: &Want) {
         if old.is_none_or(|o| !o.same_carts(w)) {
             // A restart is a fresh cartridge: no battery save, so the game
             // starts from NEW GAME.
@@ -323,7 +318,7 @@ impl Runner {
     }
 
     /// One frame. False when there is nothing to show.
-    fn frame(&mut self, want: &Want) -> bool {
+    pub(super) fn frame(&mut self, want: &Want) -> bool {
         if !self.ensure(want) {
             return false;
         }
@@ -349,14 +344,7 @@ impl Runner {
 }
 
 fn run(e: &Engine) {
-    let mut r = Runner {
-        carts: Vec::new(),
-        idx: 0,
-        session: None,
-        started: Instant::now(),
-        seed: 1,
-        view: vec![0; MAX_W * H],
-    };
+    let mut r = Runner::new(Vec::new());
     let mut rev = 0;
     let mut want: Option<Want> = None;
     let mut next = Instant::now();

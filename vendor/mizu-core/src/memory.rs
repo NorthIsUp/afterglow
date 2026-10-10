@@ -319,6 +319,7 @@ impl Bus {
         self.read_not_ticked(addr, None)
     }
 
+    // afterglow: the PPU's front-end accessors, passed through.
     pub fn bg_buffer(&self) -> &[u16] {
         self.ppu.bg_buffer()
     }

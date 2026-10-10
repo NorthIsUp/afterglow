@@ -266,17 +266,17 @@ fn row_of(name: &str) -> Option<usize> {
     SAVERS.iter().position(|(n, _)| *n == name)
 }
 
-/// Bumped by the mirror's `/restart`. A saver whose state lives past a
-/// rebuild (an engine thread) reads it at construction and starts over when
-/// it moved.
-static RESTARTS: AtomicU64 = AtomicU64::new(0);
+/// Per row, bumped by the mirror's `/restart`. A saver whose state lives past
+/// a rebuild (an engine thread) reads its own at construction and starts over
+/// when it moved; per row, so restarting another saver leaves it be.
+static RESTARTS: [AtomicU64; NSAVERS] = [const { AtomicU64::new(0) }; NSAVERS];
 
-pub fn request_restart() {
-    RESTARTS.fetch_add(1, Ordering::Relaxed);
+pub fn request_restart(i: usize) {
+    RESTARTS[i].fetch_add(1, Ordering::Relaxed);
 }
 
-pub fn restarts() -> u64 {
-    RESTARTS.load(Ordering::Relaxed)
+pub fn restarts(name: &str) -> u64 {
+    row_of(name).map_or(0, |i| RESTARTS[i].load(Ordering::Relaxed))
 }
 
 pub fn make(name: &str, panel: &Panel, fps: u32) -> Box<dyn Saver> {

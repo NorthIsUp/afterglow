@@ -85,15 +85,15 @@ impl World {
         Some(&tiles[id * 64..][..64])
     }
 
+    pub fn map(&self) -> Option<u8> {
+        self.map
+    }
+
     /// The world pixel at the screen's top-left. The player stands on the
     /// square four from the left and four from the top. Mid-step the screen
     /// is part of the way to the next square while the coordinates still
     /// name the last, so the fine scroll counts on from them: back from 16
     /// when the step goes left or up.
-    pub fn map(&self) -> Option<u8> {
-        self.map
-    }
-
     pub fn camera(&self, gb: &mut GameBoy) -> (i32, i32) {
         let r = self.ram;
         let (x, y) = (i32::from(gb.peek(r.x)), i32::from(gb.peek(r.y)));

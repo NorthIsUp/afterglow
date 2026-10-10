@@ -6,9 +6,8 @@
 //! saver is in the default image. It runs on its own thread (`engine.rs`)
 //! and composes a view as wide as the panel's glass needs at the screen's
 //! full height (`view.rs`); this saver scales the last finished view onto
-//! the panel the way `doom` does: straight into the panel's pixels, only
-//! the rows that changed, each over the columns that changed. The grid is
-//! for the mirror and the terminal, a solid cell per view pixel in RGB444.
+//! the panel as `doom` does (`scaled.rs`). The grid is for the mirror and the
+//! terminal, a solid cell per view pixel in RGB444.
 
 mod carts;
 mod engine;
@@ -21,9 +20,9 @@ mod world;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use crate::font;
-use crate::grid::{pixel_aspect, Cell, Grid};
+use crate::grid::{pixel_aspect, Grid};
 use crate::saver::Saver;
+use crate::scaled::{self, Scaled};
 use crate::surface::{Panel, Surface};
 use crate::{env_num, env_str, next_rand, saver_seed};
 
@@ -36,57 +35,31 @@ const STATIC_LEVELS: u32 = 16;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// The saver's hold on the engine. Taken by the first `render`, not the
-/// constructor: the mirror builds savers just to read their knobs, and that
-/// must not steal the engine.
-enum Claim {
-    Pending(Want),
-    Held,
-    /// Never claims: a test drives the view itself.
-    #[cfg(test)]
-    Off,
-}
-
 pub struct GameBoySaver {
     grid: Grid,
     grid_palette: Vec<u32>,
     /// A view pixel (RGB555, bit 15 dim) to the panel's XRGB8888.
     lut: Vec<u32>,
     id: u64,
-    claim: Claim,
-    w: usize,
-    /// The panel pixels the view covers, `x0..x1` by `y0..y1`; the rest is
-    /// margin, and so are the cells outside `rect`.
-    px_rect: (usize, usize, usize, usize),
-    rect: (usize, usize, usize, usize),
-    panel: (usize, usize),
-    x_src: Vec<u16>,
-    x_first: Vec<u16>,
-    y_first: Vec<u16>,
-    col_src: Vec<u16>,
-    row_src: Vec<u16>,
+    /// Taken by the first `render`, not the constructor: the mirror builds
+    /// savers just to read their knobs, and that must not steal the engine.
+    want: Option<Want>,
+    engaged: bool,
+    view: Scaled<u16>,
     pix: Vec<u16>,
-    drawn: Vec<u16>,
-    line: Vec<u32>,
     seq: u32,
+    /// `pix` is the engine's view, not static.
     shown: bool,
+    /// `pix` holds a view the panel has not shown yet.
     fresh: bool,
-    first: bool,
     rng: u32,
 }
 
 /// The view's width for a panel, in Game Boy pixels at the screen's full
-/// height, and the share of the panel's width and height (per mille) it
-/// fills. Glass narrower than the screen's 10:9 shows it letterboxed.
+/// height, and the share of the panel it fills. Glass narrower than the
+/// screen's 10:9 shows it letterboxed.
 fn layout(panel: &Panel, aspect: usize) -> (usize, usize, usize) {
-    let glass = panel.w as f32 * aspect as f32 / (100.0 * panel.h as f32);
-    let w = ((H as f32 * glass).round() as usize).clamp(SCREEN_W, MAX_W);
-    let own = w as f32 / H as f32;
-    if own >= glass {
-        (w, 1000, (glass / own * 1000.0) as usize)
-    } else {
-        (w, (own / glass * 1000.0) as usize, 1000)
-    }
+    scaled::layout(panel, aspect, H as f32, SCREEN_W, MAX_W)
 }
 
 fn expand(c5: u32) -> u32 {
@@ -125,22 +98,13 @@ impl GameBoySaver {
             mode: if wide { Mode::Wide } else { Mode::Frame },
             rotate: (rotate > 0).then(|| Duration::from_secs(rotate)),
             seed,
-            restart: crate::saver::restarts(),
+            restart: crate::saver::restarts("gameboy"),
         };
         Self::build(panel, aspect, want)
     }
 
     fn build(panel: &Panel, aspect: usize, want: Want) -> Self {
-        let (w, wide, tall) = layout(panel, aspect);
-        let cell_w = (panel.w / w).max(1);
-        let cell_h = (panel.h * 100 / aspect / H).max(1);
-        let grid = Grid::new(panel, cell_w, cell_h);
-        let (cols, rows) = (grid.cols(), grid.rows());
-        let (fw, fh) = (cols * wide / 1000, rows * tall / 1000);
-        let (x0, y0) = ((cols - fw) / 2, (rows - fh) / 2);
-        let (pw, ph) = (panel.w * wide / 1000, panel.h * tall / 1000);
-        let (px0, py0) = ((panel.w - pw) / 2, (panel.h - ph) / 2);
-        let span = |n: usize, of: usize, i: usize| (i * of / n.max(1)) as u16;
+        let (grid, view) = Scaled::new(panel, aspect, layout(panel, aspect), H, MAX_W);
         let grid_palette = (0..GRID_COLOURS)
             .map(|i| {
                 let (dim, c) = (i >= 4096, i % 4096);
@@ -154,142 +118,54 @@ impl GameBoySaver {
             grid_palette,
             lut: (0..=u16::MAX).map(xrgb).collect(),
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-            claim: Claim::Pending(want),
-            w,
-            px_rect: (px0, px0 + pw, py0, py0 + ph),
-            rect: (x0, x0 + fw, y0, y0 + fh),
-            panel: (panel.w, panel.h),
-            x_src: (0..pw).map(|x| span(pw, w, x)).collect(),
-            x_first: (0..=w).map(|sx| (sx * pw).div_ceil(w) as u16).collect(),
-            y_first: (0..=H).map(|sy| (sy * ph).div_ceil(H) as u16).collect(),
-            col_src: (0..cols)
-                .map(|c| {
-                    if (x0..x0 + fw).contains(&c) {
-                        span(fw, w, c - x0)
-                    } else {
-                        u16::MAX
-                    }
-                })
-                .collect(),
-            row_src: (0..rows)
-                .map(|r| {
-                    if (y0..y0 + fh).contains(&r) {
-                        span(fh, H, r - y0)
-                    } else {
-                        u16::MAX
-                    }
-                })
-                .collect(),
+            want: Some(want),
+            engaged: false,
+            view,
             pix: vec![0; MAX_W * H],
-            drawn: vec![0; MAX_W * H],
-            line: vec![0; pw],
             seq: 0,
             shown: false,
             fresh: false,
-            first: true,
             rng: 0x2545_F491,
-        }
-    }
-
-    /// Scale the view rows that differ from what the panel shows into it,
-    /// each over just the columns that changed.
-    fn blit(&mut self, s: &mut Surface<'_>) {
-        let w = self.w;
-        let (px0, _, py0, _) = self.px_rect;
-        for sy in 0..H {
-            let (ya, yb) = (self.y_first[sy] as usize, self.y_first[sy + 1] as usize);
-            let row = &self.pix[sy * w..][..w];
-            let old = &mut self.drawn[sy * w..][..w];
-            let (lo, hi) = if self.first {
-                (0, w)
-            } else if row == old || ya == yb {
-                continue;
-            } else {
-                let diff = |(a, b): (&u16, &u16)| a != b;
-                let z = || row.iter().zip(old.iter());
-                (
-                    z().position(diff).unwrap_or(0),
-                    w - z().rev().position(diff).unwrap_or(0),
-                )
-            };
-            old[lo..hi].copy_from_slice(&row[lo..hi]);
-            let (xa, xb) = (self.x_first[lo] as usize, self.x_first[hi] as usize);
-            for (out, &sx) in self.line[xa..xb].iter_mut().zip(&self.x_src[xa..xb]) {
-                *out = self.lut[row[sx as usize] as usize];
-            }
-            let line = &self.line[xa..xb];
-            for out in s.cell_rows(px0 + xa, py0 + ya, xb - xa, yb - ya) {
-                out.copy_from_slice(line);
-            }
-        }
-    }
-
-    fn margins(&self, s: &mut Surface<'_>) {
-        let (x0, x1, y0, y1) = self.px_rect;
-        let (pw, ph) = self.panel;
-        for (x, y, w, h) in [
-            (0, 0, pw, y0),
-            (0, y1, pw, ph - y1),
-            (0, y0, x0, y1 - y0),
-            (x1, y0, pw - x1, y1 - y0),
-        ] {
-            for row in s.cell_rows(x, y, w, h) {
-                row.fill(0);
-            }
         }
     }
 }
 
 impl Saver for GameBoySaver {
     fn render(&mut self, s: &mut Surface<'_>) {
-        if matches!(self.claim, Claim::Pending(_)) {
-            if let Claim::Pending(w) = std::mem::replace(&mut self.claim, Claim::Held) {
-                Engine::get().claim(self.id, w);
-            }
+        if let Some(w) = self.want.take() {
+            Engine::get().claim(self.id, w);
+            self.engaged = true;
         }
-        if matches!(self.claim, Claim::Held) {
-            if let Some((seq, w)) = Engine::get().latest(self.seq, &mut self.pix) {
-                self.seq = seq;
-                self.fresh = true;
+        let w = self.view.width();
+        if self.engaged {
+            if let Some((seq, shown)) = Engine::get().latest(self.seq, &mut self.pix) {
                 // A view the engine composed for an older width (a knob
                 // change in flight) would scale wrong; static until it
                 // catches up.
-                self.shown = w == Some(self.w);
+                (self.seq, self.shown, self.fresh) = (seq, shown == Some(w), true);
             }
         }
         if !self.shown {
-            for p in &mut self.pix[..self.w * H] {
+            for p in &mut self.pix[..w * H] {
                 let v =
                     (next_rand(&mut self.rng) % STATIC_LEVELS * 31 / (STATIC_LEVELS - 1)) as u16;
                 *p = v | v << 5 | v << 10;
             }
             self.fresh = true;
         }
-        if !(self.fresh || self.first) {
+        if !self.fresh {
             return;
         }
         self.fresh = false;
-        self.blit(s);
-        if self.first {
-            self.margins(s);
-            self.first = false;
-        }
-        let (x0, x1, ..) = self.rect;
-        let w = self.w;
-        let (pix, cols, row_src) = (&self.pix, &self.col_src[x0..x1], &self.row_src);
-        self.grid.fill_rows(|cy, row| {
-            let sy = row_src[cy];
-            if sy == u16::MAX {
-                return row.fill(Cell::CLEAR);
-            }
-            let src = &pix[sy as usize * w..][..w];
-            row[..x0].fill(Cell::CLEAR);
-            row[x1..].fill(Cell::CLEAR);
-            for (c, &sx) in row[x0..x1].iter_mut().zip(cols) {
-                *c = Cell::new(font::SOLID, grid_colour(src[sx as usize]));
-            }
-        });
-        self.grid.settle();
+        let lut = &self.lut;
+        self.view.draw(
+            s,
+            &mut self.grid,
+            &self.pix,
+            false,
+            |p| lut[p as usize],
+            grid_colour,
+        );
     }
 
     fn name(&self) -> &'static str {
@@ -307,7 +183,7 @@ impl Saver for GameBoySaver {
 
 impl Drop for GameBoySaver {
     fn drop(&mut self) {
-        if matches!(self.claim, Claim::Held) {
+        if self.engaged {
             Engine::get().release(self.id);
         }
     }

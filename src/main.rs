@@ -133,6 +133,7 @@ mod rotate;
 mod sakura;
 mod satori;
 mod saver;
+mod scaled;
 mod speeder;
 mod strings;
 mod surface;
