@@ -19,6 +19,8 @@ mod story;
 #[cfg(test)]
 mod tests;
 
+use std::collections::VecDeque;
+
 use mizu_core::GameBoy;
 
 use super::carts::Revision;
@@ -104,7 +106,7 @@ const SNAPSHOT_EVERY: u64 = 60 * 60 * 2;
 /// stuck: longer than any battle.
 const STILL_LIMIT: u64 = 60 * 60 * 3;
 /// Rewinds in a row without a new square seen before starting over.
-const REWINDS_TO_RESET: u32 = 4;
+const REWINDS_TO_RESET: u32 = 8;
 /// A text box or menu open this long is one the bot is going round in.
 const STUCK_TEXT: u32 = 60 * 20;
 
@@ -122,7 +124,7 @@ pub struct Bot {
     wander: u32,
     last_here: Option<nav::Square>,
     still: u64,
-    snapshots: Vec<Vec<u8>>,
+    snapshots: VecDeque<(Vec<u8>, nav::Square)>,
     rewinds: u32,
     stuck_rewinds: u32,
     last_goal: Option<story::Goal>,
@@ -156,7 +158,7 @@ impl Bot {
             wander: 0,
             last_here: None,
             still: 0,
-            snapshots: Vec::new(),
+            snapshots: VecDeque::new(),
             rewinds: 0,
             stuck_rewinds: 0,
             last_goal: None,
@@ -212,16 +214,15 @@ impl Bot {
         if let Some(b) = self.keys.busy() {
             return b;
         }
-        if let Some(d) = self.nav.stepping(gb) {
-            return d;
-        }
         if let Some(b) = self.intro.buttons(gb, &mut self.keys, frame) {
             return b;
         }
         self.intro.watch(gb, frame);
         let r = self.ram;
         if gb.peek(r.in_battle) != 0 {
-            self.nav.stop();
+            // A step cut short by a battle is no wall, and the people it
+            // walked around have moved by the end.
+            self.nav.reset();
             self.text_frames = 0;
             let grind = self.story.grinding(gb);
             return self.battle.buttons(gb, &mut self.keys, grind);
@@ -231,12 +232,16 @@ impl Bot {
             return self.menus(gb, frame);
         }
         self.text_frames = 0;
-        // Held in place with no text box the bot can see: some screen
-        // (the Pokédex, a picture) is waiting on a button.
-        if self.still > 60 * 3 && self.still % 120 < 40 {
-            let key = if self.still % 240 < 120 { A } else { B };
-            return self.keys.tap(key, 30);
+        if let Some(d) = self.nav.stepping(gb) {
+            return d;
         }
+        // Held in place with no text box the bot can see: some screen
+        // (the Pokédex, a picture) is waiting on a button. B, not A: A
+        // would talk to whoever it faces, again and again.
+        if self.still > 60 * 3 && self.still % 120 < 20 {
+            return self.keys.tap(B, 30);
+        }
+        self.story.can_attack = self.battle.can_attack(gb);
         if let Some(b) = self.story.buttons(gb, &mut self.nav, &mut self.keys) {
             return b;
         }
@@ -330,9 +335,9 @@ impl Bot {
             let mut state = Vec::new();
             if gb.save_state(&mut state).is_ok() {
                 if self.snapshots.len() == SNAPSHOTS {
-                    self.snapshots.remove(0);
+                    self.snapshots.pop_front();
                 }
-                self.snapshots.push(state);
+                self.snapshots.push_back((state, here));
             }
         }
         if self.still < STILL_LIMIT {
@@ -340,15 +345,20 @@ impl Bot {
         }
         self.still = 0;
         self.stuck_rewinds += 1;
+        // Whatever holds it here, it is not walking back into it.
+        self.nav.trap(here);
+        // The newest state taken somewhere else; the ones after it are in
+        // the trap.
+        while self.snapshots.back().is_some_and(|(_, at)| *at == here) {
+            self.snapshots.pop_back();
+        }
         if self.stuck_rewinds >= REWINDS_TO_RESET {
             self.stuck_rewinds = 0;
             self.snapshots.clear();
             self.intro = Intro::new(self.rev);
             self.intro.resume(gb);
-        } else if let Some(state) = self.snapshots.first() {
-            if gb.load_state(state.as_slice()).is_ok() {
-                self.snapshots.truncate(1);
-            }
+        } else if let Some((state, _)) = self.snapshots.back() {
+            let _ = gb.load_state(state.as_slice());
         }
         self.rewinds += 1;
         self.rng = self

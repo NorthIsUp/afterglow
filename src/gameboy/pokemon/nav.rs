@@ -15,6 +15,22 @@ use super::Ram;
 /// A map and a square on it.
 pub type Square = (u8, u8, u8);
 
+/// A step under way: the direction, frames since it was pressed, where
+/// it started, whether it has begun, and whether a script held the
+/// joypad meanwhile.
+#[derive(Clone, Copy)]
+struct Walk {
+    dir: u8,
+    frames: u32,
+    from: Square,
+    started: bool,
+    held: bool,
+}
+
+/// One side of a square: where a step in that direction would leave it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Side(Square, u8);
+
 /// A warp's destination map that means "the map you came in from".
 const LAST_MAP: u8 = 0xFF;
 const OVERWORLD: u8 = 0;
@@ -50,26 +66,60 @@ impl Grid {
     }
 }
 
-/// The ledge table `HandleLedges` reads: facing, tile stood on, ledge tile.
-/// The same bytes in all three revisions; found by its first entry.
-fn ledges(rom: &[u8]) -> Vec<(u8, u8, u8)> {
-    const FIRST: [u8; 4] = [0x00, 0x2C, 0x37, 0x80];
-    let Some(at) = rom.windows(4).position(|w| w == FIRST) else {
-        return Vec::new();
-    };
-    rom[at..]
-        .chunks(4)
-        .take_while(|c| c[0] != 0xFF && c.len() == 4)
-        .map(|c| {
-            let dir = match c[0] {
-                0x00 => DOWN,
-                0x04 => UP,
-                0x08 => LEFT,
-                _ => RIGHT,
+/// Movement rules beyond the walkable tiles, from tables the game reads:
+/// ledges (`HandleLedges`: facing, tile stood on, ledge tile) and tile
+/// pairs no step may cross (`TilePairCollisionsLand`: a cave's raised
+/// floor and its edge). The same bytes in all three revisions, found by
+/// their first entries.
+#[derive(Default)]
+struct Rules {
+    ledges: Vec<(u8, u8, u8)>,
+    pairs: Vec<(u8, u8, u8)>,
+}
+
+impl Rules {
+    fn of(rom: &[u8]) -> Self {
+        let table = |first: &[u8], width: usize| -> Vec<&[u8]> {
+            let Some(at) = rom.windows(first.len()).position(|w| w == first) else {
+                return Vec::new();
             };
-            (dir, c[1], c[2])
-        })
-        .collect()
+            rom[at..]
+                .chunks(width)
+                .take_while(|c| c[0] != 0xFF && c.len() == width)
+                .collect()
+        };
+        let ledges = table(&[0x00, 0x2C, 0x37, 0x80], 4)
+            .into_iter()
+            .map(|c| {
+                let dir = match c[0] {
+                    0x00 => DOWN,
+                    0x04 => UP,
+                    0x08 => LEFT,
+                    _ => RIGHT,
+                };
+                (dir, c[1], c[2])
+            })
+            .collect();
+        let pairs = table(&[0x11, 0x20, 0x05, 0x11, 0x41, 0x05], 3)
+            .into_iter()
+            .map(|c| (c[0], c[1], c[2]))
+            .collect();
+        Self { ledges, pairs }
+    }
+
+    fn ledge(&self, g: &Grid, dir: u8, on: u8, next: u8) -> bool {
+        g.tileset == OVERWORLD
+            && self
+                .ledges
+                .iter()
+                .any(|&(d, o, l)| d == dir && o == on && l == next)
+    }
+
+    fn crossing(&self, g: &Grid, a: u8, b: u8) -> bool {
+        self.pairs
+            .iter()
+            .any(|&(ts, x, y)| ts == g.tileset && ((x, y) == (a, b) || (x, y) == (b, a)))
+    }
 }
 
 pub const DIRS: [u8; 4] = [UP, DOWN, LEFT, RIGHT];
@@ -87,14 +137,14 @@ pub struct Nav {
     kanto: Kanto,
     ram: Ram,
     grids: HashMap<u8, Grid>,
-    ledges: Vec<(u8, u8, u8)>,
+    rules: Rules,
+    /// Squares taken out of their grids by `trap`.
+    traps: Vec<Square>,
     /// The map each indoor map's "last map" exits lead to.
     outside: HashMap<u8, u8>,
     /// Bumps per (map, x, y, direction) that went nowhere.
-    walls: HashMap<(u8, u8, u8, u8), u16>,
-    /// The direction held, frames since, where it started, and whether the
-    /// step has begun.
-    walking: Option<(u8, u32, Square, bool)>,
+    walls: HashMap<Side, u16>,
+    walking: Option<Walk>,
     last_dir: u8,
     /// The live route: the square to reach on this map, and the button
     /// that leaves the map from it (`None` for the target itself).
@@ -114,7 +164,8 @@ impl Nav {
             kanto,
             ram,
             grids: HashMap::new(),
-            ledges: Vec::new(),
+            rules: Rules::default(),
+            traps: Vec::new(),
             outside: HashMap::new(),
             walls: HashMap::new(),
             walking: None,
@@ -131,10 +182,10 @@ impl Nav {
     /// Learns the ledge table and which outdoor map every building opens
     /// onto, once.
     fn learn(&mut self, rom: &[u8]) {
-        if !self.ledges.is_empty() {
+        if !self.rules.ledges.is_empty() {
             return;
         }
-        self.ledges = ledges(rom);
+        self.rules = Rules::of(rom);
         for m in 0..=0xF7u8 {
             let Some(h) = self.kanto.header(rom, m) else {
                 continue;
@@ -217,8 +268,8 @@ impl Nav {
     #[allow(clippy::too_many_arguments)]
     fn search(
         g: &Grid,
-        ledges: &[(u8, u8, u8)],
-        walls: &HashMap<(u8, u8, u8, u8), u16>,
+        rules: &Rules,
+        walls: &HashMap<Side, u16>,
         map: u8,
         from: (usize, usize),
         blocked: &[(usize, usize)],
@@ -243,7 +294,7 @@ impl Nav {
             let here = y * g.w + x;
             for dir in DIRS {
                 if walls
-                    .get(&(map, x as u8, y as u8, dir))
+                    .get(&Side((map, x as u8, y as u8), dir))
                     .copied()
                     .unwrap_or(0)
                     > WALL
@@ -257,11 +308,12 @@ impl Nav {
                 }
                 let mut to = (nx, ny);
                 let mut cost = 1;
+                let next = g.tile[ny * g.w + nx];
+                if rules.crossing(g, g.tile[here], next) {
+                    continue;
+                }
                 if !g.walk[ny * g.w + nx] {
-                    let ledge = g.tileset == OVERWORLD
-                        && ledges.iter().any(|&(d, on, l)| {
-                            d == dir && on == g.tile[here] && l == g.tile[ny * g.w + nx]
-                        });
+                    let ledge = rules.ledge(g, dir, g.tile[here], next);
                     let (jx, jy) = (nx.wrapping_add_signed(dx), ny.wrapping_add_signed(dy));
                     if !ledge || !g.walkable(jx, jy) {
                         continue;
@@ -384,7 +436,7 @@ impl Nav {
                 let walls = if node == from { &self.walls } else { &none };
                 Self::search(
                     g,
-                    &self.ledges,
+                    &self.rules,
                     walls,
                     node.0,
                     (node.1.into(), node.2.into()),
@@ -440,33 +492,51 @@ impl Nav {
     /// new square shows in RAM, so the key is released and the next step
     /// decided from where this one lands.
     pub fn stepping(&mut self, gb: &mut GameBoy) -> Option<u8> {
-        let (dir, frames, from, started) = self.walking?;
+        let mut w = self.walking?;
+        w.frames += 1;
+        // A script holding the joypad, even for a frame, is not a wall.
+        w.held |= gb.peek(JOY_IGNORE) != 0;
         let moving = gb.peek(self.ram.walk_counter) != 0;
-        if started {
-            if moving && frames < STEP * 3 {
-                self.walking = Some((dir, frames + 1, from, true));
+        if w.started {
+            if moving && w.frames < STEP * 3 {
+                self.walking = Some(w);
                 return Some(0);
             }
             self.walking = None;
             return None;
         }
         if moving {
-            self.walking = Some((dir, frames + 1, from, true));
+            w.started = true;
+            self.walking = Some(w);
             return Some(0);
         }
-        if frames < STEP {
-            self.walking = Some((dir, frames + 1, from, false));
-            return Some(dir);
+        if w.frames < STEP {
+            self.walking = Some(w);
+            return Some(w.dir);
         }
         self.walking = None;
-        let ahead = Self::ahead(from, dir);
+        let ahead = Self::ahead(w.from, w.dir);
         let person = self.people.contains(&(ahead.1.into(), ahead.2.into()));
-        // A script holding the joypad is not a wall.
-        let held = gb.peek(JOY_IGNORE) != 0;
-        if self.here(gb) == from && !person && !held {
-            *self.walls.entry((from.0, from.1, from.2, dir)).or_insert(0) += 1;
+        if self.here(gb) == w.from && !person && !w.held {
+            *self.walls.entry(Side(w.from, w.dir)).or_insert(0) += 1;
         }
         None
+    }
+
+    /// A square the game hangs on (a script that never ends): never
+    /// stand on it again.
+    pub fn trap(&mut self, s: Square) {
+        self.set_walk(s, false);
+        self.traps.push(s);
+    }
+
+    fn set_walk(&mut self, s: Square, walk: bool) {
+        if let Some(g) = self.grids.get_mut(&s.0) {
+            let i = usize::from(s.2) * g.w + usize::from(s.1);
+            if let Some(w) = g.walk.get_mut(i) {
+                *w = walk;
+            }
+        }
     }
 
     pub fn stop(&mut self) {
@@ -484,7 +554,13 @@ impl Nav {
     pub fn hold(&mut self, gb: &mut GameBoy, dir: u8) -> u8 {
         let here = self.here(gb);
         self.last_dir = dir;
-        self.walking = Some((dir, 0, here, false));
+        self.walking = Some(Walk {
+            dir,
+            frames: 0,
+            from: here,
+            started: false,
+            held: false,
+        });
         dir
     }
 
@@ -523,18 +599,16 @@ impl Nav {
         // Planned once per map: the live search below walks the leg.
         if self.leg.is_none_or(|(t, _)| t.0 != here.0) {
             self.leg = self.route(gb.rom(), here, goal);
-            // Walls learned from a person who has since moved can cut the
-            // only way; forget them and look again.
-            if self.leg.is_none() && !self.walls.is_empty() {
+            // Walls learned from a person who has since moved, or a trap
+            // in the only corridor, can cut the only way; forget them and
+            // look again.
+            if self.leg.is_none() && !(self.walls.is_empty() && self.traps.is_empty()) {
                 self.walls.clear();
+                for s in std::mem::take(&mut self.traps) {
+                    self.set_walk(s, true);
+                }
                 self.leg = self.route(gb.rom(), here, goal);
             }
-        }
-        if std::env::var("POKEBOT_TRACE_NAV").is_ok() {
-            eprintln!(
-                "nav here {here:?} leg {:?} walls {:?}",
-                self.leg, self.walls
-            );
         }
         let (target, leave) = self.leg?;
         if (target.1, target.2) == (here.1, here.2) {
@@ -545,12 +619,7 @@ impl Nav {
             };
             let dir = if leave == 0 { self.last_dir } else { leave };
             // A way out that did not take: try the side least bumped.
-            let bumps = |d: u8| {
-                self.walls
-                    .get(&(here.0, here.1, here.2, d))
-                    .copied()
-                    .unwrap_or(0)
-            };
+            let bumps = |d: u8| self.walls.get(&Side(here, d)).copied().unwrap_or(0);
             let dir = if bumps(dir) > WALL {
                 DIRS.into_iter().min_by_key(|&d| bumps(d)).unwrap_or(dir)
             } else {
@@ -582,7 +651,7 @@ impl Nav {
             let blocked: &[(usize, usize)] = if people { &self.people } else { &[] };
             Self::search(
                 g,
-                &self.ledges,
+                &self.rules,
                 &self.walls,
                 here.0,
                 (here.1.into(), here.2.into()),
@@ -596,9 +665,6 @@ impl Nav {
             }
         }
         let [(around, a), (through, t)] = steps;
-        if std::env::var("POKEBOT_TRACE_NAV").is_ok() {
-            eprintln!("  steps {steps:?} people {:?}", self.people);
-        }
         match (around, through) {
             (u32::MAX, u32::MAX) => None,
             (d, t_) if d != u32::MAX && d <= t_.saturating_add(DETOUR) => Some(a),

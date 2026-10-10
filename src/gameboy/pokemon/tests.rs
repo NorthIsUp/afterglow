@@ -101,6 +101,7 @@ fn pokebot_bench() {
     let frames = (hours * 3600.0 * FPS) as u64;
     let t0 = Instant::now();
     let trace = env("POKEBOT_TRACE", "") == "1";
+    let mut save_at = env("POKEBOT_SAVE_AT", "");
     let keytrace: u64 = env("POKEBOT_KEYTRACE", "0").parse().unwrap();
     let shots: Vec<u64> = env("POKEBOT_SHOTS", "")
         .split(',')
@@ -121,6 +122,24 @@ fn pokebot_bench() {
         }
         gb.set_buttons(b);
         gb.clock_for_frame().unwrap();
+        if !save_at.is_empty()
+            && save_at
+                == format!(
+                    "{},{},{}",
+                    gb.peek(0xD35E),
+                    gb.peek(0xD362),
+                    gb.peek(0xD361)
+                )
+        {
+            gb.save_state(std::fs::File::create(format!("{dir}/at.state")).unwrap())
+                .unwrap();
+            eprintln!("saved at {save_at} frame {f}");
+            save_at.clear();
+        }
+        if env("POKEBOT_SAVE_FRAME", "x") == f.to_string() {
+            gb.save_state(std::fs::File::create(format!("{dir}/frame.state")).unwrap())
+                .unwrap();
+        }
         if shots.contains(&f) {
             shot(
                 &gb,
@@ -197,9 +216,14 @@ fn pokebot_explore() {
         }
         if env("POKEBOT_DUMP_ALL", "") == "1" || i + 1 == keys.len() {
             eprintln!(
-                "--- {i} {} at {:?} menu {:?} opts {:02x}\n{}",
+                "--- {i} {} at {:?} ram {:02x?} menu {:?} opts {:02x}\n{}",
                 k as char,
                 (gb.peek(0xD35E), gb.peek(0xD362), gb.peek(0xD361)),
+                [
+                    0xCD6B, 0xD730, 0xD736, 0xCFC4, 0xD057, 0xCFC5, 0xFFD5, 0xFF40, 0xFF41, 0xFF44,
+                    0xFFFF, 0xFF0F, 0xFFB0, 0xFF47
+                ]
+                .map(|a| gb.peek(a)),
                 screen::menu(&mut gb),
                 gb.peek(0xD355),
                 screen::dump(&mut gb)
@@ -230,6 +254,8 @@ fn pokebot_map() {
                     .any(|w| (usize::from(w.0), usize::from(w.1)) == (x, y))
                 {
                     'W'
+                } else if g.walkable(x, y) && g.tile[y * g.w + x] == g.grass {
+                    ','
                 } else if g.walkable(x, y) {
                     '.'
                 } else {
@@ -238,6 +264,12 @@ fn pokebot_map() {
             })
             .collect();
         eprintln!("{y:3} {line}");
+        if env("POKEBOT_TILES", "") == y.to_string() {
+            eprintln!(
+                "    {:02x?}",
+                (0..g.w).map(|x| g.tile[y * g.w + x]).collect::<Vec<_>>()
+            );
+        }
     }
     let parse = |k: &str| -> Option<(u8, u8, u8)> {
         let v: Vec<u8> = env(k, "")

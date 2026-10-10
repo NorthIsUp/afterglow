@@ -20,6 +20,9 @@ const PARTY_MONS: u16 = 0xD16B;
 /// `wSpritePlayerStateData1FacingDirection`.
 const FACING: u16 = 0xC109;
 const OAKS_PARCEL: u8 = 0x46;
+const DOME_FOSSIL: u8 = 0x29;
+const HELIX_FOSSIL: u8 = 0x2A;
+const MT_MOON_B2F: u8 = 0x3D;
 
 const ROUTE_1: u8 = 0x0C;
 const ROUTE_3: u8 = 0x0E;
@@ -71,8 +74,9 @@ impl Starter {
 pub enum Goal {
     /// Anywhere on this map.
     Map(u8),
-    /// Stand on this square, face this way and press A.
-    Talk(Square, u8),
+    /// Stand next to whoever (or whatever) is on this square, face them
+    /// and press A.
+    Talk(Square),
     /// A Pokémon Center's nurse, whichever is nearest.
     Heal,
     /// Walk the grass (or a cave's floor) of this map until the lead levels.
@@ -107,6 +111,9 @@ pub struct Story {
     pub starter: Starter,
     goal: Option<Goal>,
     pace: u8,
+    /// The lead has a damaging move with PP left: kept by the bot, which
+    /// knows the moves table.
+    pub can_attack: bool,
 }
 
 impl Story {
@@ -117,6 +124,7 @@ impl Story {
             starter,
             goal: None,
             pace: 0,
+            can_attack: true,
         }
     }
 
@@ -146,20 +154,20 @@ impl Story {
                 } else {
                     BALLS[i]
                 };
-                return Some(Goal::Talk((OAKS_LAB, x, 4), UP));
+                return Some(Goal::Talk((OAKS_LAB, x, 3)));
             }
             // Oak stops the player at the edge of the grass and walks them
             // to his lab.
             return Some(Goal::Map(ROUTE_1));
         }
         let me = lead(gb, r);
-        if me.hp * 3 < me.max {
+        if me.hp * 3 < me.max || !self.can_attack {
             return Some(Goal::Heal);
         }
         let dex = event(gb, r, EVENT_GOT_POKEDEX);
         if !dex {
             return Some(if has_item(gb, r, OAKS_PARCEL) {
-                Goal::Talk((OAKS_LAB, 5, 3), UP)
+                Goal::Talk((OAKS_LAB, 5, 2))
             } else {
                 Goal::Map(VIRIDIAN_MART)
             });
@@ -167,14 +175,19 @@ impl Story {
         let badges = self.badges(gb);
         let [brock, misty] = self.starter.levels(self.rev);
         let (want, grind, gym) = if badges & 1 == 0 {
-            (brock, VIRIDIAN_FOREST, Goal::Talk((PEWTER_GYM, 4, 2), UP))
+            (brock, VIRIDIAN_FOREST, Goal::Talk((PEWTER_GYM, 4, 1)))
         } else if badges & 2 == 0 {
-            (misty, ROUTE_3, Goal::Talk((CERULEAN_GYM, 4, 3), UP))
+            (misty, ROUTE_3, Goal::Talk((CERULEAN_GYM, 4, 2)))
         } else {
             return None;
         };
         if me.level < want {
             return Some(Goal::Grind(grind));
+        }
+        // The Super Nerd beside Mt. Moon's fossils blocks the way on until
+        // one is taken: the Helix Fossil.
+        if badges & 1 != 0 && !has_item(gb, r, DOME_FOSSIL) && !has_item(gb, r, HELIX_FOSSIL) {
+            return Some(Goal::Talk((MT_MOON_B2F, 13, 6)));
         }
         if me.hp < me.max {
             return Some(Goal::Heal);
@@ -192,13 +205,21 @@ impl Story {
         }
         match goal {
             Goal::Map(m) => nav.toward(gb, &move |_, s| s.0 == m),
-            Goal::Talk(at, face) => Self::talk(gb, nav, keys, &move |_, s| s == at, face),
+            Goal::Talk(npc) => Self::talk(
+                gb,
+                nav,
+                keys,
+                &move |g, s| {
+                    s.0 == npc.0 && toward(s, npc).is_some() && g.walkable(s.1.into(), s.2.into())
+                },
+                &move |s| toward(s, npc).unwrap_or(UP),
+            ),
             Goal::Heal => Self::talk(
                 gb,
                 nav,
                 keys,
                 &|g, s| g.tileset == POKECENTER && (s.1, s.2) == (3, 3),
-                UP,
+                &|_| UP,
             ),
             Goal::Grind(m) => {
                 let grind = move |g: &Grid, s: Square| {
@@ -220,10 +241,11 @@ impl Story {
         nav: &mut Nav,
         keys: &mut Keys,
         at: &dyn Fn(&Grid, Square) -> bool,
-        face: u8,
+        face: &dyn Fn(Square) -> u8,
     ) -> Option<u8> {
         match nav.toward(gb, at)? {
             0 => {
+                let face = face(nav.here(gb));
                 let facing = match gb.peek(FACING) {
                     0x04 => UP,
                     0x08 => LEFT,
@@ -259,5 +281,19 @@ impl Story {
             g.walkable(n.1.into(), n.2.into()) && grind(g, n)
         });
         dir.map_or(0, |d| nav.hold(gb, d))
+    }
+}
+
+/// The direction from `s` to the square beside it, `to`.
+fn toward(s: Square, to: Square) -> Option<u8> {
+    match (
+        i16::from(to.1) - i16::from(s.1),
+        i16::from(to.2) - i16::from(s.2),
+    ) {
+        (0, -1) => Some(UP),
+        (0, 1) => Some(DOWN),
+        (-1, 0) => Some(LEFT),
+        (1, 0) => Some(RIGHT),
+        _ => None,
     }
 }
