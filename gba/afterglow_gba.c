@@ -8,6 +8,7 @@
 #include <setjmp.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,15 +77,20 @@ static struct mLogger silent = { .log = quiet };
 
 // Every entry point that runs core code arms `boundary` first; an abort
 // unwinds to it, and the machine is never touched again but to free it.
-#define ARM(fail)                 \
-	jmp_buf jb;                   \
-	jmp_buf* prev = boundary;     \
-	if (setjmp(jb)) {             \
-		boundary = prev;          \
-		return fail;              \
-	}                             \
-	boundary = &jb
-#define DISARM() boundary = prev
+// The fences keep the compiler from moving core code across the arming: a
+// fault there would find the boundary down (musl gcc -O3 crashed without).
+#define ARM(fail)                                     \
+	jmp_buf jb;                                       \
+	jmp_buf* prev = boundary;                         \
+	if (setjmp(jb)) {                                 \
+		boundary = prev;                              \
+		return fail;                                  \
+	}                                                 \
+	boundary = &jb;                                   \
+	atomic_signal_fence(memory_order_seq_cst)
+#define DISARM()                                  \
+	atomic_signal_fence(memory_order_seq_cst);    \
+	boundary = prev
 
 static struct mCore* boot(color_t* pix, const uint8_t* rom, size_t rom_len, const uint8_t* bios, size_t bios_len) {
 	struct mCore* core = GBACoreCreate();
