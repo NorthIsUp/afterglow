@@ -127,7 +127,7 @@ impl Bot {
         let r = self.ram;
         let lead = story::lead(gb, r);
         format!(
-            "map {:3} ({:2},{:2}) lv {} hp {}/{} badges {:08b} goal {:?} rewinds {} joyignore {:02x}",
+            "map {:3} ({:2},{:2}) lv {} hp {}/{} badges {:08b} goal {:?} rewinds {} joyignore {:02x} options {:02x}",
             gb.peek(r.cur_map),
             gb.peek(r.x),
             gb.peek(r.y),
@@ -137,7 +137,8 @@ impl Bot {
             self.story.badges(gb),
             self.story.goal(gb),
             self.rewinds,
-            gb.peek(0xCD6B)
+            gb.peek(0xCD6B),
+            gb.peek(r.options)
         )
     }
 
@@ -167,10 +168,14 @@ impl Bot {
             self.nav.stop();
             return self.menus(gb, frame);
         }
-        self.text_frames = 0;
         if let Some(d) = self.nav.stepping(gb) {
             return d;
         }
+        // Checked between steps only: it reads the whole text box.
+        if screen::has_text(gb) {
+            return self.menus(gb, frame);
+        }
+        self.text_frames = 0;
         // Held in place with no text box the bot can see: some screen
         // (the Pokédex, a picture) is waiting on a button. B, not A: A
         // would talk to whoever it faces, again and again.
@@ -216,14 +221,6 @@ impl Bot {
                 return self.keys.tap(if no { B } else { A }, GAP);
             }
             // The start menu, a shop, a PC: nothing the route asks for.
-            #[cfg(test)]
-            if text {
-                eprintln!(
-                    "menus: backing out of {:?}\n{}",
-                    screen::menu(gb),
-                    screen::dump(gb)
-                );
-            }
             if text {
                 return self.keys.tap(B, GAP);
             }

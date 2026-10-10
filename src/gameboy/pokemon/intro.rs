@@ -19,14 +19,19 @@ use super::Ram;
 
 /// `wOptions`: fast text, battle animations off, battle style SET.
 pub const OPTIONS: u8 = 0xC1;
+/// The bits of `wOptions` the bot sets; Yellow keeps its sound setting in
+/// the others.
+const OPTION_BITS: u8 = 0xCF;
 pub const PALLET: u8 = 0x00;
 pub const BEDROOM: u8 = 0x26;
 pub const DOWNSTAIRS: u8 = 0x25;
 /// Where the house door puts the player in Pallet Town.
 pub const DOOR: (u8, u8) = (5, 6);
-/// Frames after which the intro hands over to the ordinary bot: several
-/// times what it takes.
+/// Frames after which the intro is stuck somewhere: several times what it
+/// takes.
 const GIVE_UP: u64 = 60 * 60 * 8;
+/// A, B, Select and Start together: the game's own soft reset.
+const SOFT_RESET: u8 = A | B | 0x40 | START;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -70,6 +75,10 @@ pub struct Intro {
     pub failed: Option<(Step, String)>,
     /// The preset name the open list was answered with.
     picked: [u8; 11],
+    /// Frames in Pallet Town away from the door.
+    away: u32,
+    /// The frame past which the intro counts as stuck.
+    deadline: u64,
     pub done: bool,
 }
 
@@ -81,8 +90,19 @@ impl Intro {
             passed: [None; STEPS.len()],
             failed: None,
             picked: [0; 11],
+            away: 0,
+            deadline: GIVE_UP,
             done: false,
         }
+    }
+
+    /// Drop the cached door state, so the next intro runs from power-on.
+    #[cfg(test)]
+    pub fn forget() {
+        AT_DOOR
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     /// Start from the cached door state, if an earlier run left one.
@@ -143,7 +163,7 @@ impl Intro {
     /// the bot's ordinary navigation.
     pub fn watch(&mut self, gb: &mut GameBoy, frame: u64) {
         let r = self.ram;
-        if self.done || gb.peek(r.font_loaded) & 1 != 0 {
+        if self.done || gb.peek(r.font_loaded) & 1 != 0 || screen::has_text(gb) {
             return;
         }
         let here = (gb.peek(r.x), gb.peek(r.y));
@@ -151,7 +171,12 @@ impl Intro {
             BEDROOM => self.pass(gb, Step::Bedroom, frame),
             DOWNSTAIRS => self.pass(gb, Step::Downstairs, frame),
             PALLET if self.next() == Some(Step::Outside) => {
+                // The map changes a moment before the coordinates do.
                 if here != DOOR {
+                    self.away += 1;
+                    if self.away < 120 {
+                        return;
+                    }
                     self.fail(gb, Step::Outside, &format!("outside at {here:?}"));
                 }
                 self.pass(gb, Step::Outside, frame);
@@ -181,13 +206,20 @@ impl Intro {
             self.done = true;
             return None;
         }
-        // Whatever went wrong, the house is the bot's ordinary walking.
-        if frame > GIVE_UP {
+        // Stuck before the house: the game's own soft reset, and the steps
+        // checked again from the title. In the house, the bot's ordinary
+        // walking takes over.
+        if frame > self.deadline {
             self.fail(
                 gb,
                 self.next().unwrap_or(Step::Outside),
                 "intro ran too long",
             );
+            if self.passed[6].is_none() {
+                self.passed = [None; STEPS.len()];
+                self.deadline = frame + GIVE_UP;
+                return Some(keys.tap(SOFT_RESET, GAP));
+            }
             self.done = true;
             return None;
         }
@@ -196,6 +228,7 @@ impl Intro {
         if self.passed[5].is_some()
             && gb.peek(r.cur_map) == BEDROOM
             && gb.peek(r.font_loaded) & 1 == 0
+            && !screen::has_text(gb)
         {
             self.watch(gb, frame);
             return None;
@@ -204,7 +237,7 @@ impl Intro {
         let cursor = screen::cursor(gb);
         if cursor.is_some() && screen::shows(gb, b"NEW GAME") {
             let first = u8::from(screen::shows(gb, b"CONTINUE"));
-            let opts = gb.peek(r.options);
+            let opts = gb.peek(r.options) & OPTION_BITS;
             let want = if opts == OPTIONS { first } else { first + 1 };
             if m.item == first && opts == OPTIONS {
                 self.pass(gb, Step::TitleMenu, frame);
@@ -214,7 +247,7 @@ impl Intro {
         if let Some(at) = cursor.filter(|_| screen::shows(gb, b"TEXT SPEED")) {
             return Some(keys.tap(options_key(gb, at), GAP));
         }
-        if gb.peek(r.options) == OPTIONS && self.passed[0].is_some() {
+        if gb.peek(r.options) & OPTION_BITS == OPTIONS && self.passed[0].is_some() {
             self.pass(gb, Step::Options, frame);
         }
         if let Some((_, y)) = cursor.filter(|_| screen::shows(gb, b"NEW NAME")) {
@@ -262,7 +295,13 @@ impl Intro {
             if got == self.picked {
                 self.picked = [0; 11];
                 self.pass(gb, step, frame);
-            } else if !screen::shows(gb, b"NEW NAME") && got[0] != 0 && got[0] != b'.' {
+            } else if !screen::shows(gb, b"NEW NAME")
+                && got[0] != 0
+                && got[0] != b'.'
+                // The title screen's placeholders, until the pick lands.
+                && !got.starts_with(b"NINTEN")
+                && !got.starts_with(b"SONY")
+            {
                 let (g, p) = (
                     String::from_utf8_lossy(&got),
                     String::from_utf8_lossy(&self.picked),
@@ -295,17 +334,29 @@ fn preset(row: &[u8; screen::COLS]) -> [u8; 11] {
 
 /// The options screen: each row toward fast text, animations off and SET,
 /// then CANCEL. The game writes `wOptions` only on the way out, so the
-/// cursor's column says what a row is set to.
+/// screen says what a row is set to.
 fn options_key(gb: &mut GameBoy, (x, y): (usize, usize)) -> u8 {
-    for (title, want, toward) in [
-        (&b"TEXT SPEED"[..], &b"FAST"[..], LEFT),
+    const ROWS: [(&[u8], &[u8], u8); 3] = [
+        (b"TEXT SPEED", b"FAST", LEFT),
         (b"ANIMATION", b"OFF", RIGHT),
         (b"STYLE", b"SET", RIGHT),
-    ] {
+    ];
+    let row = screen::row(gb, y);
+    let has = |t: &[u8]| row.windows(t.len()).any(|w| w == t);
+    // Yellow: each setting's value is on its own row, and SOUND and
+    // PRINT stay as they are on the way down to CANCEL.
+    if screen::shows(gb, b"SOUND") {
+        for (title, want, toward) in ROWS {
+            if has(title) {
+                return if has(want) { DOWN } else { toward };
+            }
+        }
+        return if has(b"CANCEL") { A } else { DOWN };
+    }
+    // Red and Blue: the values sit under the title, the cursor on one.
+    for (title, want, toward) in ROWS {
         if screen::find(gb, title).is_some_and(|(_, ty)| ty + 2 == y) {
-            let at = screen::row(gb, y)
-                .windows(want.len())
-                .position(|w| w == want);
+            let at = row.windows(want.len()).position(|w| w == want);
             return if at.is_some_and(|a| a == x + 1) {
                 DOWN
             } else {
@@ -314,7 +365,7 @@ fn options_key(gb: &mut GameBoy, (x, y): (usize, usize)) -> u8 {
         }
     }
     // CANCEL, or a row this revision adds below the three: B leaves.
-    if screen::row(gb, y)[x + 1..].starts_with(b"CANCEL") {
+    if row[x + 1..].starts_with(b"CANCEL") {
         A
     } else {
         B

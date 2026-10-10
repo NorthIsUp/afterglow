@@ -10,6 +10,7 @@ use mizu_core::{GameBoy, GameBoyConfig};
 use super::super::carts::{load, Pilot, Revision};
 use super::super::kanto::Kanto;
 use super::super::pilot::{A, B, DOWN, LEFT, RIGHT, START, UP};
+use super::intro::{Intro, DOOR, PALLET, STEPS};
 use super::nav::Nav;
 use super::{screen, story, Bot, Knobs, Ram};
 
@@ -48,16 +49,16 @@ const MILESTONES: &[&str] = &[
     "hall of fame",
 ];
 
-/// Which milestones the game's RAM says are done (Red and Blue's layout).
-fn reached(gb: &mut GameBoy, seen_maps: &mut [bool; 256]) -> Vec<bool> {
-    let map = gb.peek(0xD35E);
+/// Which milestones the game's RAM says are done.
+fn reached(gb: &mut GameBoy, r: Ram, seen_maps: &mut [bool; 256]) -> Vec<bool> {
+    let map = gb.peek(r.cur_map);
     seen_maps[map as usize] = true;
-    let badges = gb.peek(0xD356);
-    let n = gb.peek(0xD31D).min(20);
-    let parcel = (0..n).any(|i| gb.peek(0xD31E + 2 * u16::from(i)) == 0x46);
-    let dex = story::event(gb, Ram::of(Revision::Red), story::EVENT_GOT_POKEDEX);
+    let badges = gb.peek(r.at(0xD356));
+    let n = gb.peek(r.at(0xD31D)).min(20);
+    let parcel = (0..n).any(|i| gb.peek(r.at(0xD31E) + 2 * u16::from(i)) == 0x46);
+    let dex = story::event(gb, r, story::EVENT_GOT_POKEDEX);
     let mut out = vec![
-        gb.peek(0xD163) > 0,
+        gb.peek(r.party_count) > 0,
         parcel || dex,
         dex,
         seen_maps[0x02],
@@ -97,7 +98,7 @@ fn pokebot_bench() {
     let mut bot = Bot::new(rev, seed, knobs);
     eprintln!("starter {:?}", bot.starter());
     let mut seen_maps = [false; 256];
-    let mut done = reached(&mut gb, &mut seen_maps);
+    let mut done = reached(&mut gb, Ram::of(rev), &mut seen_maps);
     let frames = (hours * 3600.0 * FPS) as u64;
     let t0 = Instant::now();
     let trace = env("POKEBOT_TRACE", "") == "1";
@@ -157,7 +158,7 @@ fn pokebot_bench() {
         if f % 60 != 0 {
             continue;
         }
-        let now = reached(&mut gb, &mut seen_maps);
+        let now = reached(&mut gb, Ram::of(rev), &mut seen_maps);
         let mins = f as f64 / FPS / 60.0;
         for (i, (&n, d)) in now.iter().zip(done.iter_mut()).enumerate() {
             if n && !*d {
@@ -293,4 +294,84 @@ fn shot(gb: &GameBoy, path: &str) {
         out.extend([ch(0), ch(5), ch(10)]);
     }
     std::fs::write(path, out).unwrap();
+}
+
+/// From power-on with blank battery RAM, every step of the intro passes in
+/// order, checked in RAM (`intro.rs`), and the run ends in Pallet Town at
+/// the house door with both names set, inside a frame bound; ten times,
+/// each from a different number of idle frames after power-on, so it does
+/// not depend on timing luck. Every Pokémon ROM `POKEMON_TEST_ROM` names
+/// (a file or a folder) is run.
+#[test]
+fn pokemon_intro_passes_every_step() {
+    const BOUND: u64 = 60 * 60 * 4;
+    let Ok(path) = std::env::var("POKEMON_TEST_ROM") else {
+        eprintln!("POKEMON_TEST_ROM unset; skipping");
+        return;
+    };
+    let shots = std::env::var("POKEBOT_SHOT_DIR").ok();
+    for cart in load(&path, "") {
+        let Pilot::Pokemon(rev) = cart.pilot else {
+            continue;
+        };
+        let r = Ram::of(rev);
+        let mut frames = Vec::new();
+        for offset in 0..10u64 {
+            Intro::forget();
+            let mut gb =
+                GameBoy::from_rom(cart.rom.clone(), None, GameBoyConfig { is_dmg: true }).unwrap();
+            for _ in 0..offset * 37 {
+                gb.clock_for_frame().unwrap();
+            }
+            let mut bot = Bot::new(
+                rev,
+                7 + offset as u32,
+                Knobs {
+                    text_ms: 200,
+                    starter: 0,
+                },
+            );
+            let mut f = 0;
+            while !bot.intro().done && f < BOUND {
+                let b = bot.buttons(&mut gb, f);
+                gb.set_buttons(b);
+                gb.clock_for_frame().unwrap();
+                f += 1;
+            }
+            let intro = bot.intro();
+            let case = format!("{} offset {offset}", cart.name);
+            for (step, at) in STEPS.iter().zip(intro.passed) {
+                assert!(
+                    at.is_some(),
+                    "{case}: {step:?} never passed; {:?} {:?} at {:?}",
+                    intro.passed,
+                    intro.failed,
+                    (gb.peek(r.cur_map), gb.peek(r.x), gb.peek(r.y))
+                );
+            }
+            assert!(
+                intro.passed.windows(2).all(|w| w[0] <= w[1]),
+                "{case}: steps out of order {:?}",
+                intro.passed
+            );
+            assert_eq!(intro.failed, None, "{case}");
+            assert_eq!(gb.peek(r.cur_map), PALLET, "{case}");
+            assert_eq!((gb.peek(r.x), gb.peek(r.y)), DOOR, "{case}");
+            for at in [r.player_name, r.rival_name] {
+                let name = screen::name(&mut gb, at);
+                assert!(name[0].is_ascii_uppercase(), "{case}: name {name:?}");
+            }
+            assert!(f < BOUND, "{case}: {f} frames");
+            frames.push(f);
+            if offset == 0 {
+                if let Some(dir) = &shots {
+                    shot(&gb, &format!("{dir}/door-{rev:?}.ppm"));
+                }
+            }
+        }
+        eprintln!(
+            "{}: 10/10 passed every step; frames to the door {frames:?}",
+            cart.name
+        );
+    }
 }

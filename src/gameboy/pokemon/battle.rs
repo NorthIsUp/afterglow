@@ -176,19 +176,6 @@ impl Battle {
             // A wild battle is worth it for the levels, and only when the
             // lead can hurt it.
             let run = wild && (!grind || damage == 0);
-            #[cfg(test)]
-            if std::env::var("POKEBOT_TRACE_BATTLE").is_ok() {
-                let me = self.ram.at(BATTLE_MON);
-                let them = self.ram.at(ENEMY_MON);
-                eprintln!(
-                    "battle: grind {grind} best {:?} run {run} moves {:?} types {:02x}/{:02x} vs {:02x}/{:02x} moves@{:?} chart {}",
-                    self.best_move(gb),
-                    (0..4).map(|i| gb.peek(me + MOVES + i)).collect::<Vec<_>>(),
-                    gb.peek(me + TYPE1), gb.peek(me + TYPE1 + 1),
-                    gb.peek(them + TYPE1), gb.peek(them + TYPE1 + 1),
-                    self.moves, self.chart.len()
-                );
-            }
             let (want_x, want_item) = if run { (15, 1) } else { (9, 0) };
             let key = if m.x != want_x {
                 if m.x < want_x {
@@ -234,10 +221,6 @@ impl Battle {
             return keys.tap(screen::toward(m, self.worst_move(gb)), GAP);
         }
         // The bag, the party screen or anything else it did not open.
-        #[cfg(test)]
-        if text {
-            eprintln!("battle: backing out of {m:?}\n{}", screen::dump(gb));
-        }
         if text {
             return keys.tap(B, GAP);
         }

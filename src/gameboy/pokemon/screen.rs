@@ -81,6 +81,13 @@ pub fn text_hash(gb: &mut GameBoy) -> u32 {
     h
 }
 
+/// Letters in the text box's rows: text is up even where `wFontLoaded`
+/// says otherwise (Oak's speech in Blue). The overworld's own tiles are
+/// all below the font's.
+pub fn has_text(gb: &mut GameBoy) -> bool {
+    (12 * COLS..ROWS * COLS).any(|i| (0x80..=0xB9).contains(&gb.peek(TILE_MAP + i as u16)))
+}
+
 /// Debug: the whole screen as text.
 #[cfg(test)]
 pub fn dump(gb: &mut GameBoy) -> String {
