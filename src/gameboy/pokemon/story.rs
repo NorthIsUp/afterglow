@@ -161,6 +161,14 @@ impl Story {
             return Some(Goal::Map(ROUTE_1));
         }
         let me = lead(gb, r);
+        let badges = self.badges(gb);
+        // The Super Nerd beside Mt. Moon's fossils keeps the player there
+        // until one is taken, so on that floor it comes before healing.
+        let fossil =
+            badges & 1 != 0 && !has_item(gb, r, DOME_FOSSIL) && !has_item(gb, r, HELIX_FOSSIL);
+        if fossil && gb.peek(r.cur_map) == MT_MOON_B2F {
+            return Some(Goal::Talk((MT_MOON_B2F, 13, 6)));
+        }
         if me.hp * 3 < me.max || !self.can_attack {
             return Some(Goal::Heal);
         }
@@ -172,7 +180,6 @@ impl Story {
                 Goal::Map(VIRIDIAN_MART)
             });
         }
-        let badges = self.badges(gb);
         let [brock, misty] = self.starter.levels(self.rev);
         let (want, grind, gym) = if badges & 1 == 0 {
             (brock, VIRIDIAN_FOREST, Goal::Talk((PEWTER_GYM, 4, 1)))
@@ -184,9 +191,8 @@ impl Story {
         if me.level < want {
             return Some(Goal::Grind(grind));
         }
-        // The Super Nerd beside Mt. Moon's fossils blocks the way on until
-        // one is taken: the Helix Fossil.
-        if badges & 1 != 0 && !has_item(gb, r, DOME_FOSSIL) && !has_item(gb, r, HELIX_FOSSIL) {
+        // Then on to it, through the cave: the Helix Fossil.
+        if fossil {
             return Some(Goal::Talk((MT_MOON_B2F, 13, 6)));
         }
         if me.hp < me.max {
