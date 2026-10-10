@@ -134,6 +134,9 @@ mod plasma;
 mod podracer;
 mod pov;
 mod rain;
+// gba's for now; gameboy's mod.rs is the same code and moves onto it next.
+#[cfg(feature = "gba")]
+mod rgb555;
 mod rotate;
 mod sakura;
 mod satori;

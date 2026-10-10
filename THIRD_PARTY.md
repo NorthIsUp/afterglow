@@ -130,7 +130,8 @@ images). It is the subset upstream's CMake builds for a GBA-only
 would have generated, and `include/mgba/core/blip_buf.h` (below). MPL-2.0 is copyleft per file: these files stay MPL-2.0 and their
 source is this directory; the rest of afterglow is not affected, which is
 why the MIT image can carry it. Of the libraries mGBA bundles, only `inih`
-(BSD-3-Clause, Ben Hoyt, its notice in `src/third-party/inih/ini.c`) is
+(BSD-3-Clause, Ben Hoyt: `src/third-party/inih/LICENSE.txt`, upstream's,
+and `/licenses/inih-BSD-3-Clause.txt` in both images) is
 kept, with two public-domain pieces of mGBA's own `src/util`: MurmurHash3
 (Austin Appleby) in `hash.c` and Gary S. Brown's CRC-32 table in `crc32.c`.
 `blip_buf`, its audio resampler, is LGPL-2.1 and left out: its header is

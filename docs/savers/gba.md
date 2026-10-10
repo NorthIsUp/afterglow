@@ -71,12 +71,13 @@ gets any game out of a spot the walk cannot leave.
   view; it parks when another saver is showing and the game waits where it
   was. The render thread only takes the last finished view, and skips it if
   the thread is writing it.
-- An mGBA abort lands on a setjmp boundary in `gba/afterglow_gba.c`
-  (`abort` is defined to it), and a panic in the pilot or the view is
-  caught at the frame boundary: that ROM is dropped for the next and not
-  tried again. A ROM mGBA will not load is skipped the same way; with none
-  left, the saver shows static. A segfault inside mGBA would still end the
-  process; it is the most tested part of the stack.
+- An mGBA abort, or a SIGSEGV or SIGBUS inside mGBA, lands on a setjmp
+  boundary in `gba/afterglow_gba.c` (`abort` is defined to it; the signals
+  have a handler that chains to the previous one outside the boundary), and
+  a panic in the pilot or the view is caught at the frame boundary: that ROM
+  is dropped for the next and not tried again. A ROM mGBA will not load is
+  skipped the same way; with none left, the saver shows static. A core that
+  hangs instead of faulting stalls only the `gba` thread.
 - The view is scaled straight onto the panel's pixels, only the rows that
   changed, as `gameboy` and `doom` do: 284 GBA pixels wide at 16:9, 512 on
   pine's 3.2:1.

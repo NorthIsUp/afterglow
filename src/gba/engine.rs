@@ -6,9 +6,10 @@
 //! `try_lock`s the last finished view, so a slow frame here is a stale frame
 //! there, never a late one.
 //!
-//! A core abort is caught in C (`gba/afterglow_gba.c`) and a panic here at
-//! the frame boundary: either way that cartridge is dropped and the next one
-//! boots. One that will not boot is skipped for the life of the process.
+//! A core abort or segfault is caught in C (`gba/afterglow_gba.c`) and a
+//! panic here at the frame boundary: either way that cartridge is dropped
+//! and the next one boots. One that will not boot is skipped for the life of
+//! the process.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -108,7 +109,6 @@ pub struct Session {
     pokemon: Option<Pokemon>,
     pilot: Pilot,
     keys: u32,
-    pub frames: u64,
 }
 
 impl Session {
@@ -121,7 +121,6 @@ impl Session {
             pokemon: cart.pokemon,
             pilot: Pilot::new(cart.pokemon, seed),
             keys: 0,
-            frames: 0,
         })
     }
 
@@ -129,14 +128,10 @@ impl Session {
     /// if the core aborted.
     pub fn step(&mut self, width: usize, out: &mut [u16]) -> bool {
         #[cfg(test)]
-        assert!(
-            !PANIC_NEXT.swap(false, std::sync::atomic::Ordering::Relaxed),
-            "test-injected panic"
-        );
+        assert!(!PANIC_NEXT.replace(false), "test-injected panic");
         if !self.core.frame(self.keys) {
             return false;
         }
-        self.frames += 1;
         let overworld = self
             .pokemon
             .is_some_and(|p| self.core.read32(main_struct(p)) != 0);
@@ -151,9 +146,12 @@ impl Session {
     }
 }
 
-/// Makes the next frame panic, for the crash test.
 #[cfg(test)]
-pub static PANIC_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+thread_local! {
+    /// Makes this thread's next frame panic, for the crash test; per thread
+    /// so a test stepping a session alongside it never takes the panic.
+    pub static PANIC_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 pub struct Runner {
     files: Vec<PathBuf>,
