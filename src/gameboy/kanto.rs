@@ -68,6 +68,8 @@ pub struct Header {
     /// ROM offset of the map's blocks, `w * h` bytes.
     pub blocks: usize,
     pub border: u8,
+    /// ROM offset of the map's object data: border block, then warps.
+    pub objects: usize,
     /// Direction flag, map, offset along the edge in blocks.
     pub links: Vec<(u8, u8, i32)>,
 }
@@ -90,6 +92,8 @@ pub struct Tileset {
     pub blocks: Box<[u8]>,
     pub tiles: Box<[u8]>,
     pub walkable: [bool; 256],
+    /// The tile wild Pokémon hide in, `0xFF` for none.
+    pub grass: u8,
 }
 
 pub const TILES: usize = 0x80;
@@ -139,6 +143,7 @@ impl Kanto {
             w: i32::from(b(2)),
             blocks: at(bank, word(rom, bank, ptr + 3)),
             border: byte(rom, bank, objects),
+            objects: at(bank, objects),
             links,
         })
     }
@@ -216,27 +221,37 @@ impl Kanto {
                     .collect(),
                 tiles,
                 walkable,
+                grass: b(10),
             },
         );
     }
 
-    /// Whether the player can stand on square `(sx, sy)` of a placed map:
-    /// the lower-left tile of the square is in its tileset's walkable list,
-    /// which is the tile the game itself tests.
-    pub fn walkable(&self, rom: &[u8], p: &Placed, sx: i32, sy: i32) -> bool {
+    /// The tile the game tests at square `(sx, sy)` of a placed map: the
+    /// square's lower-left.
+    pub fn tile(&self, rom: &[u8], p: &Placed, sx: i32, sy: i32) -> Option<u8> {
         if sx < 0 || sy < 0 || sx >= p.w * 2 || sy >= p.h * 2 {
-            return false;
+            return None;
         }
-        let Some(ts) = self.tilesets.get(&p.tileset) else {
-            return false;
-        };
+        let ts = self.tilesets.get(&p.tileset)?;
         let block = rom
             .get(p.blocks + (sy / 2 * p.w + sx / 2) as usize)
             .copied()
             .unwrap_or(0);
-        let tile = ts.blocks
-            [block as usize * 16 + ((sy % 2) * 2 + 1) as usize * 4 + (sx % 2 * 2) as usize];
-        ts.walkable[tile as usize]
+        Some(
+            ts.blocks
+                [block as usize * 16 + ((sy % 2) * 2 + 1) as usize * 4 + (sx % 2 * 2) as usize],
+        )
+    }
+
+    /// Whether the player can stand on square `(sx, sy)` of a placed map:
+    /// its tile is in its tileset's walkable list.
+    pub fn walkable(&self, rom: &[u8], p: &Placed, sx: i32, sy: i32) -> bool {
+        let Some(tile) = self.tile(rom, p, sx, sy) else {
+            return false;
+        };
+        self.tilesets
+            .get(&p.tileset)
+            .is_some_and(|ts| ts.walkable[tile as usize])
     }
 }
 
