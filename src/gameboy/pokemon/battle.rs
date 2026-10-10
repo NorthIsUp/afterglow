@@ -217,18 +217,21 @@ impl Battle {
             .filter(|_| wild && catch.contains(&enemy));
         let item = potion.or(ball);
         // A trainer's Pokémon the one fighting cannot hurt: in with one
-        // who can.
+        // who can. Scoring the party is the costly read, so only on the
+        // screens that ask.
         let active = gb.peek(PLAYER_MON_NUMBER);
-        let switch = (!wild && damage == 0)
-            .then(|| self.best_member(gb, active))
-            .flatten()
-            .filter(|&(_, d)| d > 0);
+        let switch = |gb: &mut GameBoy| {
+            (!wild && damage == 0)
+                .then(|| self.best_member(gb, active))
+                .flatten()
+                .filter(|&(_, d)| d > 0)
+        };
         if screen::shows(gb, b"FIGHT") && screen::shows(gb, b"RUN") {
             let (want_x, want_item) = if item.is_some() {
                 (9, 1)
             } else if run {
                 (15, 1)
-            } else if switch.is_some() {
+            } else if switch(gb).is_some() {
                 (15, 0)
             } else {
                 (9, 0)
@@ -272,7 +275,7 @@ impl Battle {
         if screen::shows(gb, b"Use item") {
             return keys.tap(screen::toward(m.item, active), GAP);
         }
-        if let Some((s, _)) = switch.filter(|_| screen::shows(gb, b"Choose a")) {
+        if let Some((s, _)) = screen::shows(gb, b"Choose a").then(|| switch(gb)).flatten() {
             return keys.tap(screen::toward(m.item, s), GAP);
         }
         if screen::shows(gb, b"YES") {
