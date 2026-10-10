@@ -94,6 +94,8 @@
 
 mod arcade;
 mod ascii_rest;
+#[cfg(feature = "mac")]
+mod battlechess;
 #[cfg(test)]
 mod bench;
 mod chess;

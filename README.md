@@ -45,10 +45,11 @@ docker pull ghcr.io/northisup/afterglow:latest   # linux/arm64; also :sha-<commi
 
 `:latest-gpl` (and `:sha-<commit>-gpl`) is the same image plus the
 [`doom`](docs/savers/doom.md) saver with Freedoom and the
-[`micropolis`](docs/savers/micropolis.md) saver. It compiles in GPL code, so that
-image is GPL-3.0 as a whole; the default image is MIT. Its older `-doom` tags
-still point at it. Micropolis is a registered trademark of Micropolis GmbH,
-licensed here as a courtesy of the owner.
+[`micropolis`](docs/savers/micropolis.md) saver, and the
+[`battlechess`](docs/savers/battlechess.md) saver's Mac emulator. It compiles in
+GPL code, so that image is GPL-3.0 as a whole; the default image is MIT. Its
+older `-doom` tags still point at it. Micropolis is a registered trademark of
+Micropolis GmbH, licensed here as a courtesy of the owner.
 
 It needs a node with a monitor on HDMI, `/dev/dri/card0`, and a privileged
 container. [`examples/deployment.yaml`](examples/deployment.yaml) is a minimal
@@ -167,6 +168,7 @@ them live — see [Live settings](docs/mirror.md#live-settings-config).
 | [`doom`](docs/savers/doom.md)                    | Freedoom on autopilot, one widescreen game on a random map, its field of view sized to the panel. **Only in the `-gpl` image** (see the page).                                                                                          |
 | [`micropolis`](docs/savers/micropolis.md)        | Micropolis, the open-source SimCity, built by an AI mayor from empty land, disasters and all, under a slow camera that fills the panel. **Only in the `-gpl` image** (see the page).                                                    |
 | [`gameboy`](docs/savers/gameboy.md)              | A Game Boy emulator playing free homebrew on autopilot, the screen at full height and the game's world carried out to the sides; mount your own ROM, and Pokémon Red, Blue or Yellow get a bot that plays forever.                      |
+| [`battlechess`](docs/savers/battlechess.md)      | Battle Chess on an emulated Mac Plus, the Mac playing both sides game after game, capture fights and all; from your own ROM, System and game disk. **Only in the `-gpl` image** (see the page).                                         |
 
 ### ascii.rest halftone scenes
 

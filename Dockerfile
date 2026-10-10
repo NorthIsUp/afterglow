@@ -35,8 +35,9 @@ RUN cargo build --release --locked
 # --- the GPL variant: doomgeneric and Micropolis compiled in, so GPL-3.0 as a
 # whole (doomgeneric is GPL-2.0-or-later, which goes along with GPL-3.0) ---
 # `docker build --target gpl`, published as `-gpl` and, as before, `-doom`. The
-# default target below never copies doom/ or micropolis/, so the MIT image
-# cannot pick up a byte of either.
+# default target below never copies doom/, micropolis/ or mac/, so the MIT
+# image cannot pick up a byte of any. `mac-engine` (Mini vMac, GPL-2.0 only)
+# is a separate program beside the screensaver, never linked into it.
 FROM rust:1-alpine AS build-gpl
 # gcc for doomgeneric, g++ for Micropolis; g++ brings libstdc++.a, which
 # build.rs links statically so the binary stays one static file.
@@ -48,7 +49,8 @@ COPY vendor ./vendor
 COPY gameboy ./gameboy
 COPY doom ./doom
 COPY micropolis ./micropolis
-RUN cargo build --release --locked --features doom,micropolis
+COPY mac ./mac
+RUN cargo build --release --locked --features doom,micropolis,mac
 
 FROM alpine:3 AS freedoom
 RUN apk add --no-cache curl
@@ -57,11 +59,13 @@ RUN /freedoom.sh /out
 
 FROM scratch AS gpl
 COPY --from=build-gpl /src/target/release/screensaver /screensaver
+COPY --from=build-gpl /src/target/release/mac-engine /mac-engine
 COPY --from=freedoom /out/freedoom1.wad /freedoom1.wad
 COPY --from=freedoom /out/COPYING.txt /licenses/freedoom-COPYING.txt
 COPY doom/doomgeneric/LICENSE /licenses/doomgeneric-GPL-2.0.txt
 COPY micropolis/COPYING /licenses/micropolis-GPL-3.0.txt
 COPY micropolis/MicropolisPublicNameLicense.txt /licenses/micropolis-public-name-license.txt
+COPY mac/minivmac/COPYING.txt /licenses/minivmac-GPL-2.0.txt
 COPY LICENSE /licenses/afterglow-MIT.txt
 ENTRYPOINT ["/screensaver"]
 

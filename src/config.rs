@@ -280,6 +280,10 @@ pub fn help(key: &str) -> Option<&'static str> {
             "mean minutes between a fire, flood or earthquake; 0 for none"
         }
         "MICROPOLIS_BUNDLED_PCT" => "chance a new city is one of the release's sample cities",
+        "MAC_ROM" => "the Mac Plus ROM file; only its first 128 KiB are read",
+        "MAC_SYSTEM" => "the boot disk image: a raw HFS volume with a System that runs on a Plus",
+        "MAC_DISK" => "the Battle Chess disk image, a raw HFS volume",
+        "BATTLECHESS_TINT" => "the 1-bit screen's colours: paper, white, amber, green or blue",
         "GAMEBOY_ROM" => "a .gb/.gbc file or a folder of them; empty plays the bundled homebrew",
         "GAMEBOY_SAV" => "battery save to start a single ROM from; read once, never written",
         "GAMEBOY_WIDE" => "fill the sides with more of the game's world; off is a glow",

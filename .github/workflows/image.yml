@@ -195,19 +195,21 @@ jobs:
       # The binary must stay one static file under musl, C++ runtime and
       # all: a NEEDED entry means libstdc++ (or anything) linked dynamically,
       # which FROM scratch cannot satisfy.
-      - name: clippy, tests, render check, static link (--features doom,micropolis)
+      - name: clippy, tests, render check, static link (--features doom,micropolis,mac)
         run: |
           docker run --rm -v "$PWD":/src -w /src rust:1-alpine sh -eu -c '
             apk add --no-cache musl-dev gcc g++ binutils curl >/dev/null
             rustup component add clippy >/dev/null
             wad="$PWD/$(tools/freedoom.sh)"
-            f=doom,micropolis
+            f=doom,micropolis,mac
             cargo clippy --release --locked --all-targets --features $f -- -D warnings
-            DOOM_TEST_WAD="$wad" cargo test --release --locked --features $f
             cargo build --release --locked --features $f
-            if readelf -d target/release/screensaver | grep NEEDED; then
-              echo "screensaver links a shared library"; exit 1
-            fi
+            DOOM_TEST_WAD="$wad" cargo test --release --locked --features $f
+            for b in screensaver mac-engine; do
+              if readelf -d target/release/$b | grep NEEDED; then
+                echo "$b links a shared library"; exit 1
+              fi
+            done
             # Paced, so the engines (wall-clock, own threads) get to draw.
             SAVER=doom SAVER_HTTP=off SAVER_DUMP=/tmp/dump-doom SAVER_DUMP_FRAMES=90 \
               SAVER_DUMP_EVERY=1 SAVER_DUMP_PACED=1 DOOM_WAD="$wad" ./target/release/screensaver
@@ -218,7 +220,10 @@ jobs:
               ./target/release/screensaver
             moved=$(md5sum /tmp/dump-mp/frame-000[1-8]?.ppm | sort -u -k1,1 | wc -l)
             [ "$moved" -gt 1 ] || { echo "micropolis: frames are all identical"; exit 1; }
-            ls -l target/release/screensaver
+            # No ROM in CI: the card naming the missing files, damage-checked.
+            SAVER=battlechess SAVER_HTTP=off SAVER_DUMP=/tmp/dump-bc SAVER_DUMP_FRAMES=5 \
+              ./target/release/screensaver
+            ls -l target/release/screensaver target/release/mac-engine
           '
 
       - id: build

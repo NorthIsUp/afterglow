@@ -42,8 +42,8 @@ description = "Run clippy on the Doom build"
 run         = "cargo clippy --release --locked --all-targets --features doom -- -D warnings"
 
 [tasks.build-gpl]
-description = "Build release with Doom and Micropolis compiled in, the -gpl image's binary (GPL as a whole)"
-run         = "cargo build --release --locked --features doom,micropolis"
+description = "Build release with Doom, Micropolis and mac-engine, the -gpl image's binaries (GPL as a whole)"
+run         = "cargo build --release --locked --features doom,micropolis,mac"
 
 [tasks.test-micropolis]
 description = "Run tests with Micropolis compiled in (needs a C++ compiler)"
@@ -93,3 +93,7 @@ usage       = '''
 arg "[savers]..." help="Savers to render; none renders every saver and the tour"
 '''
 run         = "uv run tools/media.py"
+
+[tasks.test-mac]
+description = "Run tests with the Mac compiled in; MAC_TEST_ROM/SYSTEM/DISK (your own files) add the boot test"
+run         = "cargo build --release --locked --features mac && cargo test --release --locked --features mac"

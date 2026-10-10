@@ -12,6 +12,15 @@ license = "MIT"
 name = "screensaver"
 path = "src/main.rs"
 
+# Mini vMac (GPL-2.0 only) as a process of its own, which the `battlechess`
+# saver starts: GPL-2.0-only code cannot be linked into the GPL-3.0 `-gpl`
+# binary, so the two only share a pipe. build.rs links the emulator into this
+# binary alone.
+[[bin]]
+name = "mac-engine"
+path = "mac/engine.rs"
+required-features = ["mac"]
+
 [dependencies]
 # Talks to /dev/dri/card0 with raw ioctls — no libdrm, so the binary links
 # nothing outside libc and a musl build is fully static (hence FROM scratch).
@@ -41,6 +50,10 @@ doom = ["dep:cc"]
 # compiled in from MicropolisCore. Same deal as doom, but C++: the GPL image
 # is the build with both.
 micropolis = ["dep:cc"]
+# `battlechess`: Battle Chess on an emulated Mac Plus, from the deployment's
+# own ROM and disks. Builds `mac-engine` (Mini vMac, GPL-2.0, C) beside the
+# screensaver; the `-gpl` image ships both.
+mac = ["dep:cc"]
 
 [build-dependencies]
 cc = { version = "1", optional = true, features = ["parallel"] }

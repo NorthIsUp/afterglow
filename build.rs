@@ -1,5 +1,5 @@
-//! A no-op unless `--features doom` or `micropolis`, so the default build
-//! needs no C or C++ compiler.
+//! A no-op unless `--features doom`, `micropolis` or `mac`, so the default
+//! build needs no C or C++ compiler.
 //!
 //! With it, doomgeneric, `doom/afterglow_doom.c` and the autopilot
 //! (`doom/autopilot.c`, `doom/ap_nav.c`, `doom/ap_effect.c`) are compiled into one static library. `exit` is defined to `dg_exit`, which is how the engine's
@@ -11,6 +11,35 @@ fn main() {
     doom();
     #[cfg(feature = "micropolis")]
     micropolis();
+    #[cfg(feature = "mac")]
+    mac();
+}
+
+/// Mini vMac's Mac Plus build and `mac/afterglow_mac.c`, its headless
+/// platform layer, as one static library linked into `mac-engine` and
+/// nothing else: cc's own link lines would reach every binary.
+#[cfg(feature = "mac")]
+fn mac() {
+    println!("cargo::rerun-if-changed=mac");
+    let mut sources: Vec<std::path::PathBuf> = [
+        "GLOBGLUE", "IWMEMDEV", "KBRDEMDV", "M68KITAB", "MINEM68K", "MOUSEMDV", "PROGMAIN",
+        "ROMEMDEV", "RTCEMDEV", "SCCEMDEV", "SCRNEMDV", "SCSIEMDV", "SONYEMDV", "VIAEMDEV",
+    ]
+    .iter()
+    .map(|f| format!("mac/minivmac/{f}.c").into())
+    .collect();
+    sources.push("mac/afterglow_mac.c".into());
+    cc::Build::new()
+        .files(&sources)
+        .include("mac/minivmac/cfg")
+        .include("mac/minivmac")
+        .opt_level(2)
+        .warnings(false)
+        .flag_if_supported("-w")
+        .cargo_metadata(false)
+        .compile("minivmac");
+    let out = std::env::var("OUT_DIR").unwrap();
+    println!("cargo::rustc-link-arg-bin=mac-engine={out}/libminivmac.a");
 }
 
 /// The Micropolis engine and `micropolis/afterglow_micropolis.cpp`, its C API
