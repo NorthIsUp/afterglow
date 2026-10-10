@@ -109,6 +109,7 @@ mod doodles;
 mod doom;
 mod dump;
 mod dvd;
+mod engine_slot;
 mod fire;
 mod font;
 mod fractal;

@@ -9,7 +9,7 @@
 //! frame boundary: that cartridge is dropped and the next one boots.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use mizu_core::{GameBoy, GameBoyConfig};
@@ -18,6 +18,7 @@ use super::carts::{self, Cart, Pilot, DMG_GREYS};
 use super::pilot::Driver;
 use super::pokemon::Knobs;
 use super::view::{Composer, Mode};
+use crate::engine_slot::{self, pace, Slot, View};
 
 pub const H: usize = 144;
 pub const SCREEN_W: usize = 160;
@@ -50,30 +51,9 @@ impl Want {
     }
 }
 
-/// The latest finished view. `blank` frames have nothing to show (no
-/// cartridge would boot) and the saver draws static.
-struct Frame {
-    pix: Box<[u16]>,
-    w: usize,
-    seq: u32,
-    blank: bool,
-}
-
-struct Ctl {
-    owner: u64,
-    rev: u64,
-    want: Option<Want>,
-}
-
-pub struct Engine {
-    ctl: Mutex<Ctl>,
-    wake: Condvar,
-    frame: Mutex<Frame>,
-}
-
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+/// The latest finished view. A blank one has nothing to show (no cartridge
+/// would boot) and the saver draws static.
+pub struct Engine(Slot<Want, View<u16, ()>>);
 
 impl Engine {
     pub fn get() -> &'static Self {
@@ -83,67 +63,27 @@ impl Engine {
                 .name("gameboy".into())
                 .spawn(|| run(Engine::get()))
                 .expect("spawning the gameboy thread");
-            Engine {
-                ctl: Mutex::new(Ctl {
-                    owner: 0,
-                    rev: 0,
-                    want: None,
-                }),
-                wake: Condvar::new(),
-                frame: Mutex::new(Frame {
-                    pix: vec![0; MAX_W * H].into_boxed_slice(),
-                    w: 0,
-                    seq: 0,
-                    blank: true,
-                }),
-            }
+            Engine(Slot::new(View::new(MAX_W, H), ()))
         })
-    }
-
-    pub fn claim(&self, id: u64, want: Want) {
-        let mut c = lock(&self.ctl);
-        c.owner = id;
-        c.rev += 1;
-        c.want = Some(want);
-        self.wake.notify_one();
-    }
-
-    /// Park the engine, unless another saver has claimed it since.
-    pub fn release(&self, id: u64) {
-        let mut c = lock(&self.ctl);
-        if c.owner == id {
-            c.owner = 0;
-        }
     }
 
     /// Copy the view into `dst` if it moved on since `seen`, never waiting.
     /// Returns the new sequence number and the view's width, `None` for
     /// nothing to show.
-    pub fn latest(&self, seen: u32, dst: &mut [u16]) -> Option<(u32, Option<usize>)> {
-        let f = self.frame.try_lock().ok()?;
-        if f.seq == seen {
-            return None;
-        }
-        if f.blank {
-            return Some((f.seq, None));
-        }
-        let n = f.w * H;
-        dst[..n].copy_from_slice(&f.pix[..n]);
-        Some((f.seq, Some(f.w)))
+    pub fn latest(&self, seen: u32, dst: &mut [u16]) -> Option<(u32, Option<(usize, ())>)> {
+        self.0.peek()?.read(seen, dst)
+    }
+}
+
+impl engine_slot::Engine for Engine {
+    type Want = Want;
+
+    fn claim(&self, id: u64, want: Want) {
+        self.0.claim(id, want);
     }
 
-    fn publish(&self, view: &[u16], w: usize) {
-        let mut f = lock(&self.frame);
-        f.pix[..w * H].copy_from_slice(&view[..w * H]);
-        f.w = w;
-        f.blank = false;
-        f.seq = f.seq.wrapping_add(1);
-    }
-
-    fn blank(&self) {
-        let mut f = lock(&self.frame);
-        f.blank = true;
-        f.seq = f.seq.wrapping_add(1);
+    fn release(&self, id: u64) {
+        self.0.release(id);
     }
 }
 
@@ -361,20 +301,15 @@ fn run(e: &Engine) {
     let mut want: Option<Want> = None;
     let mut next = Instant::now();
     loop {
-        let w = {
-            let mut c = lock(&e.ctl);
-            while c.owner == 0 || c.want.is_none() {
-                c = e
-                    .wake
-                    .wait(c)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut claimed = None;
+        {
+            let (c, parked) = e.0.wait(|_| false);
+            if parked {
                 next = Instant::now();
             }
-            let changed = c.rev != rev;
-            rev = c.rev;
-            c.want.clone().filter(|_| changed)
-        };
-        if let Some(w) = w {
+            c.take(&mut rev, &mut claimed);
+        }
+        if let Some(w) = claimed {
             r.take(want.as_ref(), &w);
             want = Some(w);
         }
@@ -387,16 +322,10 @@ fn run(e: &Engine) {
             continue;
         }
         if r.frame(w) {
-            e.publish(&r.view, w.width);
+            e.0.frame().publish(&r.view, w.width, ());
         } else {
-            e.blank();
+            e.0.frame().blank();
         }
-        next += FRAME;
-        let now = Instant::now();
-        match next.checked_duration_since(now) {
-            Some(d) => std::thread::sleep(d),
-            None if now - next > Duration::from_millis(250) => next = now,
-            None => {}
-        }
+        pace(&mut next, FRAME);
     }
 }

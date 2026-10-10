@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use super::*;
@@ -165,7 +166,7 @@ fn without_a_wad_it_is_static_and_never_allocates() {
     let (p, mut d) = build(640, 400, 100, "/nonexistent.wad", &knobs(0, 100));
     let mut buf = vec![0u32; p.buf_len()];
     saver::frame(&mut d, &mut buf, &p);
-    assert!(!d.engaged);
+    assert!(d.claim.engine.is_none());
     let n = allocs_during(|| {
         for _ in 0..20 {
             saver::frame(&mut d, &mut buf, &p);

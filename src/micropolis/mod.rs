@@ -16,22 +16,17 @@ mod mayor;
 mod power;
 mod tiles;
 
-use std::io::Write as _;
-use std::sync::atomic::{AtomicU64, Ordering};
-
+use crate::engine_slot::Claim;
 use crate::grid::{pixel_aspect, Cell, Grid};
 use crate::saver::Saver;
 use crate::surface::{Panel, Surface};
 use crate::{env_num, font, glyph, saver_seed};
+use std::io::Write as _;
 
 use cities::Name;
 use engine::{Engine, Stats, Want, CELLS};
 use mayor::{H, W};
 use tiles::{is_clear, is_water, COUNT};
-
-/// Each saver instance's claim on the engine; see `doom`'s for why not a
-/// pointer.
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 const UNDRAWN: u16 = u16::MAX;
 const HUD_MAX: usize = 64;
@@ -43,11 +38,7 @@ const MONTHS: [&str; 12] = [
 pub struct Micropolis {
     grid: Grid,
     palette: Vec<u32>,
-    id: u64,
-    /// Taken by the first `render`: the mirror builds savers just to read
-    /// their knobs, and that must not claim the engine.
-    want: Option<Want>,
-    engaged: bool,
+    claim: Claim<Engine>,
     panel: (usize, usize),
     /// A tile's size on the panel, and every tile at that size.
     tw: usize,
@@ -122,9 +113,7 @@ impl Micropolis {
         let mut m = Self {
             grid: Grid::with_aspect(panel, tw, (th * 100 / aspect).max(1), aspect),
             palette: tiles::means(),
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-            want: Some(want),
-            engaged: false,
+            claim: Claim::new(Some(want)),
             panel: (panel.w, panel.h),
             tw,
             th,
@@ -416,11 +405,7 @@ impl std::fmt::Display for Thousands {
 
 impl Saver for Micropolis {
     fn render(&mut self, s: &mut Surface<'_>) {
-        if let Some(w) = self.want.take() {
-            Engine::get().claim(self.id, w);
-            self.engaged = true;
-        }
-        let fresh = self.engaged && self.take_map();
+        let fresh = self.claim.engine(Engine::get).is_some() && self.take_map();
         self.drift();
         let cam = (self.cam.0.round() as i32, self.cam.1.round() as i32);
         // The lightning bolt over an unpowered zone blinks once a second.
@@ -492,14 +477,6 @@ impl Micropolis {
             for tx in (cx + x) / tw..=((cx + x + w).saturating_sub(1) / tw).min(W as usize - 1) {
                 self.drawn[tx * H as usize + ty] = UNDRAWN;
             }
-        }
-    }
-}
-
-impl Drop for Micropolis {
-    fn drop(&mut self) {
-        if self.engaged {
-            Engine::get().release(self.id);
         }
     }
 }

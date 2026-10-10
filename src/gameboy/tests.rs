@@ -79,7 +79,7 @@ fn views_scale_onto_the_panel_and_report_exactly_what_moved() {
             let (vw, ..) = layout(&p, aspect);
             GameBoySaver::build(&p, aspect, want(vw, Mode::Frame))
         });
-        g.want = None;
+        g.claim.want = None;
         g.shown = true;
         let vw = g.view.width();
         let mut rng = 3u32;
@@ -418,7 +418,7 @@ fn bench_engine() {
 fn bench_blit() {
     let p = Panel::new(1920, 1080, 1920);
     let mut g = with_test_aspect(180, || GameBoySaver::build(&p, 180, want(461, Mode::Wide)));
-    g.want = None;
+    g.claim.want = None;
     g.shown = true;
     let mut buf = vec![0u32; p.buf_len()];
     let mut rng = 1u32;

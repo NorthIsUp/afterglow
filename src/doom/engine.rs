@@ -11,10 +11,12 @@
 //! the process, so the engine is marked dead and the saver shows static.
 
 use std::ffi::{c_char, c_int, CString};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex, OnceLock};
+#[cfg(test)]
+use std::sync::atomic::Ordering;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use crate::engine_slot::{self, pace, Slot, View};
 use crate::next_rand;
 
 pub const H: usize = 200;
@@ -32,23 +34,6 @@ extern "C" {
     fn dgx_tick(ms: u32) -> c_int;
     fn dgx_frame(width: *mut c_int, palette: *mut c_int) -> *const u8;
     fn dgx_fault() -> c_int;
-}
-
-/// The latest finished frame. `seq` moves on every change, blanking included;
-/// a blank frame has nothing to show and the saver draws static.
-pub struct Frame {
-    pix: Box<[u8]>,
-    w: usize,
-    pal: u8,
-    seq: u32,
-    blank: bool,
-}
-
-impl Frame {
-    fn blank(&mut self) {
-        self.blank = true;
-        self.seq = self.seq.wrapping_add(1);
-    }
 }
 
 /// What the showing saver wants. Written by the render thread on a switch,
@@ -69,31 +54,12 @@ pub struct Want {
     pub light: c_int,
 }
 
-struct Ctl {
-    /// The saver the engine runs for; 0 parks the thread.
-    owner: u64,
-    /// Bumped per claim that should start a new map.
-    gen: u64,
-    /// Bumped per claim at all, so the engine thread re-reads `want`.
-    rev: u64,
-    want: Option<Want>,
-    released: Option<Instant>,
-    #[cfg(test)]
-    fault: bool,
-}
+/// A blank view has nothing to show and the saver draws static; the tag is
+/// the palette.
+type Frame = View<u8, u8>;
 
-pub struct Engine {
-    ctl: Mutex<Ctl>,
-    wake: Condvar,
-    frame: Mutex<Frame>,
-    dead: AtomicBool,
-}
-
-/// A poisoned lock here means a panic on the engine thread, which aborts the
-/// process anyway (`panic = "abort"`); in tests, keep going with the data.
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+/// `x` is set by a claim that should start a new map.
+pub struct Engine(Slot<Want, Frame, bool>);
 
 impl Engine {
     pub fn get() -> &'static Self {
@@ -103,53 +69,8 @@ impl Engine {
                 .name("doom".into())
                 .spawn(|| run(Engine::get()))
                 .expect("spawning the doom thread");
-            Engine {
-                ctl: Mutex::new(Ctl {
-                    owner: 0,
-                    gen: 0,
-                    rev: 0,
-                    want: None,
-                    released: None,
-                    #[cfg(test)]
-                    fault: false,
-                }),
-                wake: Condvar::new(),
-                frame: Mutex::new(Frame {
-                    pix: vec![0; MAX_W * H].into_boxed_slice(),
-                    w: 0,
-                    pal: 0,
-                    seq: 0,
-                    blank: true,
-                }),
-                dead: AtomicBool::new(false),
-            }
+            Engine(Slot::new(View::new(MAX_W, H), false))
         })
-    }
-
-    /// Run the engine for saver `id`. A switch to `doom` starts a new map and
-    /// blanks the frame so the last showing's map does not flash up; the same
-    /// saver rebuilt for a knob change keeps playing.
-    pub fn claim(&self, id: u64, want: Want) {
-        let mut c = lock(&self.ctl);
-        let rebuilt = c.released.is_some_and(|t| t.elapsed() < REBUILD);
-        if !rebuilt {
-            c.gen += 1;
-            lock(&self.frame).blank();
-        }
-        c.owner = id;
-        c.rev += 1;
-        c.want = Some(want);
-        c.released = None;
-        self.wake.notify_one();
-    }
-
-    /// Park the engine, unless another saver has claimed it since.
-    pub fn release(&self, id: u64) {
-        let mut c = lock(&self.ctl);
-        if c.owner == id {
-            c.owner = 0;
-            c.released = Some(Instant::now());
-        }
     }
 
     /// Copy the frame into `dst` if it moved on since `seen`. Never waits: a
@@ -157,26 +78,37 @@ impl Engine {
     /// sequence number, and the frame's width and palette, or `None` when
     /// there is nothing to show.
     pub fn latest(&self, seen: u32, dst: &mut [u8]) -> Option<(u32, Option<(usize, u8)>)> {
-        let f = self.frame.try_lock().ok()?;
-        if f.seq == seen {
-            return None;
-        }
-        if f.blank {
-            return Some((f.seq, None));
-        }
-        let n = f.w * H;
-        dst[..n].copy_from_slice(&f.pix[..n]);
-        Some((f.seq, Some((f.w, f.pal))))
+        self.0.peek()?.read(seen, dst)
     }
 
     pub fn dead(&self) -> bool {
-        self.dead.load(Ordering::Relaxed)
+        self.0.dead()
     }
 
     /// Make the engine hit `I_Error` on its next tic.
     #[cfg(test)]
     pub fn fault(&self) {
-        lock(&self.ctl).fault = true;
+        self.0.fault();
+    }
+}
+
+impl engine_slot::Engine for Engine {
+    type Want = Want;
+
+    /// A switch to `doom` starts a new map and blanks the frame so the last
+    /// showing's map does not flash up; the same saver rebuilt for a knob
+    /// change keeps playing.
+    fn claim(&self, id: u64, want: Want) {
+        self.0.claim_with(id, want, |c| {
+            if c.released.is_none_or(|t| t.elapsed() >= REBUILD) {
+                c.x = true;
+                self.0.frame().blank();
+            }
+        });
+    }
+
+    fn release(&self, id: u64) {
+        self.0.release(id);
     }
 }
 
@@ -191,8 +123,8 @@ impl Runner<'_> {
     fn check(&self, rc: c_int) -> bool {
         if rc < 0 {
             eprintln!("[screensaver] doom: the engine hit an error; showing static");
-            self.e.dead.store(true, Ordering::Relaxed);
-            lock(&self.e.frame).blank();
+            self.e.0.kill();
+            self.e.0.frame().blank();
         }
         rc >= 0
     }
@@ -230,12 +162,7 @@ impl Runner<'_> {
         // SAFETY: the video buffer is MAXSCREENWIDTH x 200, allocated at init
         // and freed only on the error path, which returned above.
         let src = unsafe { std::slice::from_raw_parts(src, w * H) };
-        let mut f = lock(&self.e.frame);
-        f.pix[..w * H].copy_from_slice(src);
-        f.w = w;
-        f.pal = pal.clamp(0, 13) as u8;
-        f.blank = false;
-        f.seq = f.seq.wrapping_add(1);
+        self.e.0.frame().publish(src, w, pal.clamp(0, 13) as u8);
         #[cfg(test)]
         {
             TICK_NS.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -257,7 +184,7 @@ fn run(e: &Engine) {
         started: false,
         rng: 1,
     };
-    let (mut gen, mut rev) = (0, 0);
+    let mut rev = 0;
     let mut want: Option<Want> = None;
     let mut tics: u64 = 0;
     let mut next_tic = Instant::now();
@@ -267,25 +194,16 @@ fn run(e: &Engine) {
         // Engine calls (an init is a WAD parse, a warp a level load) happen
         // with the lock released: `claim` on the render thread takes it.
         let (fresh, changed, fault) = {
-            let mut c = lock(&e.ctl);
-            while c.owner == 0 || c.want.is_none() {
-                c = e
-                    .wake
-                    .wait(c)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (mut c, parked) = e.0.wait(|_| false);
+            if parked {
                 next_tic = Instant::now();
             }
-            let fresh = c.gen != gen;
-            let changed = c.rev != rev;
-            (gen, rev) = (c.gen, c.rev);
-            if changed {
-                want.clone_from(&c.want);
-            }
-            #[cfg(test)]
-            let fault = std::mem::take(&mut c.fault);
-            #[cfg(not(test))]
-            let fault = false;
-            (fresh, changed, fault)
+            let changed = c.take(&mut rev, &mut want);
+            (
+                std::mem::take(&mut c.x),
+                changed,
+                std::mem::take(&mut c.fault),
+            )
         };
         let w = want.as_ref().expect("set on the first claim");
         let now = Instant::now();
@@ -313,13 +231,6 @@ fn run(e: &Engine) {
             level = now_level;
             next_map = w.map_every.map(|d| Instant::now() + d);
         }
-        next_tic += Duration::from_nanos(1_000_000_000 / TICRATE);
-        let now = Instant::now();
-        match next_tic.checked_duration_since(now) {
-            Some(d) => std::thread::sleep(d),
-            // A level load ran long: drop the backlog rather than fast-forward.
-            None if now - next_tic > Duration::from_millis(250) => next_tic = now,
-            None => {}
-        }
+        pace(&mut next_tic, Duration::from_nanos(1_000_000_000 / TICRATE));
     }
 }

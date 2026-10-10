@@ -34,7 +34,7 @@ fn want() -> Want {
 fn offline(w: usize, h: usize, aspect: usize) -> (Panel, Micropolis) {
     let p = Panel::new(w, h, w);
     let mut m = Micropolis::build(&p, 30, aspect, 70, 6.0, true, want());
-    m.want = None;
+    m.claim.want = None;
     (p, m)
 }
 

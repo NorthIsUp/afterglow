@@ -100,10 +100,10 @@ fn missing_files_show_a_card_and_never_start_a_mac() {
         assert!(problems.contains(key), "{problems}");
     }
     let (p, mut b) = build(1920, 1080, 180, &missing(), Engine::spawn());
-    assert!(b.want.is_none() && b.carded);
+    assert!(b.claim.want.is_none() && b.carded);
     let mut buf = vec![0u32; p.buf_len()];
     saver::frame(&mut b, &mut buf, &p);
-    assert!(!b.engaged);
+    assert!(b.claim.engine.is_none());
     let n = allocs_during(|| {
         for _ in 0..20 {
             assert!(saver::frame(&mut b, &mut buf, &p).is_empty());
