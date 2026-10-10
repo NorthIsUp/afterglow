@@ -81,6 +81,7 @@ impl Lcd {
         &self.buf[self.selected_buffer]
     }
 
+    /// afterglow: clears the background layer too.
     pub fn clear(&mut self) {
         for buf in self.buf.iter_mut().chain(self.bg.iter_mut()) {
             buf.fill(0x7FFF);

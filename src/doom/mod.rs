@@ -20,9 +20,9 @@ use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use crate::font;
-use crate::grid::{pixel_aspect, Cell, Grid};
+use crate::grid::{pixel_aspect, Grid};
 use crate::saver::Saver;
+use crate::scaled::{self, Scaled};
 use crate::surface::{Panel, Surface};
 use crate::{env_num, env_str, next_rand, saver_seed};
 
@@ -31,7 +31,6 @@ use engine::{Engine, Want, H, MAX_W};
 const PALETTES: usize = 14;
 const STATIC: usize = PALETTES * 256;
 const STATIC_LEVELS: usize = 16;
-const OFF: u16 = u16::MAX;
 /// Doom's 320x200 fills 4:3 glass, so a Doom pixel is 1.2 times taller than
 /// wide: a screen `r` times as wide as tall is `240 * r` pixels across.
 const PX_PER_RATIO: f32 = 240.0;
@@ -50,52 +49,22 @@ pub struct Doom {
     /// savers just to read their knobs, and that must not steal the engine.
     want: Option<Want>,
     engaged: bool,
-    /// The cells the frame covers, `x0..x1` by `y0..y1`; the rest is margin.
-    rect: (usize, usize, usize, usize),
-    /// The panel pixels the frame covers, the same way, and the panel.
-    px_rect: (usize, usize, usize, usize),
-    panel: (usize, usize),
-    /// Per panel column of the frame, the source column; and per source
-    /// column and row, the first panel column and row it covers, with one
-    /// past the end appended.
-    x_src: Vec<u16>,
-    x_first: Vec<u16>,
-    y_first: Vec<u16>,
-    /// The frame the panel shows, and the width and palette offset it was
-    /// drawn at: a source row equal to its old self needs no pixels.
-    drawn: Vec<u8>,
+    view: Scaled<u8>,
+    /// The width and palette offset the panel was last drawn at: a change of
+    /// either redraws every row.
     drawn_key: Option<(usize, usize)>,
-    /// One panel row of the frame, gathered once per source row and copied
-    /// down the rows it covers.
-    line: Vec<u32>,
-    /// Per grid column and row: the source pixel, `OFF` outside the frame.
-    /// Columns are for a frame `col_w` wide, rebuilt when the engine's width
-    /// moves (only after a knob change), in place.
-    col_src: Vec<u16>,
-    col_w: usize,
-    row_src: Vec<u16>,
     pix: Vec<u8>,
     seq: u32,
     /// The frame's width and palette; `None` draws static.
     shown: Option<(usize, u8)>,
     /// `pix` holds a frame the panel has not shown yet.
     fresh: bool,
-    /// Frame 0: the buffer arrives zeroed, so the margins need painting once.
-    first: bool,
     rng: u32,
 }
 
-/// The Doom screen width for a panel, and the share of the panel's width and
-/// height (per mille) its picture fills without stretching.
+/// The Doom screen width for a panel, and the share of the panel it fills.
 fn layout(panel: &Panel, aspect: usize) -> (usize, usize, usize) {
-    let glass = panel.w as f32 * aspect as f32 / (100.0 * panel.h as f32);
-    let w = ((PX_PER_RATIO * glass).round() as usize).clamp(MIN_W, MAX_W);
-    let own = w as f32 / PX_PER_RATIO;
-    if own >= glass {
-        (w, 1000, (glass / own * 1000.0) as usize)
-    } else {
-        (w, (own / glass * 1000.0) as usize, 1000)
-    }
+    scaled::layout(panel, aspect, PX_PER_RATIO, MIN_W, MAX_W)
 }
 
 impl Doom {
@@ -126,27 +95,8 @@ impl Doom {
 
     fn build(panel: &Panel, wad: &str, k: &Knobs) -> Self {
         let aspect = pixel_aspect();
-        let (width, wide, tall) = layout(panel, aspect);
-        // A cell per Doom pixel across at most: a smaller cell would only
-        // repeat pixels.
-        let cell_w = (panel.w / width).max(1);
-        let cell_h = (panel.h * 100 / aspect / H).max(1);
-        let grid = Grid::new(panel, cell_w, cell_h);
-        let (cols, rows) = (grid.cols(), grid.rows());
-        let (fw, fh) = (cols * wide / 1000, rows * tall / 1000);
-        let (x0, y0) = ((cols - fw) / 2, (rows - fh) / 2);
-        let (pw, ph) = (panel.w * wide / 1000, panel.h * tall / 1000);
-        let (px0, py0) = ((panel.w - pw) / 2, (panel.h - ph) / 2);
-        let y_first = (0..=H).map(|sy| (sy * ph).div_ceil(H) as u16).collect();
-        let row_src = (0..rows)
-            .map(|r| {
-                if (y0..y0 + fh).contains(&r) {
-                    ((r - y0) * H / fh.max(1)) as u16
-                } else {
-                    OFF
-                }
-            })
-            .collect();
+        let (grid, view) = Scaled::new(panel, aspect, layout(panel, aspect), H, MAX_W);
+        let width = view.width();
 
         let playpal = std::fs::read(wad)
             .ok()
@@ -168,105 +118,19 @@ impl Doom {
                 light: k.light,
             })
         });
-        let mut d = Self {
+        Self {
             grid,
             palette: palette(playpal.as_deref(), k.gamma),
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             want,
             engaged: false,
-            rect: (x0, x0 + fw, y0, y0 + fh),
-            px_rect: (px0, px0 + pw, py0, py0 + ph),
-            panel: (panel.w, panel.h),
-            x_src: vec![0; pw],
-            x_first: Vec::with_capacity(MAX_W + 1),
-            y_first,
-            drawn: vec![0; MAX_W * H],
+            view,
             drawn_key: None,
-            line: vec![0; pw],
-            col_src: vec![OFF; cols],
-            col_w: 0,
-            row_src,
             pix: vec![0; MAX_W * H],
             seq: 0,
             shown: None,
             fresh: false,
-            first: true,
             rng: k.seed,
-        };
-        d.columns_for(width);
-        d
-    }
-
-    /// Point the frame's columns, cells and panel pixels, at a source `w`
-    /// pixels wide.
-    fn columns_for(&mut self, w: usize) {
-        let (x0, x1, ..) = self.rect;
-        let span = (x1 - x0).max(1);
-        for (c, src) in self.col_src.iter_mut().enumerate() {
-            *src = if (x0..x1).contains(&c) {
-                ((c - x0) * w / span) as u16
-            } else {
-                OFF
-            };
-        }
-        let pw = self.x_src.len();
-        for (x, src) in self.x_src.iter_mut().enumerate() {
-            *src = (x * w / pw) as u16;
-        }
-        // First x with x * w / pw >= sx.
-        self.x_first.clear();
-        self.x_first
-            .extend((0..=w).map(|sx| (sx * pw).div_ceil(w.max(1)) as u16));
-        self.col_w = w;
-    }
-
-    /// Scale the source rows that differ from what the panel shows into it,
-    /// each over just the span of columns that changed. `base` offsets the
-    /// indices into the palette.
-    fn blit(&mut self, s: &mut Surface<'_>, w: usize, base: usize) {
-        let full = self.drawn_key != Some((w, base));
-        let (px0, _, py0, _) = self.px_rect;
-        for sy in 0..H {
-            let (ya, yb) = (self.y_first[sy] as usize, self.y_first[sy + 1] as usize);
-            let row = &self.pix[sy * w..][..w];
-            let old = &mut self.drawn[sy * w..][..w];
-            let (lo, hi) = if full {
-                (0, w)
-            } else if row == old || ya == yb {
-                continue;
-            } else {
-                let diff = |(a, b): (&u8, &u8)| a != b;
-                let z = || row.iter().zip(old.iter());
-                let lo = z().position(diff).unwrap_or(0);
-                let hi = w - z().rev().position(diff).unwrap_or(0);
-                (lo, hi)
-            };
-            old[lo..hi].copy_from_slice(&row[lo..hi]);
-            let (xa, xb) = (self.x_first[lo] as usize, self.x_first[hi] as usize);
-            let line = &mut self.line[xa..xb];
-            for (out, &sx) in line.iter_mut().zip(&self.x_src[xa..xb]) {
-                *out = self.palette[base + row[sx as usize] as usize];
-            }
-            for out in s.cell_rows(px0 + xa, py0 + ya, xb - xa, yb - ya) {
-                out.copy_from_slice(line);
-            }
-        }
-        self.drawn_key = Some((w, base));
-    }
-
-    /// The panel outside the frame, black, once.
-    fn margins(&self, s: &mut Surface<'_>) {
-        let (x0, x1, y0, y1) = self.px_rect;
-        let (pw, ph) = self.panel;
-        for (x, y, w, h) in [
-            (0, 0, pw, y0),
-            (0, y1, pw, ph - y1),
-            (0, y0, x0, y1 - y0),
-            (x1, y0, pw - x1, y1 - y0),
-        ] {
-            for row in s.cell_rows(x, y, w, h) {
-                row.fill(0);
-            }
         }
     }
 }
@@ -330,7 +194,7 @@ impl Saver for Doom {
         let (w, base) = if let Some((w, pal)) = self.shown {
             (w, pal as usize * 256)
         } else {
-            let w = self.col_w;
+            let w = self.view.width();
             for p in &mut self.pix[..w * H] {
                 *p = (next_rand(&mut self.rng) as usize % STATIC_LEVELS) as u8;
             }
@@ -338,33 +202,24 @@ impl Saver for Doom {
         };
         // The engine runs at 35 Hz and the panel at its own rate: a frame
         // already drawn is no work at all.
-        if !(self.fresh || self.first) && self.shown.is_some() {
+        if !self.fresh && self.drawn_key.is_some() && self.shown.is_some() {
             return;
         }
         self.fresh = false;
-        if w != self.col_w {
-            self.columns_for(w);
+        if w != self.view.width() {
+            self.view.set_width(w);
         }
-        self.blit(s, w, base);
-        if self.first {
-            self.margins(s);
-            self.first = false;
-        }
-        let (x0, x1, ..) = self.rect;
-        let (pix, cols, row_src) = (&self.pix, &self.col_src[x0..x1], &self.row_src);
-        self.grid.fill_rows(|cy, row| {
-            let sy = row_src[cy];
-            if sy == OFF {
-                return row.fill(Cell::CLEAR);
-            }
-            let src = &pix[sy as usize * w..][..w];
-            row[..x0].fill(Cell::CLEAR);
-            row[x1..].fill(Cell::CLEAR);
-            for (c, &sx) in row[x0..x1].iter_mut().zip(cols) {
-                *c = Cell::new(font::SOLID, (base + src[sx as usize] as usize) as u16);
-            }
-        });
-        self.grid.settle();
+        let full = self.drawn_key != Some((w, base));
+        self.drawn_key = Some((w, base));
+        let palette = &self.palette;
+        self.view.draw(
+            s,
+            &mut self.grid,
+            &self.pix,
+            full,
+            |p| palette[base + p as usize],
+            |p| (base + p as usize) as u16,
+        );
     }
 
     fn name(&self) -> &'static str {

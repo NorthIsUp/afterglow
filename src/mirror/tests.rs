@@ -221,12 +221,18 @@ fn restart_rebuilds_the_saver_showing() {
         s.read_to_string(&mut out).unwrap();
         out
     };
-    let (sel, restarts) = (m.selection(), crate::saver::restarts());
+    let restarts = |n| crate::saver::restarts(n);
+    let (sel, ascii, gameboy) = (m.selection(), restarts("ascii"), restarts("gameboy"));
     let body = req("POST /restart?saver=ascii");
     assert!(body.starts_with("HTTP/1.1 200 "), "{body}");
     assert!(body.contains("\"saver\":\"ascii\""), "{body}");
     assert_ne!(m.selection(), sel, "the saver showing was not rebuilt");
-    assert!(crate::saver::restarts() > restarts);
+    assert!(restarts("ascii") > ascii);
+    assert_eq!(
+        restarts("gameboy"),
+        gameboy,
+        "another saver's restart reset gameboy"
+    );
     assert!(req("POST /restart?saver=nope").starts_with("HTTP/1.1 400 "));
     assert!(req("GET /restart?saver=ascii").starts_with("HTTP/1.1 405 "));
 }

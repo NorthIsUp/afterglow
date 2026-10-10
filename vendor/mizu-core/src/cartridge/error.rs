@@ -44,6 +44,7 @@ pub enum CartridgeError {
     MapperNotImplemented(MapperType),
 }
 
+// afterglow: `SramError` is gone with the save file I/O.
 impl From<ioError> for CartridgeError {
     fn from(from: ioError) -> Self {
         Self::FileError(from)

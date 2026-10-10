@@ -75,9 +75,9 @@ fn views_scale_onto_the_panel_and_report_exactly_what_moved() {
             let (vw, ..) = layout(&p, aspect);
             GameBoySaver::build(&p, aspect, want(vw, Mode::Frame))
         });
-        g.claim = Claim::Off;
+        g.want = None;
         g.shown = true;
-        let vw = g.w;
+        let vw = g.view.width();
         let mut rng = 3u32;
         for px in &mut g.pix[..vw * H] {
             *px = next_rand(&mut rng) as u16;
@@ -99,7 +99,7 @@ fn views_scale_onto_the_panel_and_report_exactly_what_moved() {
             verify(&before, &buf, &dmg, &p, step).unwrap_or_else(|e| panic!("{case}: {e}"));
             match step {
                 0 => {
-                    let (x0, x1, y0, y1) = g.px_rect;
+                    let (x0, x1, y0, y1) = g.view.px_rect();
                     for (y, x) in [(y0, x0), (y1 - 1, x1 - 1), ((y0 + y1) / 2, (x0 + x1) / 2)] {
                         let sy = (y - y0) * H / (y1 - y0);
                         let sx = (x - x0) * vw / (x1 - x0);
@@ -181,38 +181,54 @@ fn the_tobu_pilot_plays_a_level() {
 #[test]
 fn a_crashing_cartridge_moves_on() {
     let carts = load("", "");
-    let mut r = engine::tests_runner(carts);
+    let mut r = engine::Runner::new(carts);
     let w = want(256, Mode::Frame);
-    assert!(r.frame_for_test(&w));
+    assert!(r.frame(&w));
     let first = r.playing();
     engine::PANIC_NEXT.store(true, std::sync::atomic::Ordering::Relaxed);
-    assert!(r.frame_for_test(&w));
+    assert!(r.frame(&w));
     assert_ne!(r.playing(), first);
+}
+
+/// A cartridge the core panics on loading (a header it cannot map) is one
+/// that will not boot, skipped like any other, not a dead engine thread.
+#[test]
+fn a_cartridge_the_core_panics_on_is_skipped() {
+    let mut bad = bundled("tobu-tobu-girl-deluxe");
+    // ROM-only on a 256 KiB ROM: the core's mapper asserts two banks.
+    bad.rom[0x147] = 0;
+    bad.rom[0x14D] = bad.rom[0x134..0x14D]
+        .iter()
+        .fold(0u8, |c, &b| c.wrapping_sub(b).wrapping_sub(1));
+    assert!(Session::boot(&bad, &want(256, Mode::Frame), 7).is_err());
+    let mut r = engine::Runner::new(vec![bad, bundled("life")]);
+    assert!(r.frame(&want(256, Mode::Frame)));
+    assert_eq!(r.playing(), "life");
 }
 
 /// A restart from the page is a power-on reset: the game starts over even
 /// though nothing else about the saver changed. A knob change is not.
 #[test]
 fn a_restart_starts_the_cartridge_over() {
-    let mut r = engine::tests_runner(Vec::new());
+    let mut r = engine::Runner::new(Vec::new());
     let w = want(256, Mode::Frame);
-    r.take_for_test(None, &w);
+    r.take(None, &w);
     for _ in 0..120 {
-        assert!(r.frame_for_test(&w));
+        assert!(r.frame(&w));
     }
     let palette = Want {
         palette: "grey".into(),
         ..w.clone()
     };
-    r.take_for_test(Some(&w), &palette);
-    assert!(r.frame_for_test(&palette));
+    r.take(Some(&w), &palette);
+    assert!(r.frame(&palette));
     assert_eq!(r.frames(), 121, "a palette change restarted the game");
     let restarted = Want {
         restart: 1,
         ..palette.clone()
     };
-    r.take_for_test(Some(&palette), &restarted);
-    assert!(r.frame_for_test(&restarted));
+    r.take(Some(&palette), &restarted);
+    assert!(r.frame(&restarted));
     assert_eq!(r.frames(), 1, "the restart kept the old game");
 }
 
@@ -511,7 +527,7 @@ fn bench_engine() {
 fn bench_blit() {
     let p = Panel::new(1920, 1080, 1920);
     let mut g = with_test_aspect(180, || GameBoySaver::build(&p, 180, want(461, Mode::Wide)));
-    g.claim = Claim::Off;
+    g.want = None;
     g.shown = true;
     let mut buf = vec![0u32; p.buf_len()];
     let mut rng = 1u32;
