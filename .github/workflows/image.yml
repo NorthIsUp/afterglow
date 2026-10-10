@@ -89,12 +89,18 @@ jobs:
       - name: fmt, clippy, tests, render check
         run: |
           docker run --rm -v "$PWD":/src -w /src rust:1-alpine sh -eu -c '
-            apk add --no-cache musl-dev >/dev/null
+            apk add --no-cache musl-dev gcc binutils >/dev/null
             rustup component add rustfmt clippy >/dev/null
             cargo fmt --check
+            # The image is built with `gba` (mGBA, C); without it is a plain
+            # `cargo build`, which must stay warning-free too.
             cargo clippy --release --locked --all-targets -- -D warnings
-            cargo test --release --locked
-            cargo build --release --locked
+            cargo clippy --release --locked --all-targets --features gba -- -D warnings
+            cargo test --release --locked --features gba
+            cargo build --release --locked --features gba
+            if readelf -d target/release/screensaver | grep NEEDED; then
+              echo "screensaver links a shared library"; exit 1
+            fi
             # SAVER_HTTP=off: the dump drives the web mirror too, and pacing it
             # at SAVER_FPS is right for a browser and wrong for a render check.
             # Coverage for the mirror itself is in the cargo test above, which
@@ -135,6 +141,10 @@ jobs:
               SAVER_DUMP_FRAMES=300 SAVER_DUMP_EVERY=1 SAVER_DUMP_PACED=1 ./target/release/screensaver
             moved=$(md5sum /tmp/dump-gameboy/frame-00[12]??.ppm | sort -u -k1,1 | wc -l)
             [ "$moved" -gt 1 ] || { echo "gameboy: frames are all identical"; exit 1; }
+            # No ROM ships: the card naming the folder, damage-checked. Play
+            # is covered by gba::tests, on a ROM the test assembles itself.
+            SAVER=gba SAVER_HTTP=off SAVER_DUMP=/tmp/dump-gba SAVER_DUMP_FRAMES=5 \
+              ./target/release/screensaver
           '
 
       - id: build
@@ -195,13 +205,13 @@ jobs:
       # The binary must stay one static file under musl, C++ runtime and
       # all: a NEEDED entry means libstdc++ (or anything) linked dynamically,
       # which FROM scratch cannot satisfy.
-      - name: clippy, tests, render check, static link (--features doom,micropolis,mac)
+      - name: clippy, tests, render check, static link (--features doom,micropolis,mac,gba)
         run: |
           docker run --rm -v "$PWD":/src -w /src rust:1-alpine sh -eu -c '
             apk add --no-cache musl-dev gcc g++ binutils curl >/dev/null
             rustup component add clippy >/dev/null
             wad="$PWD/$(tools/freedoom.sh)"
-            f=doom,micropolis,mac
+            f=doom,micropolis,mac,gba
             cargo clippy --release --locked --all-targets --features $f -- -D warnings
             cargo build --release --locked --features $f
             DOOM_TEST_WAD="$wad" cargo test --release --locked --features $f

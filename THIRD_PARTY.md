@@ -120,6 +120,24 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## mGBA (the `gba` saver's emulator)
+
+`gba/mgba/` is the Game Boy Advance core of [mGBA](https://github.com/mgba-emu/mgba)
+0.10.5 (`26b7884`), Jeffrey Pfau and contributors, under the Mozilla Public
+License 2.0 (`gba/mgba/LICENSE`, and `/licenses/mgba-MPL-2.0.txt` in both
+images). It is the subset upstream's CMake builds for a GBA-only
+`MINIMAL_CORE`, unmodified but for two files: `src/version.c`, which CMake
+would have generated, and `include/mgba/core/blip_buf.h` (below). MPL-2.0 is copyleft per file: these files stay MPL-2.0 and their
+source is this directory; the rest of afterglow is not affected, which is
+why the MIT image can carry it. Of the libraries mGBA bundles, only `inih`
+(BSD-3-Clause, Ben Hoyt, its notice in `src/third-party/inih/ini.c`) is
+kept, with two public-domain pieces of mGBA's own `src/util`: MurmurHash3
+(Austin Appleby) in `hash.c` and Gary S. Brown's CRC-32 table in `crc32.c`.
+`blip_buf`, its audio resampler, is LGPL-2.1 and left out: its header is
+replaced by a declarations-only one and `gba/blip_silent.c` implements it
+as silence. Those two files and `gba/afterglow_gba.c`, the glue, are
+afterglow's own, MIT.
+
 ## The GPL image
 
 Only a `--features doom` or `--features micropolis` build compiles any of

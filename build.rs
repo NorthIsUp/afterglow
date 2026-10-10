@@ -1,5 +1,5 @@
-//! A no-op unless `--features doom`, `micropolis` or `mac`, so the default
-//! build needs no C or C++ compiler.
+//! A no-op unless `--features doom`, `micropolis`, `mac` or `gba`, so a
+//! plain `cargo build` needs no C or C++ compiler.
 //!
 //! With it, doomgeneric, `doom/afterglow_doom.c` and the autopilot
 //! (`doom/autopilot.c`, `doom/ap_nav.c`, `doom/ap_effect.c`) are compiled into one static library. `exit` is defined to `dg_exit`, which is how the engine's
@@ -13,6 +13,49 @@ fn main() {
     micropolis();
     #[cfg(feature = "mac")]
     mac();
+    #[cfg(feature = "gba")]
+    gba();
+}
+
+/// mGBA's GBA core (MPL-2.0), `gba/afterglow_gba.c` (its C API and crash
+/// boundary) and `gba/blip_silent.c` (no audio), as one static library.
+/// `gba/sources.txt` is what upstream's cmake builds for `MINIMAL_CORE` with
+/// only `M_CORE_GBA`, without threads (`core/thread.c` out,
+/// `DISABLE_THREADING`): the saver has its own thread.
+#[cfg(feature = "gba")]
+fn gba() {
+    println!("cargo::rerun-if-changed=gba");
+    let mut sources: Vec<std::path::PathBuf> = std::fs::read_to_string("gba/sources.txt")
+        .unwrap()
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| format!("gba/mgba/src/{l}").into())
+        .collect();
+    sources.extend(["gba/afterglow_gba.c", "gba/blip_silent.c"].map(Into::into));
+    cc::Build::new()
+        .files(&sources)
+        .include("gba/mgba/include")
+        .include("gba/mgba/src")
+        .std("c11")
+        .define("M_CORE_GBA", None)
+        .define("MINIMAL_CORE", None)
+        .define("BUILD_STATIC", None)
+        .define("DISABLE_THREADING", None)
+        .define("HAVE_STRDUP", None)
+        .define("HAVE_STRNDUP", None)
+        .define("HAVE_STRLCPY", None)
+        .define("HAVE_LOCALE", None)
+        .define("HAVE_LOCALTIME_R", None)
+        .define("_GNU_SOURCE", None)
+        .define("abort", "agb_abort")
+        .opt_level(3)
+        .warnings(false)
+        .flag_if_supported("-w")
+        .compile("mgba");
+    // The config code asks CoreFoundation for the app bundle on macOS.
+    if std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|o| o == "macos") {
+        println!("cargo::rustc-link-lib=framework=CoreFoundation");
+    }
 }
 
 /// Mini vMac's Mac Plus build and `mac/afterglow_mac.c`, its headless

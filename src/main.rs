@@ -114,6 +114,8 @@ mod fire;
 mod font;
 mod fractal;
 mod gameboy;
+#[cfg(feature = "gba")]
+mod gba;
 mod glyph;
 mod grid;
 mod hardrain;

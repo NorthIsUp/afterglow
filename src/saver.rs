@@ -16,6 +16,8 @@ use crate::dvd::Dvd;
 use crate::fire::Fire;
 use crate::fractal::Fractal;
 use crate::gameboy::GameBoySaver;
+#[cfg(feature = "gba")]
+use crate::gba::Gba;
 use crate::grid::Grid;
 use crate::hardrain::HardRain;
 use crate::hypercube::Hypercube;
@@ -141,6 +143,8 @@ macro_rules! savers {
         #[cfg(feature = "micropolis")]
         ("micropolis", |p, fps| Box::new(Micropolis::new(p, fps))),
         ("gameboy", |p, fps| Box::new(GameBoySaver::new(p, fps))),
+        #[cfg(feature = "gba")]
+        ("gba", |p, fps| Box::new(Gba::new(p, fps))),
         #[cfg(feature = "mac")]
         ("battlechess", |p, fps| Box::new(BattleChess::new(p, fps))),
             $((
@@ -217,6 +221,8 @@ const SECTIONS: &[(&str, usize)] = &[
     #[cfg(feature = "micropolis")]
     ("micropolis", 5),
     ("gameboy", 5),
+    #[cfg(feature = "gba")]
+    ("gba", 5),
     #[cfg(feature = "mac")]
     ("battlechess", 5),
 ];

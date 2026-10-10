@@ -21,16 +21,20 @@
 # --- build stage: static musl binary ---
 FROM rust:1-alpine AS build
 # musl-dev for the C runtime musl-gcc needs; no libdrm, the crate does ioctls.
-RUN apk add --no-cache musl-dev
+# gcc for mGBA, the `gba` saver's core: MPL-2.0 is per-file copyleft, so it
+# can ship in this MIT image as long as its source stays published (it is,
+# in gba/mgba).
+RUN apk add --no-cache musl-dev gcc
 WORKDIR /src
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 # The gameboy saver's emulator core (MIT) and the homebrew it plays.
 COPY vendor ./vendor
 COPY gameboy ./gameboy
+COPY gba ./gba
 # --locked so the committed Cargo.lock is authoritative; a drifting dependency
 # should fail the build rather than silently ship something else.
-RUN cargo build --release --locked
+RUN cargo build --release --locked --features gba
 
 # --- the GPL variant: doomgeneric and Micropolis compiled in, so GPL-3.0 as a
 # whole (doomgeneric is GPL-2.0-or-later, which goes along with GPL-3.0) ---
@@ -47,10 +51,11 @@ COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 COPY vendor ./vendor
 COPY gameboy ./gameboy
+COPY gba ./gba
 COPY doom ./doom
 COPY micropolis ./micropolis
 COPY mac ./mac
-RUN cargo build --release --locked --features doom,micropolis,mac
+RUN cargo build --release --locked --features doom,micropolis,mac,gba
 
 FROM alpine:3 AS freedoom
 RUN apk add --no-cache curl
@@ -66,10 +71,12 @@ COPY doom/doomgeneric/LICENSE /licenses/doomgeneric-GPL-2.0.txt
 COPY micropolis/COPYING /licenses/micropolis-GPL-3.0.txt
 COPY micropolis/MicropolisPublicNameLicense.txt /licenses/micropolis-public-name-license.txt
 COPY mac/minivmac/COPYING.txt /licenses/minivmac-GPL-2.0.txt
+COPY gba/mgba/LICENSE /licenses/mgba-MPL-2.0.txt
 COPY LICENSE /licenses/afterglow-MIT.txt
 ENTRYPOINT ["/screensaver"]
 
 # --- runtime stage: just the binary. Last, so it is the default target ---
 FROM scratch
 COPY --from=build /src/target/release/screensaver /screensaver
+COPY gba/mgba/LICENSE /licenses/mgba-MPL-2.0.txt
 ENTRYPOINT ["/screensaver"]

@@ -289,6 +289,12 @@ pub fn help(key: &str) -> Option<&'static str> {
         "GAMEBOY_WIDE" => "fill the sides with more of the game's world; off is a glow",
         "GAMEBOY_PALETTE" => "monochrome games: auto, green, pocket, grey, red or blue",
         "GAMEBOY_ROTATE_SECS" => "seconds per cartridge when there are several; 0 never moves on",
+        "GBA_ROM" => "a .gba file or a folder of them, read in place; none shows where to put them",
+        "GBA_BIOS" => "a real GBA BIOS to boot through; empty runs mGBA's built-in HLE BIOS",
+        "GBA_FPS" => {
+            "emulated frames a second; 60 is full speed, lower is slow motion for less CPU"
+        }
+        "GBA_ROTATE_SECS" => "seconds per ROM when there are several; 0 never moves on",
         "POKEMON_TEXT_MS" => "Pokémon bot: milliseconds printed text stays up before it presses on",
         "POKEMON_STARTER" => "Pokémon bot: 0 random, 1 Bulbasaur, 2 Charmander, 3 Squirtle",
         k if k.ends_with("_SEED") => "0 rolls a new one every build; anything else pins it",
