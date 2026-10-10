@@ -13,11 +13,12 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use super::pilot::{Phase, Pilot};
 use super::proto::{blank, CHANGED, FRAME};
+use crate::engine_slot::{self, Slot};
 
 /// The Mac Plus's vertical retrace, 60.1474 Hz.
 const TICK: Duration = Duration::from_nanos(16_625_800);
@@ -45,32 +46,17 @@ pub enum State {
     Failed = 2,
 }
 
-struct Ctl {
-    /// The saver the engine runs for; 0 parks it.
-    owner: u64,
-    want: Option<Want>,
-    /// Bumped per claim: new files to read, and a failed engine's retry.
-    rev: u64,
-}
-
 struct Frame {
     bits: Box<[u8; FRAME]>,
     seq: u32,
 }
 
+/// A claim's `rev` bump is also a failed engine's retry.
 pub struct Engine {
-    ctl: Mutex<Ctl>,
-    wake: Condvar,
-    frame: Mutex<Frame>,
+    slot: Slot<Want, Frame>,
     state: AtomicU8,
     /// The pilot's phase, for tests to wait on.
     phase: AtomicU8,
-}
-
-/// A poisoned lock means a panic on the other thread; the data is still a
-/// screen or a claim, so carry on with it.
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Engine {
@@ -83,16 +69,13 @@ impl Engine {
     /// An engine of its own, for tests that must not share the process's.
     pub fn spawn() -> &'static Self {
         let e: &'static Self = Box::leak(Box::new(Self {
-            ctl: Mutex::new(Ctl {
-                owner: 0,
-                want: None,
-                rev: 0,
-            }),
-            wake: Condvar::new(),
-            frame: Mutex::new(Frame {
-                bits: blank(),
-                seq: 0,
-            }),
+            slot: Slot::new(
+                Frame {
+                    bits: blank(),
+                    seq: 0,
+                },
+                (),
+            ),
             state: AtomicU8::new(State::Starting as u8),
             phase: AtomicU8::new(Phase::Boot as u8),
         }));
@@ -101,22 +84,6 @@ impl Engine {
             .spawn(move || run(e))
             .expect("spawning the mac thread");
         e
-    }
-
-    pub fn claim(&self, id: u64, want: Want) {
-        let mut c = lock(&self.ctl);
-        c.owner = id;
-        c.rev += 1;
-        c.want = Some(want);
-        self.wake.notify_one();
-    }
-
-    /// Park the engine, unless another saver has claimed it since.
-    pub fn release(&self, id: u64) {
-        let mut c = lock(&self.ctl);
-        if c.owner == id {
-            c.owner = 0;
-        }
     }
 
     #[cfg(test)]
@@ -136,7 +103,7 @@ impl Engine {
     /// number. Never waits: a screen being written is a frame late, not a
     /// stall.
     pub fn latest(&self, seen: u32, out: &mut [u8; FRAME]) -> Option<u32> {
-        let f = self.frame.try_lock().ok()?;
+        let f = self.slot.peek()?;
         (f.seq != seen).then(|| {
             out.copy_from_slice(&f.bits[..]);
             f.seq
@@ -144,10 +111,22 @@ impl Engine {
     }
 
     fn publish(&self, bits: &[u8; FRAME]) {
-        let mut f = lock(&self.frame);
+        let mut f = self.slot.frame();
         f.bits.copy_from_slice(bits);
         f.seq = f.seq.wrapping_add(1).max(1);
         self.state.store(State::Running as u8, Ordering::Relaxed);
+    }
+}
+
+impl engine_slot::Engine for Engine {
+    type Want = Want;
+
+    fn claim(&self, id: u64, want: Want) {
+        self.slot.claim(id, want);
+    }
+
+    fn release(&self, id: u64) {
+        self.slot.release(id);
     }
 }
 
@@ -233,16 +212,10 @@ fn run(e: &'static Engine) {
         // The lock only for the claim's bookkeeping: the files are cloned
         // when a claim is new, not every sixtieth.
         let parked = {
-            let mut c = lock(&e.ctl);
-            let parked = c.owner == 0 || given_up;
-            while c.owner == 0 || given_up && c.rev == rev {
-                c = e.wake.wait(c).unwrap_or_else(PoisonError::into_inner);
-            }
+            let (c, waited) = e.slot.wait(|c| given_up && c.rev == rev);
+            let parked = waited || given_up;
             given_up = false;
-            if c.rev != rev {
-                rev = c.rev;
-                want.clone_from(&c.want);
-            }
+            c.take(&mut rev, &mut want);
             parked
         };
         let want = want.as_ref().expect("set by every claim");

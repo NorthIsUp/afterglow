@@ -17,9 +17,9 @@
 mod engine;
 
 use std::ffi::CString;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use crate::engine_slot::Claim;
 use crate::grid::{pixel_aspect, Grid};
 use crate::saver::Saver;
 use crate::scaled::{self, Scaled};
@@ -36,19 +36,10 @@ const STATIC_LEVELS: usize = 16;
 const PX_PER_RATIO: f32 = 240.0;
 const MIN_W: usize = 320;
 
-/// Each saver instance's claim on the engine. Not a pointer: a dropped
-/// saver's address can be reused by the next one, and the engine thread must
-/// tell a new claim from a stale release.
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
 pub struct Doom {
     grid: Grid,
     palette: Vec<u32>,
-    id: u64,
-    /// Taken by the first `render`, not the constructor: the mirror builds
-    /// savers just to read their knobs, and that must not steal the engine.
-    want: Option<Want>,
-    engaged: bool,
+    claim: Claim<Engine>,
     view: Scaled<u8>,
     /// The width and palette offset the panel was last drawn at: a change of
     /// either redraws every row.
@@ -121,9 +112,7 @@ impl Doom {
         Self {
             grid,
             palette: palette(playpal.as_deref(), k.gamma),
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-            want,
-            engaged: false,
+            claim: Claim::new(want),
             view,
             drawn_key: None,
             pix: vec![0; MAX_W * H],
@@ -182,12 +171,8 @@ fn palette(playpal: Option<&[u8]>, gamma: u32) -> Vec<u32> {
 
 impl Saver for Doom {
     fn render(&mut self, s: &mut Surface<'_>) {
-        if let Some(w) = self.want.take() {
-            Engine::get().claim(self.id, w);
-            self.engaged = true;
-        }
-        if self.engaged {
-            if let Some((seq, shown)) = Engine::get().latest(self.seq, &mut self.pix) {
+        if let Some(e) = self.claim.engine(Engine::get) {
+            if let Some((seq, shown)) = e.latest(self.seq, &mut self.pix) {
                 (self.seq, self.shown, self.fresh) = (seq, shown, true);
             }
         }
@@ -232,14 +217,6 @@ impl Saver for Doom {
 
     fn palette(&self) -> &[u32] {
         &self.palette
-    }
-}
-
-impl Drop for Doom {
-    fn drop(&mut self) {
-        if self.engaged {
-            Engine::get().release(self.id);
-        }
     }
 }
 

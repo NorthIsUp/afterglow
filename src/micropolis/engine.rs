@@ -10,12 +10,12 @@
 //! the saver keeps showing the last map it had, frozen.
 
 use std::ffi::c_int;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use super::cities::{self, Name, CITIES};
 use super::mayor::{Hands, Mayor, Tool, H, W};
+use crate::engine_slot::{self, Slot};
 use crate::next_rand;
 
 pub const CELLS: usize = (W * H) as usize;
@@ -100,24 +100,7 @@ pub struct Want {
     pub bundled_pct: u32,
 }
 
-struct Ctl {
-    owner: u64,
-    want: Option<Want>,
-    fault: bool,
-}
-
-pub struct Engine {
-    ctl: Mutex<Ctl>,
-    wake: Condvar,
-    frame: Mutex<Frame>,
-    dead: AtomicBool,
-}
-
-/// A poisoned lock means a panic on the engine thread, which aborts the
-/// process anyway (`panic = "abort"`); in tests, keep going with the data.
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+pub struct Engine(Slot<Want, Frame>);
 
 impl Engine {
     pub fn get() -> &'static Self {
@@ -134,43 +117,23 @@ impl Engine {
 
     fn get_unstarted() -> &'static Self {
         static E: OnceLock<Engine> = OnceLock::new();
-        E.get_or_init(|| Engine {
-            ctl: Mutex::new(Ctl {
-                owner: 0,
-                want: None,
-                fault: false,
-            }),
-            wake: Condvar::new(),
-            frame: Mutex::new(Frame {
-                map: vec![0; CELLS].into_boxed_slice(),
-                stats: Stats::default(),
-                name: Name::default(),
-                seq: 0,
-            }),
-            dead: AtomicBool::new(false),
+        E.get_or_init(|| {
+            Engine(Slot::new(
+                Frame {
+                    map: vec![0; CELLS].into_boxed_slice(),
+                    stats: Stats::default(),
+                    name: Name::default(),
+                    seq: 0,
+                },
+                (),
+            ))
         })
-    }
-
-    /// Run the engine for saver `id` with `want`. The city carries on.
-    pub fn claim(&self, id: u64, want: Want) {
-        let mut c = lock(&self.ctl);
-        c.owner = id;
-        c.want = Some(want);
-        self.wake.notify_one();
-    }
-
-    /// Park the engine, unless another saver has claimed it since.
-    pub fn release(&self, id: u64) {
-        let mut c = lock(&self.ctl);
-        if c.owner == id {
-            c.owner = 0;
-        }
     }
 
     /// Copy the map into `dst` if it moved on since `seen`. Never waits: a
     /// map the engine thread is writing is skipped this frame.
     pub fn latest(&self, seen: u32, dst: &mut [u16]) -> Option<(u32, Stats, Name)> {
-        let f = self.frame.try_lock().ok()?;
+        let f = self.0.peek()?;
         if f.seq == seen {
             return None;
         }
@@ -179,13 +142,26 @@ impl Engine {
     }
 
     pub fn dead(&self) -> bool {
-        self.dead.load(Ordering::Relaxed)
+        self.0.dead()
     }
 
     /// Make the engine hit a fatal error on its next frame.
     #[cfg(test)]
     pub fn fault(&self) {
-        lock(&self.ctl).fault = true;
+        self.0.fault();
+    }
+}
+
+/// The city carries on across claims.
+impl engine_slot::Engine for Engine {
+    type Want = Want;
+
+    fn claim(&self, id: u64, want: Want) {
+        self.0.claim(id, want);
+    }
+
+    fn release(&self, id: u64) {
+        self.0.release(id);
     }
 }
 
@@ -229,7 +205,7 @@ impl Runner<'_> {
     fn ok(&self, rc: c_int) -> bool {
         if rc < 0 {
             eprintln!("[screensaver] micropolis: the engine hit an error; the city stops");
-            self.e.dead.store(true, Ordering::Relaxed);
+            self.e.0.kill();
         }
         rc >= 0
     }
@@ -274,7 +250,7 @@ impl Runner<'_> {
         if !self.refresh() {
             return;
         }
-        let mut f = lock(&self.e.frame);
+        let mut f = self.e.0.frame();
         f.map.copy_from_slice(Self::map());
         f.stats = self.stats;
         f.name = city.name;
@@ -297,12 +273,8 @@ fn run(e: &Engine) {
     let mut last = Instant::now();
     while !e.dead() {
         let (w, fault) = {
-            let mut c = lock(&e.ctl);
-            while c.owner == 0 || c.want.is_none() {
-                c = e
-                    .wake
-                    .wait(c)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let (mut c, parked) = e.0.wait(|_| false);
+            if parked {
                 last = Instant::now();
             }
             (c.want.expect("checked above"), std::mem::take(&mut c.fault))

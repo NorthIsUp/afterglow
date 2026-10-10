@@ -21,8 +21,8 @@ mod proto;
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::engine_slot::Claim;
 use crate::env_str;
 use crate::font;
 use crate::glyph;
@@ -47,17 +47,11 @@ const BEZEL_W: usize = 6;
 const PLUS_ROMS: [u32; 3] = [0x4D1E_EEE1, 0x4D1E_EAE1, 0x4D1F_8172];
 const ROM_LEN: u64 = 128 * 1024;
 
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
 pub struct BattleChess {
     grid: Grid,
     palette: Vec<u32>,
-    id: u64,
     engine: &'static Engine,
-    /// Taken by the first `render`, not the constructor: the mirror builds
-    /// savers just to read their knobs, and that must not start a Mac.
-    want: Option<Want>,
-    engaged: bool,
+    claim: Claim<Engine>,
     /// Showing why there is no Mac, rather than the Mac.
     carded: bool,
     view: Scaled<u8>,
@@ -245,10 +239,8 @@ impl BattleChess {
         let mut s = Self {
             grid,
             palette: vec![lit, ink, 0x2B2A27, 0x141414, 0x1E1E1E],
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             engine,
-            want,
-            engaged: false,
+            claim: Claim::new(want),
             carded: false,
             view,
             x0: (w - W) / 2,
@@ -310,16 +302,13 @@ impl BattleChess {
 
 impl Saver for BattleChess {
     fn render(&mut self, s: &mut Surface<'_>) {
-        if let Some(w) = self.want.take() {
-            self.engine.claim(self.id, w);
-            self.engaged = true;
-        }
-        if self.engaged {
-            if self.engine.state() == State::Failed {
+        let engine = self.engine;
+        if let Some(e) = self.claim.engine(|| engine) {
+            if e.state() == State::Failed {
                 if !self.carded {
                     self.show_card(&FAILED);
                 }
-            } else if let Some(seq) = self.engine.latest(self.seq, &mut self.bits) {
+            } else if let Some(seq) = e.latest(self.seq, &mut self.bits) {
                 self.seq = seq;
                 self.carded = false;
                 self.unpack();
@@ -350,14 +339,6 @@ impl Saver for BattleChess {
 
     fn palette(&self) -> &[u32] {
         &self.palette
-    }
-}
-
-impl Drop for BattleChess {
-    fn drop(&mut self) {
-        if self.engaged {
-            self.engine.release(self.id);
-        }
     }
 }
 

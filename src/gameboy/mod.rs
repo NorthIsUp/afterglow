@@ -18,9 +18,9 @@ mod ram;
 mod view;
 mod world;
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use crate::engine_slot::Claim;
 use crate::grid::{pixel_aspect, Grid};
 use crate::saver::Saver;
 use crate::scaled::{self, Scaled};
@@ -35,18 +35,12 @@ use view::{Mode, DIM};
 const GRID_COLOURS: usize = 2 * 4096;
 const STATIC_LEVELS: u32 = 16;
 
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
 pub struct GameBoySaver {
     grid: Grid,
     grid_palette: Vec<u32>,
     /// A view pixel (RGB555, bit 15 dim) to the panel's XRGB8888.
     lut: Vec<u32>,
-    id: u64,
-    /// Taken by the first `render`, not the constructor: the mirror builds
-    /// savers just to read their knobs, and that must not steal the engine.
-    want: Option<Want>,
-    engaged: bool,
+    claim: Claim<Engine>,
     view: Scaled<u16>,
     pix: Vec<u16>,
     seq: u32,
@@ -124,9 +118,7 @@ impl GameBoySaver {
             grid,
             grid_palette,
             lut: (0..=u16::MAX).map(xrgb).collect(),
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-            want: Some(want),
-            engaged: false,
+            claim: Claim::new(Some(want)),
             view,
             pix: vec![0; MAX_W * H],
             seq: 0,
@@ -139,17 +131,13 @@ impl GameBoySaver {
 
 impl Saver for GameBoySaver {
     fn render(&mut self, s: &mut Surface<'_>) {
-        if let Some(w) = self.want.take() {
-            Engine::get().claim(self.id, w);
-            self.engaged = true;
-        }
         let w = self.view.width();
-        if self.engaged {
-            if let Some((seq, shown)) = Engine::get().latest(self.seq, &mut self.pix) {
+        if let Some(e) = self.claim.engine(Engine::get) {
+            if let Some((seq, shown)) = e.latest(self.seq, &mut self.pix) {
                 // A view the engine composed for an older width (a knob
                 // change in flight) would scale wrong; static until it
                 // catches up.
-                (self.seq, self.shown, self.fresh) = (seq, shown == Some(w), true);
+                (self.seq, self.shown, self.fresh) = (seq, shown == Some((w, ())), true);
             }
         }
         if !self.shown {
@@ -185,14 +173,6 @@ impl Saver for GameBoySaver {
 
     fn palette(&self) -> &[u32] {
         &self.grid_palette
-    }
-}
-
-impl Drop for GameBoySaver {
-    fn drop(&mut self) {
-        if self.engaged {
-            Engine::get().release(self.id);
-        }
     }
 }
 
