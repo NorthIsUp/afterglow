@@ -121,7 +121,10 @@ the result and `074fc6ff` for itself. Drop the result into the
 needed: it is recognised by checksum, its RAM layout (a 252-Pokémon
 Pokédex and a 30-item bag move most of WRAM) is known, and the bot plays it
 as Yellow, Pikachu and all, walking past its follower as it does
-Pikachu's.
+Pikachu's. Its Pikachu evolves at level 16, so a Raichu follows from
+Brock on. It stops before Erika: EvoYellow's Celadon Gym fields ground
+types and her team is six grass Pokémon at levels 46 to 50, more than a
+lone Raichu takes on.
 
 The bot plays the story from the game's own RAM, from power-on with a blank
 battery save (a `GAMEBOY_SAV` is not used for Pokémon). The intro runs
@@ -161,6 +164,7 @@ In the author's tests on Red, from power-on (game time):
 | Red, Squirtle   | 8 min   | 44 min  | 104 min | 160 min | 223 min |
 | Blue, Bulbasaur | 7 min   | 53 min  | 98 min  | 160 min | 269 min |
 | Yellow, Pikachu | 6 min   | 118 min | 134 min | 182 min | 306 min |
+| EvoYellow       | 7 min   | 92 min  | 124 min | 166 min | stops   |
 
 Charmander and Pikachu grind longer: Brock's rock types shrug off fire and
 electricity. Squirtle and Pikachu grind longest for Erika. After Erika

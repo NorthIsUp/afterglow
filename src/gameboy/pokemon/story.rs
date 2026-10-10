@@ -365,6 +365,11 @@ impl Story {
         if next == SABRINA && self.rev.yellow() {
             return None;
         }
+        // EvoYellow's Celadon Gym fields ground types, and Erika six grass
+        // Pokémon at levels 46 to 50.
+        if next == ERIKA && self.rev == Revision::EvoYellow {
+            return None;
+        }
         let &(grind, leader) = GYMS.get(next)?;
         let errand = match next {
             SURGE => self.to_vermilion(gb),
