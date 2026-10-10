@@ -52,7 +52,7 @@ fn build(
 ) -> (Panel, BattleChess) {
     let p = Panel::new(w, h, w);
     let b = with_test_aspect(aspect, || {
-        BattleChess::build(&p, aspect, files, "paper", engine, false)
+        BattleChess::build(&p, aspect, files, "paper", engine)
     });
     (p, b)
 }
@@ -140,6 +140,7 @@ fn files_are_checked_for_a_plus_rom_and_an_hfs_disk() {
     );
     f.engine = dir.join("no-engine");
     assert!(f.problems().join("\n").contains("mac-engine"));
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// The panel path: a new Mac screen scales onto the panel, a frame that
@@ -215,6 +216,7 @@ fn an_engine_that_keeps_dying_shows_the_failure_card() {
     }
     saver::frame(&mut b, &mut buf, &p);
     assert!(b.carded);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 /// The real thing, with the user's own files (never in the repo): boots,

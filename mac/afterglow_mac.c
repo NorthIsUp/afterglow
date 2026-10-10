@@ -118,7 +118,7 @@ static void stamp(void) {
 }
 
 // Speeds above 1x run extra emulation until 12 ms of the 16.6 ms sixtieth are
-// gone, leaving the rest to the render thread.
+// gone, so a fast boot still answers the pipe sixty times a second.
 GLOBALOSGLUFUNC blnr ExtraTimeNotOver(void) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
