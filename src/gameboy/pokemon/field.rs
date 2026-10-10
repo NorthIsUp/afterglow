@@ -17,7 +17,9 @@ pub const POKE_BALL: u8 = 0x04;
 pub const POTIONS: [u8; 3] = [0x12, 0x13, 0x14];
 /// Potions bought in one visit.
 const STOCK: u8 = 4;
-const FRESH_WATER: u8 = 0x3C;
+/// Fresh Water, Soda Pop, Lemonade: any one gets a Saffron guard to let
+/// the player by. Fresh Water, the cheapest, tops the machine's list.
+pub const DRINKS: [u8; 3] = [0x3C, 0x3D, 0x3E];
 pub const BICYCLE: u8 = 0x06;
 /// `wWalkBikeSurfState`: 0 walking.
 const WALK_BIKE_SURF: u16 = 0xD700;
@@ -53,6 +55,26 @@ pub enum Kind {
     Stock,
 }
 
+impl Kind {
+    /// Run by pressing A at whoever (or whatever) the player faces, not
+    /// from the start menu.
+    fn faced(self) -> bool {
+        matches!(
+            self,
+            Self::Buy | Self::Floor(..) | Self::Drink | Self::Stock
+        )
+    }
+
+    /// The bag item it picks.
+    fn item(self) -> Option<u8> {
+        match self {
+            Self::Teach(_) => Some(HM01),
+            Self::Use(item) | Self::Potion(item) => Some(item),
+            _ => None,
+        }
+    }
+}
+
 pub struct Errand {
     pub kind: Kind,
     frames: u32,
@@ -86,7 +108,7 @@ impl Errand {
                 Kind::Teach(slot) => knows(gb, ram, slot, CUT),
                 Kind::Buy => count(gb, ram, POKE_BALL) >= BALLS,
                 Kind::Floor(_, map) => nav::lift(gb, ram) == map,
-                Kind::Drink => count(gb, ram, FRESH_WATER) > 0,
+                Kind::Drink => count(gb, ram, DRINKS[0]) > 0,
                 Kind::Stock => potions(gb, ram) >= STOCK,
                 // The bag uses the Bicycle as soon as it is picked: no USE.
                 Kind::Use(BICYCLE) => riding(gb, ram),
@@ -102,11 +124,7 @@ impl Errand {
             return Some(keys.tap(B, GAP));
         }
         if !open {
-            let talk = matches!(
-                self.kind,
-                Kind::Buy | Kind::Floor(..) | Kind::Drink | Kind::Stock
-            );
-            return Some(keys.tap(if talk { A } else { START }, GAP));
+            return Some(keys.tap(if self.kind.faced() { A } else { START }, GAP));
         }
         if screen::shows(gb, b"hacked")
             || screen::shows(gb, b"anything to CUT")
@@ -125,11 +143,9 @@ impl Errand {
         };
         let key = if screen::shows(gb, b"OPTION") {
             let want: &[u8] = match self.kind {
-                Kind::Teach(_) | Kind::Use(_) | Kind::Potion(_) => b"ITEM",
+                _ if self.kind.faced() => return Some(keys.tap(B, GAP)),
                 Kind::Cut(_) => b"POKeMON",
-                Kind::Buy | Kind::Floor(..) | Kind::Drink | Kind::Stock => {
-                    return Some(keys.tap(B, GAP))
-                }
+                _ => b"ITEM",
             };
             if on(gb, want) {
                 A
@@ -164,20 +180,14 @@ impl Errand {
             screen::toward(m.item, battle.worst_move(gb, mon(ram, slot)))
         } else if screen::shows(gb, b"YES") {
             A
+        } else if let Some(item) = self.kind.item() {
+            match bag_index(gb, ram, item) {
+                Some(i) => toward_item(gb, m.item, i),
+                None => B,
+            }
         } else {
             match self.kind {
-                Kind::Teach(_) | Kind::Use(_) | Kind::Potion(_) => {
-                    let item = match self.kind {
-                        Kind::Use(item) | Kind::Potion(item) => item,
-                        _ => HM01,
-                    };
-                    match bag_index(gb, ram, item) {
-                        Some(i) => toward_item(gb, m.item, i),
-                        None => B,
-                    }
-                }
                 Kind::Floor(i, _) => toward_item(gb, m.item, i),
-                // Fresh Water, the cheapest, tops the machine's list.
                 Kind::Drink => screen::toward(m.item, 0),
                 Kind::Buy if on(gb, b"POKe BALL") => A,
                 Kind::Stock if on(gb, b"POTION") => A,
@@ -187,7 +197,7 @@ impl Errand {
                     B
                 }
                 Kind::Buy | Kind::Stock => DOWN,
-                Kind::Cut(_) => B,
+                Kind::Cut(_) | Kind::Teach(_) | Kind::Use(_) | Kind::Potion(_) => B,
             }
         };
         Some(keys.tap(key, GAP))

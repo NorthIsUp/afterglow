@@ -43,9 +43,6 @@ pub const SILPH_SCOPE: u8 = 0x48;
 pub const POKE_FLUTE: u8 = 0x49;
 const LIFT_KEY: u8 = 0x4A;
 const CARD_KEY: u8 = 0x30;
-/// Fresh Water, Soda Pop, Lemonade: any one gets a Saffron guard to let
-/// the player by.
-const DRINKS: [u8; 3] = [0x3C, 0x3D, 0x3E];
 /// `wStatusFlags1`, and its bit for the guards having had their drink.
 const STATUS_FLAGS: u16 = 0xD728;
 const GAVE_DRINK: u16 = 6;
@@ -97,7 +94,11 @@ const GYMS: [(u8, Square); 6] = [
     (ROUTE_15, (FUCHSIA_GYM, 4, 10)),
     (ROUTE_7, (SAFFRON_GYM, 9, 8)),
 ];
-/// Koga's index in `GYMS`: the Poké Flute stands before him.
+/// Lt. Surge's index in `GYMS`: Cut and two trash cans stand before him.
+const SURGE: usize = 2;
+/// Erika's: the Bicycle first, on the way back through Cerulean.
+const ERIKA: usize = 3;
+/// Koga's: the Poké Flute stands before him.
 const KOGA: usize = 4;
 /// Sabrina's: Team Rocket holds Silph Co., and a guard who wants a drink
 /// stands at every gate into Saffron.
@@ -129,27 +130,14 @@ type Squares = &'static [(u8, u8)];
 /// Squares the cartridge's maps show one way and a script keeps the other
 /// until an event: open once it is set, shut until then.
 const LOCKS: [(u16, u8, Squares); 6] = [
-    (SECOND_LOCK, VERMILION_GYM, &GATE),
+    // Vermilion Gym's electric gate.
+    (SECOND_LOCK, VERMILION_GYM, &block(2, 2)),
     (FOUND_ROCKET_HIDEOUT, GAME_CORNER, &[(17, 4)]),
-    (
-        BEAT_LIFT_ROCKET,
-        HIDEOUT_B1F,
-        &[(24, 16), (25, 16), (24, 17), (25, 17)],
-    ),
-    (
-        HIDEOUT_DOOR,
-        HIDEOUT_B4F,
-        &[(24, 10), (25, 10), (24, 11), (25, 11)],
-    ),
+    (BEAT_LIFT_ROCKET, HIDEOUT_B1F, &block(12, 8)),
+    (HIDEOUT_DOOR, HIDEOUT_B4F, &block(12, 5)),
     (ROUTE_12_SNORLAX, ROUTE_12, &[(SNORLAX.1, SNORLAX.2)]),
     (ROUTE_16_SNORLAX, ROUTE_16, &[(26, 10)]),
 ];
-/// Lt. Surge's index in `GYMS`: Cut and two trash cans stand before him.
-const SURGE: usize = 2;
-/// Erika's: the Bicycle first, on the way back through Cerulean.
-const ERIKA: usize = 3;
-/// Vermilion Gym's electric gate, the block the second lock clears.
-const GATE: [(u8, u8); 4] = [(4, 4), (5, 4), (4, 5), (5, 5)];
 /// Species that can learn Cut: the two starters that can, and the two
 /// grass Pokémon on Route 24 in every revision, Oddish and Bellsprout.
 const CUTTERS: [u8; 10] = [0x99, 0x09, 0x9A, 0xB0, 0xB2, 0xB4, 0xB9, 0xBA, 0xBC, 0xBD];
@@ -480,7 +468,7 @@ impl Story {
     /// or the bag holds one for them.
     fn saffron_open(&self, gb: &mut GameBoy) -> bool {
         flag(gb, self.ram.at(STATUS_FLAGS), GAVE_DRINK)
-            || DRINKS.iter().any(|&d| has_item(gb, self.ram, d))
+            || field::DRINKS.iter().any(|&d| has_item(gb, self.ram, d))
     }
 
     /// The Rocket Hideout: a switch behind the poster a Rocket guards, two
@@ -559,14 +547,9 @@ impl Story {
         match goal {
             Goal::Map(m) => nav.toward(gb, &move |_, s| s.0 == m),
             Goal::Press(at, dir) => Self::talk(gb, nav, keys, &move |_, s| s == at, &move |_| dir),
-            Goal::Errand(at, dir, kind) => match nav.toward(gb, &move |_, s| s == at)? {
-                0 if nav::facing(gb.peek(nav::FACING)) == dir => {
-                    self.errand = Some(kind);
-                    Some(0)
-                }
-                0 => Some(keys.tap(dir, GAP * 3)),
-                b => Some(b),
-            },
+            Goal::Errand(at, dir, kind) => {
+                self.errand_at(gb, nav, keys, &move |_, s| s == at, dir, kind)
+            }
             Goal::Teach(slot) => {
                 self.errand = Some(Kind::Teach(slot));
                 Some(0)
@@ -579,14 +562,7 @@ impl Story {
                 let at = |g: &Grid, s: Square| {
                     g.tileset == MART && s.0 != VIRIDIAN_MART && (s.1, s.2) == (2, 5)
                 };
-                match nav.toward(gb, &at)? {
-                    0 if nav::facing(gb.peek(nav::FACING)) == LEFT => {
-                        self.errand = Some(Kind::Stock);
-                        Some(0)
-                    }
-                    0 => Some(keys.tap(LEFT, GAP * 3)),
-                    b => Some(b),
-                }
+                self.errand_at(gb, nav, keys, &at, LEFT, Kind::Stock)
             }
             Goal::Use(item, at) => match nav.toward(gb, &move |_, s| toward(s, at).is_some())? {
                 0 => {
@@ -633,13 +609,32 @@ impl Story {
         let here = gb.peek(r.cur_map);
         nav.doors.clear();
         for (e, map, (bx, by)) in DOORS {
-            let (x, y) = (bx * 2, by * 2);
-            let squares = [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)];
+            let squares = block(bx, by);
             let open = event(gb, r, e);
             nav.set_open(gb.rom(), map, &squares, open || key);
             if key && !open && map == here {
                 nav.doors.extend(squares.map(|(x, y)| (map, x, y)));
             }
+        }
+    }
+
+    /// Stand where `at` accepts, turn to `dir`, then run `kind`.
+    fn errand_at(
+        &mut self,
+        gb: &mut GameBoy,
+        nav: &mut Nav,
+        keys: &mut Keys,
+        at: &dyn Fn(&Grid, Square) -> bool,
+        dir: u8,
+        kind: Kind,
+    ) -> Option<u8> {
+        match nav.toward(gb, at)? {
+            0 if nav::facing(gb.peek(nav::FACING)) == dir => {
+                self.errand = Some(kind);
+                Some(0)
+            }
+            0 => Some(keys.tap(dir, GAP * 3)),
+            b => Some(b),
         }
     }
 
@@ -693,6 +688,12 @@ fn money(gb: &mut GameBoy, ram: Ram) -> u32 {
         let b = u32::from(gb.peek(ram.at(MONEY) + i));
         n * 100 + (b >> 4) * 10 + (b & 15)
     })
+}
+
+/// The four squares of map block `(bx, by)`.
+const fn block(bx: u8, by: u8) -> [(u8, u8); 4] {
+    let (x, y) = (bx * 2, by * 2);
+    [(x, y), (x + 1, y), (x, y + 1), (x + 1, y + 1)]
 }
 
 /// Vermilion Gym's trash can `i`: three to a column, five columns, as
