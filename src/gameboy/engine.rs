@@ -70,8 +70,9 @@ impl Engine {
     /// Copy the view into `dst` if it moved on since `seen`, never waiting.
     /// Returns the new sequence number and the view's width, `None` for
     /// nothing to show.
-    pub fn latest(&self, seen: u32, dst: &mut [u16]) -> Option<(u32, Option<(usize, ())>)> {
-        self.0.peek()?.read(seen, dst)
+    pub fn latest(&self, seen: u32, dst: &mut [u16]) -> Option<(u32, Option<usize>)> {
+        let (seq, shown) = self.0.peek()?.read(seen, dst)?;
+        Some((seq, shown.map(|(w, ())| w)))
     }
 }
 

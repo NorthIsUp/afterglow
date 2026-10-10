@@ -16,12 +16,13 @@ mod mayor;
 mod power;
 mod tiles;
 
+use std::io::Write as _;
+
 use crate::engine_slot::Claim;
 use crate::grid::{pixel_aspect, Cell, Grid};
 use crate::saver::Saver;
 use crate::surface::{Panel, Surface};
 use crate::{env_num, font, glyph, saver_seed};
-use std::io::Write as _;
 
 use cities::Name;
 use engine::{Engine, Stats, Want, CELLS};
