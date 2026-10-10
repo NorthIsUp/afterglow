@@ -123,6 +123,11 @@ repository at the commit the tag names (`sha-<commit>-gpl`). The image carries
 the licences under `/licenses/`. afterglow's own source stays MIT. The default
 build and image contain none of it.
 
+The same image also carries `/mac-engine`, a separate program built by
+`--features mac` and licensed GPL-2.0 only, because Mini vMac (below) is. The
+screensaver starts it and the two exchange screens and key presses over a
+pipe; they are never linked together. Its source is `mac/` at the same commit.
+
 ## doomgeneric (GPL image only)
 
 `doom/doomgeneric/` is [doomgeneric](https://github.com/ozkl/doomgeneric) at
@@ -196,3 +201,17 @@ GmbH) and is licensed here as a courtesy of the owner
 ([micropolis.com](https://www.micropolis.com)), under the "Micropolis" Public
 Name License in `micropolis/MicropolisPublicNameLicense.txt`. SimCity is a
 trademark of Electronic Arts, which has no part in this.
+
+## Mini vMac (GPL image only, in `mac-engine`)
+
+`mac/minivmac/` is the Mac Plus subset of [Mini vMac](https://www.gryphel.com/c/minivmac/)
+36.04 by Paul C. Pratt and others, descended from vMac by Philip Cummins,
+under the GNU General Public License v2 (`mac/minivmac/COPYING.txt`). The
+emulator files are unmodified. `cfg/` holds the configuration its setup tool
+generated for a 4 MB Mac Plus, with `CNFGRAPI.h` edited for a headless build;
+`mac/afterglow_mac.c` replaces its platform layers (`OSGLU*.c`, not vendored)
+and `mac/engine.rs` is the program around it, both under the same licence.
+They build only into `mac-engine`, never into the screensaver.
+
+No Macintosh ROM, System software or game is bundled: the `battlechess` saver
+reads the deployment's own files.

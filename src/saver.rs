@@ -4,6 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::ascii_rest::{Canvas, Piece};
+#[cfg(feature = "mac")]
+use crate::battlechess::BattleChess;
 use crate::chess::Chess;
 use crate::city::City;
 use crate::confetti::Confetti;
@@ -139,6 +141,8 @@ macro_rules! savers {
         #[cfg(feature = "micropolis")]
         ("micropolis", |p, fps| Box::new(Micropolis::new(p, fps))),
         ("gameboy", |p, fps| Box::new(GameBoySaver::new(p, fps))),
+        #[cfg(feature = "mac")]
+        ("battlechess", |p, fps| Box::new(BattleChess::new(p, fps))),
             $((
                 crate::ascii_rest::$sm::$st::NAME,
                 crate::ascii_rest::Play::<crate::ascii_rest::$sm::$st>::build,
@@ -213,6 +217,8 @@ const SECTIONS: &[(&str, usize)] = &[
     #[cfg(feature = "micropolis")]
     ("micropolis", 5),
     ("gameboy", 5),
+    #[cfg(feature = "mac")]
+    ("battlechess", 5),
 ];
 
 /// Index into `GROUPS` of a row. A table walk, so for the HTTP thread and the
