@@ -29,7 +29,7 @@ impl Tables {
                 tilesets: (0x03, 0x47BE),
                 collision_bank: 0x00,
             },
-            Revision::Yellow => Self {
+            Revision::Yellow | Revision::EvoYellow => Self {
                 headers: (0x3F, 0x41F2),
                 banks: (0x3F, 0x43E4),
                 tilesets: (0x03, 0x4558),

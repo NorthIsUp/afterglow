@@ -94,9 +94,37 @@ disassemblies build:
 | Pokémon Red (USA, Europe)  | `ea9bcae617fdf159b045185467ae58b2e4a48b9a` |
 | Pokémon Blue (USA, Europe) | `d7037c83e1ae5b39bde3c30787637ba1d4c48ce2` |
 | Pokémon Yellow (USA, Eur.) | `cc7d03262ebfaf2f06772c1a480c7d9d5f4a38e1` |
+| EvoYellow 3.9 (see below)  | `6184bf164c3a7dc116432278fe141de75457c434` |
 
 The log prints the checksum of every ROM it loads. Any other revision plays
 like any other game: Start and A, and the remembered-background wide view.
+
+#### EvoYellow
+
+[EvoYellow](https://github.com/longlostsoul/EvoYellow) is a Yellow hack in
+which whichever Pokémon leads your party follows you, the way Pikachu does
+(and Pikachu evolves). Its patch applies to your own Yellow ROM, the one
+whose SHA-1 is above; afterglow ships neither. Take the 3.9 UPS from commit
+`f2d485b`: the copy at the repository's head lost its carriage returns to a
+line-ending rule and fails its checksum.
+
+```sh
+curl -LO 'https://github.com/longlostsoul/EvoYellow/raw/f2d485b/EvoYellow%20(3.9).ups'
+# Any UPS patcher that checks the patch's CRC32s: Flips, Rom Patcher JS.
+flips --apply 'EvoYellow (3.9).ups' yellow.gb EvoYellow-3.9.gb
+shasum EvoYellow-3.9.gb   # 6184bf164c3a7dc116432278fe141de75457c434
+```
+
+The patch's CRC32s are `7d527d62` for the Yellow it expects, `ceee307f` for
+the result and `074fc6ff` for itself. Drop the result into the
+`GAMEBOY_ROM` folder (or point `GAMEBOY_ROM` at it) and nothing else is
+needed: it is recognised by checksum, its RAM layout (a 252-Pokémon
+Pokédex and a 30-item bag move most of WRAM) is known, and the bot plays it
+as Yellow, Pikachu and all, walking past its follower as it does
+Pikachu's. Its Pikachu evolves at level 16, so a Raichu follows from
+Brock on. It stops before Erika: EvoYellow's Celadon Gym fields ground
+types and her team is six grass Pokémon at levels 46 to 50, more than a
+lone Raichu takes on.
 
 The bot plays the story from the game's own RAM, from power-on with a blank
 battery save (a `GAMEBOY_SAV` is not used for Pokémon). The intro runs
@@ -136,6 +164,7 @@ In the author's tests on Red, from power-on (game time):
 | Red, Squirtle   | 8 min   | 44 min  | 104 min | 160 min | 223 min |
 | Blue, Bulbasaur | 7 min   | 53 min  | 98 min  | 160 min | 269 min |
 | Yellow, Pikachu | 6 min   | 118 min | 134 min | 182 min | 306 min |
+| EvoYellow       | 7 min   | 92 min  | 124 min | 166 min | stops   |
 
 Charmander and Pikachu grind longer: Brock's rock types shrug off fire and
 electricity. Squirtle and Pikachu grind longest for Erika. After Erika
@@ -198,4 +227,4 @@ Source: [`src/gameboy/`](../../src/gameboy/mod.rs),
 - `POKEMON_TEXT_MS`: how long printed text stays up before the bot presses
   on, 0..2000 ms (default 200).
 - `POKEMON_STARTER`: 0 a random starter each run (default), 1 Bulbasaur,
-  2 Charmander, 3 Squirtle. Yellow always gets Pikachu.
+  2 Charmander, 3 Squirtle. Yellow and EvoYellow always get Pikachu.

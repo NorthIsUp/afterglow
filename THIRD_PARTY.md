@@ -40,6 +40,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## EvoYellow (referenced, not shipped)
+
+The `gameboy` saver recognises [EvoYellow](https://github.com/longlostsoul/EvoYellow)
+3.9, longlostsoul's Pokémon Yellow hack, by checksum, and `src/gameboy/ram.rs`
+takes its WRAM layout from the symbols of its disassembly. Neither the patch
+nor a patched ROM is in this repository. EvoYellow is released under the
+Unlicense.
+
 ## mizu-core (the `gameboy` saver's emulator)
 
 `vendor/mizu-core/` is [mizu-core](https://github.com/Amjad50/mizu) 1.3.0
