@@ -28,52 +28,49 @@ fn env(k: &str, d: &str) -> String {
     std::env::var(k).unwrap_or_else(|_| d.into())
 }
 
-/// The story beats, judged from the game's RAM alone, in the order a run
-/// reaches them.
-const MILESTONES: &[&str] = &[
-    "starter",
-    "oak's parcel",
-    "pokédex",
-    "pewter city",
-    "boulder badge",
-    "mt. moon",
-    "cerulean city",
-    "cascade badge",
-    "s.s. ticket",
-    "hm01",
-    "cut learned",
-    "thunder badge",
-    "rainbow badge",
-    "soul badge",
-    "marsh badge",
-    "volcano badge",
-    "earth badge",
-    "hall of fame",
+type Seen = [bool; 256];
+type Done = fn(&mut GameBoy, Ram, &Seen) -> bool;
+
+fn badge(gb: &mut GameBoy, r: Ram, b: u8) -> bool {
+    gb.peek(r.at(story::BADGES)) & 1 << b != 0
+}
+
+/// The story beats in the order a run reaches them, each judged from the
+/// game's RAM and the maps seen so far.
+const MILESTONES: &[(&str, Done)] = &[
+    ("starter", |gb, r, _| gb.peek(r.party_count) > 0),
+    ("oak's parcel", |gb, r, _| {
+        story::has_item(gb, r, story::OAKS_PARCEL) || story::event(gb, r, story::EVENT_GOT_POKEDEX)
+    }),
+    ("pokédex", |gb, r, _| {
+        story::event(gb, r, story::EVENT_GOT_POKEDEX)
+    }),
+    ("pewter city", |_, _, seen| seen[0x02]),
+    ("boulder badge", |gb, r, _| badge(gb, r, 0)),
+    ("mt. moon", |_, _, seen| seen[0x3B]),
+    ("cerulean city", |_, _, seen| seen[0x03]),
+    ("cascade badge", |gb, r, _| badge(gb, r, 1)),
+    ("s.s. ticket", |gb, r, _| {
+        story::event(gb, r, story::GOT_SS_TICKET)
+    }),
+    ("hm01", |gb, r, _| story::event(gb, r, story::GOT_HM01)),
+    ("cut learned", |gb, r, _| story::cutter(gb, r).is_some()),
+    ("thunder badge", |gb, r, _| badge(gb, r, 2)),
+    ("rainbow badge", |gb, r, _| badge(gb, r, 3)),
+    ("soul badge", |gb, r, _| badge(gb, r, 4)),
+    ("marsh badge", |gb, r, _| badge(gb, r, 5)),
+    ("volcano badge", |gb, r, _| badge(gb, r, 6)),
+    ("earth badge", |gb, r, _| badge(gb, r, 7)),
+    ("hall of fame", |_, _, seen| seen[0x76]),
 ];
 
-/// Which milestones the game's RAM says are done.
-fn reached(gb: &mut GameBoy, r: Ram, seen_maps: &mut [bool; 256]) -> Vec<bool> {
-    let map = gb.peek(r.cur_map);
-    seen_maps[map as usize] = true;
-    let badges = gb.peek(r.at(story::BADGES));
-    let parcel = story::has_item(gb, r, story::OAKS_PARCEL);
-    let dex = story::event(gb, r, story::EVENT_GOT_POKEDEX);
-    let mut out = vec![
-        gb.peek(r.party_count) > 0,
-        parcel || dex,
-        dex,
-        seen_maps[0x02],
-        badges & 1 != 0,
-        seen_maps[0x3B],
-        seen_maps[0x03],
-        badges & 2 != 0,
-    ];
-    out.push(story::event(gb, r, story::GOT_SS_TICKET));
-    out.push(story::event(gb, r, story::GOT_HM01));
-    out.push(story::cutter(gb, r).is_some());
-    out.extend((2..8).map(|b| badges & 1 << b != 0));
-    out.push(seen_maps[0x76]);
-    out
+/// Which milestones are done, the current map counted as seen.
+fn reached(gb: &mut GameBoy, r: Ram, seen_maps: &mut Seen) -> Vec<bool> {
+    seen_maps[usize::from(gb.peek(r.cur_map))] = true;
+    MILESTONES
+        .iter()
+        .map(|(_, done)| done(gb, r, seen_maps))
+        .collect()
 }
 
 /// Not a check: plays `POKEBOT_HOURS` game hours as fast as the core runs
@@ -164,11 +161,11 @@ fn pokebot_bench() {
         for (i, (&n, d)) in now.iter().zip(done.iter_mut()).enumerate() {
             if n && !*d {
                 *d = true;
-                let line = format!("{:16} {mins:7.1} game-min", MILESTONES[i]);
+                let line = format!("{:16} {mins:7.1} game-min", MILESTONES[i].0);
                 eprintln!("MILESTONE {line}");
                 let _ = writeln!(log, "{line}");
                 if !dir.is_empty() {
-                    let name = MILESTONES[i].replace([' ', '\'', '.'], "_");
+                    let name = MILESTONES[i].0.replace([' ', '\'', '.'], "_");
                     let file = std::fs::File::create(format!("{dir}/{name}.state")).unwrap();
                     gb.save_state(file).unwrap();
                 }

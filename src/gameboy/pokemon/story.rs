@@ -8,6 +8,7 @@ use mizu_core::GameBoy;
 use super::super::carts::Revision;
 use super::super::pilot::{A, DOWN, LEFT, RIGHT, UP};
 use super::super::ram::word;
+use super::battle;
 use super::field::{self, Kind};
 use super::input::{Keys, GAP};
 use super::nav::{self, Grid, Nav, Square};
@@ -44,6 +45,15 @@ const BILLS_HOUSE: u8 = 0x58;
 const VERMILION_GYM: u8 = 0x5C;
 const SS_ANNE_CAPTAINS_ROOM: u8 = 0x65;
 const CELADON_GYM: u8 = 0x86;
+/// Each gym in badge order: where to grind for it, and its leader.
+const GYMS: [(u8, Square); 4] = [
+    (VIRIDIAN_FOREST, (PEWTER_GYM, 4, 1)),
+    (ROUTE_3, (CERULEAN_GYM, 4, 2)),
+    (ROUTE_6, (VERMILION_GYM, 5, 1)),
+    (ROUTE_7, (CELADON_GYM, 4, 3)),
+];
+/// Lt. Surge's index in `GYMS`: Cut and two trash cans stand before him.
+const SURGE: usize = 2;
 /// Vermilion Gym's electric gate, the block the second lock clears.
 const GATE: [(u8, u8); 4] = [(4, 4), (5, 4), (4, 5), (5, 5)];
 /// Species that can learn Cut: the two starters that can, and the two
@@ -76,9 +86,9 @@ impl Starter {
         [Self::Bulbasaur, Self::Charmander, Self::Squirtle][n as usize % 3]
     }
 
-    /// The level the lead should reach before each gym: Brock, Misty,
-    /// Surge, Erika. A starter weak against one grinds longer.
-    fn levels(self, rev: Revision) -> [u8; 4] {
+    /// The level the lead should reach before each of `GYMS`. A starter
+    /// weak against one grinds longer.
+    fn levels(self, rev: Revision) -> [u8; GYMS.len()] {
         if rev == Revision::Yellow {
             return [16, 18, 30, 40];
         }
@@ -123,7 +133,7 @@ pub struct Lead {
 pub fn lead(gb: &mut GameBoy, ram: Ram) -> Lead {
     let p = ram.party_mons;
     Lead {
-        hp: word(gb, p + 1),
+        hp: word(gb, p + battle::HP),
         max: word(gb, p + 0x22),
         level: gb.peek(p + 0x21),
     }
@@ -225,22 +235,14 @@ impl Story {
                 Goal::Map(VIRIDIAN_MART)
             });
         }
-        let [brock, misty, surge, erika] = self.starter.levels(self.rev);
-        let (want, grind, gym) = if badges & 1 == 0 {
-            (brock, VIRIDIAN_FOREST, Goal::Talk((PEWTER_GYM, 4, 1)))
-        } else if badges & 2 == 0 {
-            (misty, ROUTE_3, Goal::Talk((CERULEAN_GYM, 4, 2)))
-        } else if badges & 4 == 0 {
+        let next = badges.trailing_ones() as usize;
+        let &(grind, leader) = GYMS.get(next)?;
+        if next == SURGE {
             if let Some(g) = self.to_vermilion(gb) {
                 return Some(g);
             }
-            (surge, ROUTE_6, self.surge(gb))
-        } else if badges & 8 == 0 {
-            (erika, ROUTE_7, Goal::Talk((CELADON_GYM, 4, 3)))
-        } else {
-            return None;
-        };
-        if me.level < want {
+        }
+        if me.level < self.starter.levels(self.rev)[next] {
             return Some(Goal::Grind(grind));
         }
         // Then on to it, through the cave: the Helix Fossil.
@@ -250,7 +252,11 @@ impl Story {
         if me.hp < me.max {
             return Some(Goal::Heal);
         }
-        Some(gym)
+        Some(if next == SURGE {
+            self.surge(gb)
+        } else {
+            Goal::Talk(leader)
+        })
     }
 
     /// Cut, the way speedrun routes get it: a Pokémon that can learn it
@@ -287,7 +293,7 @@ impl Story {
     fn surge(&self, gb: &mut GameBoy) -> Goal {
         let r = self.ram;
         if event(gb, r, SECOND_LOCK) {
-            return Goal::Talk((VERMILION_GYM, 5, 1));
+            return Goal::Talk(GYMS[SURGE].1);
         }
         let second = u16::from(event(gb, r, FIRST_LOCK));
         let (x, y) = trash_can(gb.peek(r.at(TRASH_CAN) + second));
