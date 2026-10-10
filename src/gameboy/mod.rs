@@ -14,6 +14,7 @@ mod engine;
 mod kanto;
 mod pilot;
 mod pokemon;
+mod ram;
 mod view;
 mod world;
 
@@ -27,6 +28,7 @@ use crate::surface::{Panel, Surface};
 use crate::{env_num, env_str, next_rand, saver_seed};
 
 use engine::{Engine, Want, H, MAX_W, SCREEN_W};
+use pokemon::Knobs;
 use view::{Mode, DIM};
 
 /// The grid palette: RGB444, then the same dimmed.
@@ -88,6 +90,10 @@ impl GameBoySaver {
         let palette = env_str(&["GAMEBOY_PALETTE"], "auto");
         let rotate = env_num(&["GAMEBOY_ROTATE_SECS"], 600, 0, 86_400) as u64;
         let seed = saver_seed(&["GAMEBOY_SEED"], 1);
+        let pokemon = Knobs {
+            text_ms: env_num(&["POKEMON_TEXT_MS"], 200, 0, 2000) as u32,
+            starter: env_num(&["POKEMON_STARTER"], 0, 0, 3) as u32,
+        };
         let aspect = pixel_aspect();
         let (width, ..) = layout(panel, aspect);
         let want = Want {
@@ -99,6 +105,7 @@ impl GameBoySaver {
             rotate: (rotate > 0).then(|| Duration::from_secs(rotate)),
             seed,
             restart: crate::saver::restarts("gameboy"),
+            pokemon,
         };
         Self::build(panel, aspect, want)
     }

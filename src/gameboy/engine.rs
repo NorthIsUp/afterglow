@@ -16,6 +16,7 @@ use mizu_core::{GameBoy, GameBoyConfig};
 
 use super::carts::{self, Cart, Pilot, DMG_GREYS};
 use super::pilot::Driver;
+use super::pokemon::Knobs;
 use super::view::{Composer, Mode};
 
 pub const H: usize = 144;
@@ -39,6 +40,7 @@ pub struct Want {
     pub seed: u32,
     /// `saver::restarts("gameboy")` when built: a new value is a power-on reset.
     pub restart: u64,
+    pub pokemon: Knobs,
 }
 
 impl Want {
@@ -189,16 +191,22 @@ impl Session {
         // colour it with a palette of its own choosing.
         let color = cart.rom.get(0x143).is_some_and(|b| b & 0x80 != 0);
         let config = GameBoyConfig { is_dmg: !color };
+        // The Pokémon bot plays a new game from power-on: a battery save
+        // would put it somewhere its intro does not know.
+        let sram = match cart.pilot {
+            Pilot::Pokemon(_) => None,
+            _ => cart.sram.as_deref(),
+        };
         // The core asserts on headers and battery saves it cannot map: a
         // user's ROM or GAMEBOY_SAV, so a panic here is a cartridge that
         // will not boot, not a dead engine thread.
-        let gb = catch_unwind(|| GameBoy::from_rom(cart.rom.clone(), cart.sram.as_deref(), config))
+        let gb = catch_unwind(|| GameBoy::from_rom(cart.rom.clone(), sram, config))
             .map_err(|_| "the core panicked loading it".to_string())?
             .map_err(|e| e.to_string())?;
         Ok(Self {
             gb,
             name: cart.name.clone(),
-            driver: Driver::new(cart.pilot, seed),
+            driver: Driver::new(cart.pilot, seed, want.pokemon),
             tone: tone_map(color, carts::shades(&want.palette, cart.pilot)),
             color,
             composer: Composer::new(want.width, want.mode, cart.pilot),
@@ -229,6 +237,10 @@ impl Session {
 
     pub fn pilot(&self) -> Pilot {
         self.driver.pilot()
+    }
+
+    pub fn fast(&self) -> bool {
+        self.driver.fast()
     }
 }
 
@@ -367,6 +379,13 @@ fn run(e: &Engine) {
             want = Some(w);
         }
         let w = want.as_ref().expect("set on the first claim");
+        // The Pokémon intro runs unseen at the core's own speed; the view
+        // shows the last frame until it is out of the house.
+        if r.session.as_ref().is_some_and(Session::fast) {
+            r.frame(w);
+            next = Instant::now();
+            continue;
+        }
         if r.frame(w) {
             e.publish(&r.view, w.width);
         } else {

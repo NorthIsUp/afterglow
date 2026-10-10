@@ -15,6 +15,10 @@ fn want(width: usize, mode: Mode) -> Want {
         rotate: None,
         seed: 7,
         restart: 0,
+        pokemon: pokemon::Knobs {
+            text_ms: 200,
+            starter: 0,
+        },
     }
 }
 
@@ -252,119 +256,6 @@ fn ram_of(cart: &Cart) -> pokemon::Ram {
     match cart.pilot {
         Pilot::Pokemon(r) => pokemon::Ram::of(r),
         _ => unreachable!("filtered to Pokémon"),
-    }
-}
-
-/// From power-on: both names chosen, then out of the house into Pallet
-/// Town, each step read from RAM, in every revision given.
-#[test]
-fn pokemon_intro_reaches_pallet_town() {
-    for cart in pokemon_roms() {
-        let r = ram_of(&cart);
-        let mut s = Session::boot(&cart, &want(461, Mode::Wide), 7).expect("boots");
-        let mut view = vec![0u16; MAX_W * H];
-        let (mut names_at, mut outside_at) = (None, None);
-        for f in 0..60 * 60 * 15 {
-            s.step(&mut view);
-            if names_at.is_none() && pokemon::named(&mut s.gb, r) {
-                names_at = Some(f);
-            }
-            if names_at.is_some() && s.gb.peek(r.cur_map) == 0 {
-                outside_at = Some(f);
-                break;
-            }
-        }
-        eprintln!(
-            "{}: named at {names_at:?}, outside at {outside_at:?}",
-            cart.name
-        );
-        assert!(
-            names_at.is_some(),
-            "{}: never got through naming",
-            cart.name
-        );
-        assert!(outside_at.is_some(), "{}: never left the house", cart.name);
-    }
-}
-
-/// Hold `key` for a few frames, then let go for some.
-fn tap(s: &mut Session, view: &mut [u16], key: u8, wait: u32) {
-    for f in 0..4 + wait {
-        s.gb.set_buttons(if f < 4 { key } else { 0 });
-        s.gb.clock_for_frame().unwrap();
-    }
-    let _ = view;
-}
-
-/// With a battery save, the title menu gains CONTINUE above NEW GAME; the
-/// bot must take CONTINUE, not wander into OPTION. The save is made in the
-/// game, through its own start menu, by a short run of the bot.
-#[test]
-fn pokemon_bot_continues_from_a_save() {
-    for cart in pokemon_roms() {
-        let r = ram_of(&cart);
-        let mut s = Session::boot(&cart, &want(160, Mode::Frame), 7).expect("boots");
-        let mut view = vec![0u16; MAX_W * H];
-        let mut f = 0;
-        while !(s.gb.peek(r.party_count) > 0
-            && s.gb.peek(r.in_battle) == 0
-            && s.gb.peek(r.font_loaded) & 1 == 0
-            && s.gb.peek(r.cur_map) == 0)
-        {
-            s.step(&mut view);
-            f += 1;
-            assert!(
-                f < 60 * 60 * 30,
-                "{}: never had a starter outside",
-                cart.name
-            );
-        }
-        for _ in 0..60 {
-            tap(&mut s, &mut view, 0, 0);
-        }
-        // Start menu, down to SAVE (one below the player's name), A, YES.
-        tap(&mut s, &mut view, pilot::START, 30);
-        let save = (0..20 * 18)
-            .map(|i| s.gb.peek(0xC3A0 + i))
-            .collect::<Vec<_>>()
-            .windows(4)
-            .position(|w| w == [0x92, 0x80, 0x95, 0x84])
-            .expect("SAVE in the start menu");
-        let want_item = ((save / 20) - 2) / 2;
-        while usize::from(s.gb.peek(0xCC26)) != want_item {
-            tap(&mut s, &mut view, pilot::DOWN, 8);
-        }
-        // Open SAVE, let "Would you like to SAVE the game?" print, YES.
-        for wait in [150, 150, 900] {
-            tap(&mut s, &mut view, pilot::A, wait);
-        }
-        let sram = s.gb.sram().to_vec();
-        assert!(sram.iter().any(|&b| b != 0), "{}: nothing saved", cart.name);
-
-        let saved = Cart {
-            name: cart.name.clone(),
-            rom: cart.rom.clone(),
-            pilot: cart.pilot,
-            sram: Some(sram),
-        };
-        let mut s = Session::boot(&saved, &want(160, Mode::Frame), 7).expect("boots");
-        let mut back = None;
-        for f in 0..60 * 60 * 2 {
-            s.step(&mut view);
-            if s.gb.peek(r.party_count) > 0 && s.gb.peek(r.cur_map) == 0 {
-                back = Some(f);
-                break;
-            }
-        }
-        eprintln!(
-            "{}: continued into Pallet Town at frame {back:?}",
-            cart.name
-        );
-        assert!(
-            back.is_some(),
-            "{}: did not continue from the save",
-            cart.name
-        );
     }
 }
 

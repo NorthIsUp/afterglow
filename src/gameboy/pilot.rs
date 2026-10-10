@@ -4,7 +4,7 @@
 use mizu_core::GameBoy;
 
 use super::carts::Pilot;
-use super::pokemon::Bot;
+use super::pokemon::{Bot, Knobs};
 use crate::next_rand;
 
 pub const RIGHT: u8 = 0x01;
@@ -23,12 +23,12 @@ pub enum Driver {
 }
 
 impl Driver {
-    pub fn new(p: Pilot, seed: u32) -> Self {
+    pub fn new(p: Pilot, seed: u32, knobs: Knobs) -> Self {
         match p {
             Pilot::Mash => Self::Mash(seed),
             Pilot::Tobu => Self::Tobu(Tobu { rng: seed, dash: 0 }),
             Pilot::Rebound => Self::Rebound(seed),
-            Pilot::Pokemon(r) => Self::Pokemon(Box::new(Bot::new(r, seed))),
+            Pilot::Pokemon(r) => Self::Pokemon(Box::new(Bot::new(r, seed, knobs))),
         }
     }
 
@@ -39,6 +39,11 @@ impl Driver {
             Self::Rebound(_) => Pilot::Rebound,
             Self::Pokemon(b) => Pilot::Pokemon(b.revision()),
         }
+    }
+
+    /// Whether the engine should run this game as fast as it can, unseen.
+    pub fn fast(&self) -> bool {
+        matches!(self, Self::Pokemon(b) if b.fast())
     }
 
     /// The buttons to hold for the next frame.

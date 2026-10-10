@@ -81,8 +81,8 @@ spec:
 ```
 
 `GAMEBOY_SAV` points at a battery save to start from (a `.sav` from the same
-cartridge reader, say): the bot then carries on your own adventure. It is read
-once and never written; a restart starts from it again.
+cartridge reader, say). It is read once and never written; a restart starts
+from it again. The Pokémon bot ignores it and starts a new game.
 
 ### Pokémon
 
@@ -98,37 +98,56 @@ disassemblies build:
 The log prints the checksum of every ROM it loads. Any other revision plays
 like any other game: Start and A, and the remembered-background wide view.
 
-The bot plays from the game's own RAM. It gets through the title screen, the
-intro and both names, walks out of the house, takes a starter from Oak's
-table and fights the rival. From there it roams: it plans routes over the
-map's walkable squares, read from the cartridge, to whichever door,
-staircase or map edge it has used least; it reads every text box and fights
-every battle with its first move. When the party faints the game sends it
-back to the last Pokémon Center, healed, and it sets off again. If some
-scripted moment holds it in one place for three minutes it rewinds to a save
-state from a few minutes before and tries again with different luck.
+The bot plays the story from the game's own RAM, from power-on with a blank
+battery save (a `GAMEBOY_SAV` is not used for Pokémon). The intro runs
+unseen at the emulator's full speed: it sets the options to fast text, no
+battle animations and SET, takes NEW GAME, picks the first preset name for
+the player and the rival, and walks out of the house, checking each step in
+RAM as it goes. That state is kept in memory, so a later run of the same
+game starts at the door.
 
-At the title it reads the menu off the screen rather than counting presses:
-with a battery save the menu gains CONTINUE, and the bot takes it, so it
-carries on the save (yours, from `GAMEBOY_SAV`) instead of starting over. An
-options screen it wanders into is backed out of with B, and an intro still
-going after eight minutes gets the game's own soft reset.
+From there it follows the story: a starter (`POKEMON_STARTER`, random by
+default), the rival, Oak's Parcel, the Pokédex, then levels before each gym,
+Brock, Mt. Moon, Misty. A route planner reads every map's walkable squares,
+ledges, cave edges, doors and edge connections from the cartridge and finds
+the way across maps; it walks around people and remembers walls it bumps.
+Battles go through the game's menus: the move with the best expected damage
+(type chart and move table from the ROM, same-type bonus, accuracy, attack
+against defence, PP left, not a disabled move), RUN from wild battles it
+has no use for, and the weakest move forgotten for a new one. It grinds in
+grass (or a cave) until its lead reaches the level the next gym wants, and
+heals at the nearest Pokémon Center when hurt or out of PP. Text is
+answered `POKEMON_TEXT_MS` after it stops printing, and every menu by
+reading its cursor. If something holds it on one square for three minutes
+it marks the square a trap and rewinds to the newest save state from
+somewhere else.
+
+In the author's tests on Red, from power-on (game time):
+
+| Game, starter   | Pokédex | Boulder Badge | Cascade Badge |
+| --------------- | ------- | ------------- | ------------- |
+| Red, Bulbasaur  | 7 min   | 45 min        | 85 min        |
+| Red, Charmander | 8 min   | 91 min        | 183 min       |
+| Red, Squirtle   | 8 min   | 44 min        | 110 min       |
+| Yellow, Pikachu | 6 min   | 118 min       | 138 min       |
+
+Charmander and Pikachu grind longer: Brock's rock types shrug off fire and
+electricity. After Misty there is no further story yet, and the bot
+wanders.
 
 The mirror page's **↺ Restart** (`POST /restart?saver=gameboy`) is a
 power-on reset: the cartridge boots again with no battery save, so the bot
 takes NEW GAME.
 
-It does not beat the game. That needs either a full route through the story
-(every key item, gym and cutscene) or a tool-assisted movie replayed input
-for input. TASVideos' Pokémon movies are BizHawk recordings on Gambatte or
+It does not beat the game. That needs either a longer route through the
+story (every key item, gym and cutscene) or a tool-assisted movie replayed
+input for input. TASVideos' Pokémon movies are BizHawk recordings on Gambatte or
 GBHawk, from power-on with Nintendo's GBC boot ROM, which afterglow cannot
 ship. Tried here with the 75-second Red "save glitch" movie (4329M): the
 menus sync (the game is saving at the frame the movie cuts the power), but
 the full run does not, across 630 boot-offset and power-cut timings. A
 movie would need your own boot ROM dump to start from the same state, which
-the emulator could load but this saver does not take yet. In the author's
-tests, an hour and a half of play takes the bot from the bedroom through
-Pallet Town and Route 1 to Viridian City.
+the emulator could load but this saver does not take yet.
 
 ## How it runs
 
@@ -165,3 +184,7 @@ Source: [`src/gameboy/`](../../src/gameboy/mod.rs),
   0..86400 (default 600; 0 never moves on).
 - `GAMEBOY_SEED`: pins which cartridge plays first and the pilots' choices
   (default: from the clock).
+- `POKEMON_TEXT_MS`: how long printed text stays up before the bot presses
+  on, 0..2000 ms (default 200).
+- `POKEMON_STARTER`: 0 a random starter each run (default), 1 Bulbasaur,
+  2 Charmander, 3 Squirtle. Yellow always gets Pikachu.
