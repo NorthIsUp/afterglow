@@ -13,8 +13,9 @@ use super::{field, screen, Ram};
 /// `wBattleMon` and `wEnemyMon`, `battle_struct` in pokered.
 const BATTLE_MON: u16 = 0xD014;
 const ENEMY_MON: u16 = 0xCFE5;
+pub const HP: u16 = 1;
 const TYPE1: u16 = 5;
-const MOVES: u16 = 8;
+pub const MOVES: u16 = 8;
 const ATTACK: u16 = 17;
 const DEFENSE: u16 = 19;
 const SPECIAL: u16 = 23;
@@ -169,14 +170,16 @@ impl Battle {
         };
         let m = screen::menu(gb);
         let wild = gb.peek(self.ram.in_battle) == WILD;
-        let ball = field::bag_index(gb, self.ram, field::POKE_BALL);
-        let throw = wild && ball.is_some() && catch.contains(&gb.peek(self.ram.at(ENEMY_MON)));
+        let enemy = gb.peek(self.ram.at(ENEMY_MON));
+        // The bag index of the Poké Ball to throw, if this one is worth it.
+        let ball = field::bag_index(gb, self.ram, field::POKE_BALL)
+            .filter(|_| wild && catch.contains(&enemy));
         if screen::shows(gb, b"FIGHT") && screen::shows(gb, b"RUN") {
             let (_, damage) = self.best_move(gb);
             // A wild battle is worth it for the levels, and only when the
             // lead can hurt it.
             let run = wild && (!grind || damage == 0);
-            let (want_x, want_item) = if throw {
+            let (want_x, want_item) = if ball.is_some() {
                 (9, 1)
             } else if run {
                 (15, 1)
@@ -205,14 +208,13 @@ impl Battle {
             return keys.tap(screen::toward(cy - MOVE_ROW, slot), GAP);
         }
         // The bag: a list in the top half, where the move list is below.
-        if let (true, Some(i), true) = (throw, ball, cx == 5 && cy < 12) {
-            let at = m.item.wrapping_add(gb.peek(field::LIST_SCROLL));
-            return keys.tap(screen::toward(at, i), GAP);
+        if let Some(i) = ball.filter(|_| cx == 5 && cy < 12) {
+            return keys.tap(field::toward_item(gb, m.item, i), GAP);
         }
         // The lead fainted: the first one standing goes in.
         if screen::shows(gb, b"Bring out") {
             let alive = field::slot(gb, self.ram, |gb, s| {
-                word(gb, field::mon(self.ram, s) + 1) > 0
+                word(gb, field::mon(self.ram, s) + HP) > 0
             });
             return keys.tap(screen::toward(m.item, alive.unwrap_or(0)), GAP);
         }

@@ -191,14 +191,14 @@ impl Bot {
             return self.keys.tap(B, 30);
         }
         self.story.can_attack = self.battle.can_attack(gb);
+        // Cut works outside battle only with the Cascade Badge.
         let cutter = story::cutter(gb, r).filter(|_| self.story.badges(gb) & 2 != 0);
         self.nav.set_cut(cutter.is_some());
         let b = self.story.buttons(gb, &mut self.nav, &mut self.keys);
         if let Some(kind) = self.story.errand.take() {
             self.errand = Some(Errand::new(kind));
         }
-        if let (Some(tree), Some(slot)) = (self.nav.tree.take(), cutter) {
-            self.nav.felled(tree);
+        if let (Some(_), Some(slot)) = (self.nav.tree.take(), cutter) {
             self.errand = Some(Errand::new(Kind::Cut(slot)));
         }
         if let Some(b) = b {

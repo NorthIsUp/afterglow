@@ -6,7 +6,7 @@
 use mizu_core::GameBoy;
 
 use super::super::pilot::{A, B, DOWN, START};
-use super::battle::Battle;
+use super::battle::{Battle, MOVES};
 use super::input::{Keys, GAP};
 use super::{screen, Ram};
 
@@ -19,7 +19,7 @@ const PARTY_MON: u16 = 44;
 const BAG_COUNT: u16 = 0xD31D;
 const BAG: u16 = 0xD31E;
 /// `wListScrollOffset`, below `wFontLoaded` so the same in every revision.
-pub const LIST_SCROLL: u16 = 0xCC36;
+const LIST_SCROLL: u16 = 0xCC36;
 /// Long enough for any errand; past it something unexpected is open.
 const GIVE_UP: u32 = 60 * 90;
 
@@ -127,7 +127,7 @@ impl Errand {
         } else {
             match self.kind {
                 Kind::Teach(_) => match bag_index(gb, ram, HM01) {
-                    Some(i) => screen::toward(m.item.wrapping_add(gb.peek(LIST_SCROLL)), i),
+                    Some(i) => toward_item(gb, m.item, i),
                     None => B,
                 },
                 Kind::Buy if on(gb, b"POKe BALL") => A,
@@ -139,13 +139,19 @@ impl Errand {
     }
 }
 
+/// `screen::toward` for a scrolled list: the cursor on visible item `at`,
+/// heading for entry `i`.
+pub fn toward_item(gb: &mut GameBoy, at: u8, i: u8) -> u8 {
+    screen::toward(at.wrapping_add(gb.peek(LIST_SCROLL)), i)
+}
+
 /// `wPartyMons`' entry for this slot.
 pub fn mon(ram: Ram, slot: u8) -> u16 {
     ram.party_mons + PARTY_MON * u16::from(slot)
 }
 
 pub fn knows(gb: &mut GameBoy, ram: Ram, slot: u8, id: u8) -> bool {
-    (0..4).any(|i| gb.peek(mon(ram, slot) + 8 + i) == id)
+    (0..4).any(|i| gb.peek(mon(ram, slot) + MOVES + i) == id)
 }
 
 /// The first party slot that passes `f`.

@@ -185,7 +185,8 @@ pub struct Nav {
     /// Trees cut on the map the player is on: they grow back when it
     /// leaves.
     cut: Vec<Square>,
-    /// A tree in the way, faced: the bot should cut it.
+    /// A tree in the way, faced, and already counted as cut: the bot
+    /// should cut it.
     pub tree: Option<Square>,
 }
 
@@ -452,9 +453,9 @@ impl Nav {
                     _ => (0, y as i32 - 2 * off, RIGHT),
                 };
                 // The game tests the square stepped onto in the joined map.
-                if tg.walkable(lx as usize, ly as usize)
-                    && (0..tw).contains(&lx)
+                if (0..tw).contains(&lx)
                     && (0..th).contains(&ly)
+                    && tg.walkable(lx as usize, ly as usize)
                 {
                     out.push(((from.0, x as u8, y as u8), dir, (to, lx as u8, ly as u8), d));
                 }
@@ -621,11 +622,6 @@ impl Nav {
         self.people.contains(&(s.1.into(), s.2.into()))
     }
 
-    /// A tree the bot has just cut: walk through it until the map changes.
-    pub fn felled(&mut self, s: Square) {
-        self.cut.push(s);
-    }
-
     pub fn stop(&mut self) {
         self.walking = None;
     }
@@ -692,14 +688,10 @@ impl Nav {
         let free = |g: &Grid, s: Square| {
             goal(g, s) && (s.0 != here.0 || !people.contains(&(s.1.into(), s.2.into())))
         };
-        if self.leg.is_some_and(|(t, l)| {
-            l.is_none()
-                && self
-                    .grids
-                    .get(&t.0)
-                    .is_some_and(|g| t.0 == here.0 && !free(g, t))
-        }) {
-            self.leg = None;
+        if let Some((t, None)) = self.leg {
+            if t.0 == here.0 && self.grids.get(&t.0).is_some_and(|g| !free(g, t)) {
+                self.leg = None;
+            }
         }
         // Planned once per map: the live search below walks the leg.
         if self.leg.is_none_or(|(t, _)| t.0 != here.0) {
@@ -743,6 +735,7 @@ impl Nav {
             // into the tree meanwhile is harmless.
             if facing(gb.peek(FACING)) == dir {
                 self.tree = Some(ahead);
+                self.cut.push(ahead);
             }
             return Some(dir);
         }
@@ -760,16 +753,13 @@ impl Nav {
         })
     }
 
-    /// The first step toward `to` on the live map, people avoided; failing
-    /// that, ignoring them (they move).
+    /// The first step toward `to` on the live map, people (as `toward` just
+    /// read them) avoided; failing that, ignoring them (they move).
     fn step_toward(&mut self, gb: &mut GameBoy, here: Square, to: (u8, u8)) -> Option<u8> {
         let rom = gb.rom();
         self.grid(rom, here.0)?;
         let g = &self.grids[&here.0];
-        let (w, h) = (g.w, g.h);
-        self.read_people(gb, w, h);
-        let g = &self.grids[&here.0];
-        let i = usize::from(to.1) * w + usize::from(to.0);
+        let i = usize::from(to.1) * g.w + usize::from(to.0);
         // Around people, unless that is far longer than waiting for them
         // to move: the long way round can be a one-way loop over a ledge.
         let mut steps = [(u32::MAX, 0u8); 2];
