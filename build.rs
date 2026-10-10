@@ -16,8 +16,8 @@ fn main() {
 }
 
 /// Mini vMac's Mac Plus build and `mac/afterglow_mac.c`, its headless
-/// platform layer, as one static library linked into `mac-engine` and
-/// nothing else: cc's own link lines would reach every binary.
+/// platform layer, as one static library. Only `mac-engine` names it (its
+/// `#[link]`); cc's own link line would put it in every binary.
 #[cfg(feature = "mac")]
 fn mac() {
     println!("cargo::rerun-if-changed=mac");
@@ -39,7 +39,7 @@ fn mac() {
         .cargo_metadata(false)
         .compile("minivmac");
     let out = std::env::var("OUT_DIR").unwrap();
-    println!("cargo::rustc-link-arg-bin=mac-engine={out}/libminivmac.a");
+    println!("cargo::rustc-link-search=native={out}");
 }
 
 /// The Micropolis engine and `micropolis/afterglow_micropolis.cpp`, its C API
