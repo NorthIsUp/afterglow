@@ -23,9 +23,8 @@ use std::collections::VecDeque;
 use mizu_core::GameBoy;
 
 use super::carts::Revision;
-use super::kanto::Kanto;
 use super::pilot::{A, B, START};
-pub use super::ram::Ram;
+use super::ram::Ram;
 use battle::Battle;
 use input::{Keys, GAP};
 use intro::Intro;
@@ -77,11 +76,6 @@ impl Bot {
             0 => crate::next_rand(&mut rng),
             n => n - 1,
         });
-        let mut nav = Nav::new(Kanto::new(rev), ram);
-        // Yellow's Pikachu walks behind the player in the last sprite slot.
-        if rev == Revision::Yellow {
-            nav.skip_sprite = Some(15);
-        }
         Self {
             rev,
             ram,
@@ -89,7 +83,7 @@ impl Bot {
             knobs,
             keys: Keys::new(knobs.text_ms),
             intro: Intro::new(rev),
-            nav,
+            nav: Nav::new(rev),
             story: Story::new(rev, starter),
             battle: Battle::new(ram),
             text_frames: 0,
@@ -137,7 +131,7 @@ impl Bot {
             self.story.badges(gb),
             self.story.goal(gb),
             self.rewinds,
-            gb.peek(0xCD6B),
+            gb.peek(nav::JOY_IGNORE),
             gb.peek(r.options)
         )
     }
@@ -194,15 +188,8 @@ impl Bot {
     fn menus(&mut self, gb: &mut GameBoy, frame: u64) -> u8 {
         let text = self.keys.text_ready(gb);
         self.text_frames += 1;
-        if intro::naming_keyboard(gb) {
-            return self.keys.tap(
-                if (frame / 16).is_multiple_of(2) {
-                    START
-                } else {
-                    A
-                },
-                8,
-            );
+        if let Some(key) = intro::naming_key(gb, frame) {
+            return self.keys.tap(key, 8);
         }
         if self.text_frames > STUCK_TEXT {
             let key = if (frame / 12).is_multiple_of(3) {

@@ -33,6 +33,7 @@ const GIVE_UP: u64 = 60 * 60 * 8;
 /// A, B, Select and Start together: the game's own soft reset.
 const SOFT_RESET: u8 = A | B | 0x40 | START;
 
+/// In the order a fresh game passes them; the discriminant indexes `passed`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
     /// The title menu is up with its cursor on NEW GAME.
@@ -62,6 +63,13 @@ pub const STEPS: [Step; 9] = [
     Step::Downstairs,
     Step::Outside,
 ];
+const _: () = {
+    let mut i = 0;
+    while i < STEPS.len() {
+        assert!(STEPS[i] as usize == i, "STEPS out of declaration order");
+        i += 1;
+    }
+};
 
 /// The state at the door, per revision, for the next run.
 static AT_DOOR: Mutex<Vec<(Revision, Vec<u8>)>> = Mutex::new(Vec::new());
@@ -130,7 +138,7 @@ impl Intro {
     /// Mark `step` passed if it is the next one due; out of order, log it
     /// once and record the first failure.
     fn pass(&mut self, gb: &mut GameBoy, step: Step, frame: u64) {
-        let i = STEPS.iter().position(|&s| s == step).expect("a step");
+        let i = step as usize;
         if self.passed[i].is_some() {
             return;
         }
@@ -149,6 +157,10 @@ impl Intro {
             self.failed = Some((step, why));
         }
         self.passed[i] = Some(frame);
+    }
+
+    fn has(&self, step: Step) -> bool {
+        self.passed[step as usize].is_some()
     }
 
     fn fail(&mut self, gb: &mut GameBoy, step: Step, what: &str) {
@@ -198,7 +210,7 @@ impl Intro {
     /// game is in the bedroom.
     pub fn buttons(&mut self, gb: &mut GameBoy, keys: &mut Keys, frame: u64) -> Option<u8> {
         let r = self.ram;
-        if self.passed[6].is_some() || self.done {
+        if self.has(Step::Bedroom) || self.done {
             return None;
         }
         // A game already under way (a loaded state): nothing to do here.
@@ -215,7 +227,7 @@ impl Intro {
                 self.next().unwrap_or(Step::Outside),
                 "intro ran too long",
             );
-            if self.passed[6].is_none() {
+            if !self.has(Step::Bedroom) {
                 self.passed = [None; STEPS.len()];
                 self.deadline = frame + GIVE_UP;
                 return Some(keys.tap(SOFT_RESET, GAP));
@@ -225,7 +237,7 @@ impl Intro {
         }
         // Text is checked every frame, so its delay counts real stillness.
         let text = keys.text_ready(gb);
-        if self.passed[5].is_some()
+        if self.has(Step::RivalName)
             && gb.peek(r.cur_map) == BEDROOM
             && gb.peek(r.font_loaded) & 1 == 0
             && !screen::has_text(gb)
@@ -242,16 +254,16 @@ impl Intro {
             if m.item == first && opts == OPTIONS {
                 self.pass(gb, Step::TitleMenu, frame);
             }
-            return Some(keys.tap(screen::toward(m, want), GAP));
+            return Some(keys.tap(screen::toward(m.item, want), GAP));
         }
         if let Some(at) = cursor.filter(|_| screen::shows(gb, b"TEXT SPEED")) {
             return Some(keys.tap(options_key(gb, at), GAP));
         }
-        if gb.peek(r.options) & OPTION_BITS == OPTIONS && self.passed[0].is_some() {
+        if gb.peek(r.options) & OPTION_BITS == OPTIONS && self.has(Step::TitleMenu) {
             self.pass(gb, Step::Options, frame);
         }
         if let Some((_, y)) = cursor.filter(|_| screen::shows(gb, b"NEW NAME")) {
-            let rival = self.passed[3].is_some();
+            let rival = self.has(Step::PlayerName);
             self.pass(
                 gb,
                 if rival {
@@ -262,31 +274,22 @@ impl Intro {
                 frame,
             );
             if m.item != 1 {
-                return Some(keys.tap(screen::toward(m, 1), GAP));
+                return Some(keys.tap(screen::toward(m.item, 1), GAP));
             }
             self.picked = preset(&screen::row(gb, y));
             return Some(keys.tap(A, GAP));
         }
-        // The keyboard: the list was not answered with a preset. START
-        // jumps to END and A takes whatever is typed, the default if
-        // nothing.
-        if naming_keyboard(gb) {
+        // The keyboard: the list was not answered with a preset.
+        if let Some(key) = naming_key(gb, frame) {
             self.fail(
                 gb,
                 self.next().unwrap_or(Step::Bedroom),
                 "naming keyboard opened",
             );
-            return Some(keys.tap(
-                if (frame / 16).is_multiple_of(2) {
-                    START
-                } else {
-                    A
-                },
-                8,
-            ));
+            return Some(keys.tap(key, 8));
         }
         if self.picked[0] != 0 {
-            let (step, at) = if self.passed[3].is_some() {
+            let (step, at) = if self.has(Step::PlayerName) {
                 (Step::RivalName, r.rival_name)
             } else {
                 (Step::PlayerName, r.player_name)
@@ -372,8 +375,14 @@ fn options_key(gb: &mut GameBoy, (x, y): (usize, usize)) -> u8 {
     }
 }
 
-/// The naming keyboard is up: its last line reads `UPPER CASE` or `lower
-/// case`.
-pub fn naming_keyboard(gb: &mut GameBoy) -> bool {
-    screen::shows(gb, b"UPPER CASE") || screen::shows(gb, b"lower case")
+/// On the naming keyboard (its last line reads `UPPER CASE` or `lower
+/// case`), START and A by turns: START jumps to END, A takes whatever is
+/// typed, the default if nothing.
+pub fn naming_key(gb: &mut GameBoy, frame: u64) -> Option<u8> {
+    let up = screen::shows(gb, b"UPPER CASE") || screen::shows(gb, b"lower case");
+    up.then_some(if (frame / 16).is_multiple_of(2) {
+        START
+    } else {
+        A
+    })
 }

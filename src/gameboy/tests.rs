@@ -252,9 +252,9 @@ fn pokemon_roms() -> Vec<Cart> {
     carts
 }
 
-fn ram_of(cart: &Cart) -> pokemon::Ram {
+fn ram_of(cart: &Cart) -> ram::Ram {
     match cart.pilot {
-        Pilot::Pokemon(r) => pokemon::Ram::of(r),
+        Pilot::Pokemon(r) => ram::Ram::of(r),
         _ => unreachable!("filtered to Pokémon"),
     }
 }
@@ -323,7 +323,7 @@ fn probe() {
                 .unwrap()
                 .write_all(&out)
                 .unwrap();
-            let r = pokemon::Ram::of(match cart.pilot {
+            let r = ram::Ram::of(match cart.pilot {
                 Pilot::Pokemon(r) => r,
                 _ => carts::Revision::Red,
             });
@@ -351,7 +351,7 @@ fn camera_calibration() {
     let Pilot::Pokemon(rev) = cart.pilot else {
         panic!("not Pokémon")
     };
-    let r = pokemon::Ram::of(rev);
+    let r = ram::Ram::of(rev);
     let mut s = Session::boot(&cart, &want(461, Mode::Frame), 7).expect("boots");
     let mut world = world::World::new(rev);
     let mut view = vec![0u16; MAX_W * H];

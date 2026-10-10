@@ -115,10 +115,10 @@ pub fn menu(gb: &mut GameBoy) -> Menu {
     }
 }
 
-/// The button that moves a one-column menu's cursor toward `want`, A once
-/// it is there.
-pub fn toward(m: Menu, want: u8) -> u8 {
-    match m.item.cmp(&want) {
+/// The button that moves a one-column menu's cursor from item `at` toward
+/// `want`, A once it is there.
+pub fn toward<T: Ord + Copy>(at: T, want: T) -> u8 {
+    match at.cmp(&want) {
         std::cmp::Ordering::Less => DOWN,
         std::cmp::Ordering::Greater => UP,
         std::cmp::Ordering::Equal => A,

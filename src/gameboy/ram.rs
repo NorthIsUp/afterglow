@@ -1,6 +1,8 @@
 //! Pokémon Red, Blue and Yellow's WRAM, as pret's pokered and pokeyellow
 //! lay it out: what the bot and the world view read.
 
+use mizu_core::GameBoy;
+
 use super::carts::Revision;
 
 /// The WRAM addresses the bot and the world view read. Red and Blue share
@@ -15,6 +17,8 @@ pub struct Ram {
     pub x: u16,
     pub tileset: u16,
     pub party_count: u16,
+    /// `wPartyMons`, `party_struct` in pokered.
+    pub party_mons: u16,
     pub sprite_data1: u16,
     pub sprite_data2: u16,
     pub player_name: u16,
@@ -37,6 +41,7 @@ impl Ram {
             x: at(0xD362),
             tileset: at(0xD367),
             party_count: at(0xD163),
+            party_mons: at(0xD16B),
             sprite_data1: 0xC100,
             sprite_data2: 0xC200,
             player_name: at(0xD158),
@@ -51,6 +56,11 @@ impl Ram {
     pub const fn at(self, red: u16) -> u16 {
         shift(self.yellow, red)
     }
+}
+
+/// A big-endian word, the way the game stores stats and HP.
+pub fn word(gb: &mut GameBoy, at: u16) -> u16 {
+    u16::from(gb.peek(at)) << 8 | u16::from(gb.peek(at + 1))
 }
 
 const fn shift(yellow: bool, red: u16) -> u16 {
