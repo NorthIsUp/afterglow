@@ -354,7 +354,12 @@ impl Story {
                 Goal::Map(VIRIDIAN_MART)
             });
         }
-        if field::potions(gb, r) < 2 && money(gb, r) >= SHOPPING_MONEY {
+        // Not before Misty: early on the trip to a mart costs more than the
+        // potions save.
+        if badges.trailing_ones() >= 2
+            && field::potions(gb, r) < 2
+            && money(gb, r) >= SHOPPING_MONEY
+        {
             return Some(Goal::Shop);
         }
         let next = badges.trailing_ones() as usize;
