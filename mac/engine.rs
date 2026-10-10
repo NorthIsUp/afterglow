@@ -24,6 +24,7 @@ use proto::{blank, Cmd, CHANGED, CMD, FRAME, SAME};
 
 const ROM: usize = 128 * 1024;
 
+#[link(name = "minivmac", kind = "static")]
 extern "C" {
     fn mvx_init(rom: *const u8, disks: *const *const c_char, n: c_int) -> c_int;
     fn mvx_run() -> c_int;
