@@ -376,13 +376,18 @@ impl Nav {
                 continue;
             };
             let (tw, th) = (tg.w as i32, tg.h as i32);
-            let squares: Vec<(usize, usize)> = match flag {
-                kanto::NORTH => (0..w).map(|x| (x, 0)).collect(),
-                kanto::SOUTH => (0..w).map(|x| (x, h - 1)).collect(),
-                kanto::WEST => (0..h).map(|y| (0, y)).collect(),
-                _ => (0..h).map(|y| (w - 1, y)).collect(),
+            let along = if flag == kanto::NORTH || flag == kanto::SOUTH {
+                w
+            } else {
+                h
             };
-            for (x, y) in squares {
+            for k in 0..along {
+                let (x, y) = match flag {
+                    kanto::NORTH => (k, 0),
+                    kanto::SOUTH => (k, h - 1),
+                    kanto::WEST => (0, k),
+                    _ => (w - 1, k),
+                };
                 let d = dist[y * w + x];
                 if d == u32::MAX {
                     continue;

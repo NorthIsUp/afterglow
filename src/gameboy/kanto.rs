@@ -261,9 +261,15 @@ pub fn decode(out: &mut [u8], src: impl Fn(usize) -> u8) {
         for row in 0..8 {
             let (lo, hi) = (src(t * 16 + row * 2), src(t * 16 + row * 2 + 1));
             for px in 0..8 {
-                let bit = 7 - px;
-                out[t * 64 + row * 8 + px] = (lo >> bit & 1) | (hi >> bit & 1) << 1;
+                out[t * 64 + row * 8 + px] = pixel(lo, hi, px as u32, false);
             }
         }
     }
+}
+
+/// Pixel `col` (0 at the left) of one 2bpp tile row, read mirrored if
+/// `flip`.
+pub fn pixel(lo: u8, hi: u8, col: u32, flip: bool) -> u8 {
+    let bit = if flip { col } else { 7 - col };
+    (lo >> bit & 1) | (hi >> bit & 1) << 1
 }

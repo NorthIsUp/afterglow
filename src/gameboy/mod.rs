@@ -14,6 +14,7 @@ mod engine;
 mod kanto;
 mod pilot;
 mod pokemon;
+mod ram;
 mod view;
 mod world;
 

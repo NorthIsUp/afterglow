@@ -16,8 +16,8 @@ use mizu_core::GameBoy;
 
 use super::carts::Revision;
 use super::engine::{H, SCREEN_W};
-use super::kanto::{decode, Kanto, Placed, TILES};
-use super::pokemon::Ram;
+use super::kanto::{decode, pixel, Kanto, Placed, TILES};
+use super::ram::Ram;
 use super::view::DIM;
 
 /// Maps further than this from the player, in blocks, are not placed: the
@@ -302,8 +302,7 @@ impl World {
                         continue;
                     }
                     for col in 0..8 {
-                        let bit = if flip { col } else { 7 - col };
-                        let c = (lo >> bit & 1) | (hi >> bit & 1) << 1;
+                        let c = pixel(lo, hi, col as u32, flip);
                         let px = vx + tx + col;
                         if let (Some(i), true) = (to_index[c as usize], (0..w as i32).contains(&px))
                         {

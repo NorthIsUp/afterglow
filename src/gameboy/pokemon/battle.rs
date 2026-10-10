@@ -21,6 +21,10 @@ const PP: u16 = 25;
 /// `wPartyMons`, `party_struct`: moves at the same offset, PP further on.
 const PARTY_MONS: u16 = 0xD16B;
 const PARTY_PP: u16 = 0x1D;
+/// The slot Disable stopped, 1-based, in the high nibble.
+const PLAYER_DISABLED_MOVE: u16 = 0xD06D;
+/// `wMoveMenuType`, below `wFontLoaded` so the same in every revision.
+const MOVE_MENU_TYPE: u16 = 0xCCDB;
 /// `wIsInBattle`: 1 wild, 2 trainer.
 const WILD: u8 = 1;
 /// `TypeEffects`' first entries (water on fire, fire on grass, both
@@ -108,11 +112,12 @@ impl Battle {
     /// The move slot to use: best expected damage among moves with PP.
     fn best_move(&self, gb: &mut GameBoy) -> (usize, u32) {
         let (me, them) = (self.ram.at(BATTLE_MON), self.ram.at(ENEMY_MON));
+        let disabled = gb.peek(self.ram.at(PLAYER_DISABLED_MOVE)) >> 4;
         let mut best = (0, 0);
         let mut any = None;
         for slot in 0..4u16 {
             let id = gb.peek(me + MOVES + slot);
-            if id == 0 || gb.peek(me + PP + slot) & 0x3F == 0 {
+            if id == 0 || gb.peek(me + PP + slot) & 0x3F == 0 || u16::from(disabled) == slot + 1 {
                 continue;
             }
             any.get_or_insert(slot as usize);
@@ -202,7 +207,14 @@ impl Battle {
             };
             return keys.tap(key, GAP);
         }
-        if screen::shows(gb, b"TYPE") {
+        // The move list: FIGHT's, or the one a new move asks to make room
+        // in (`wMoveMenuType` 0 is FIGHT's). "disabled!" can cover FIGHT's
+        // TYPE box, so it is known by where its cursor sits.
+        let in_list = cx == 5 && (MOVE_ROW..MOVE_ROW + 4).contains(&cy);
+        if in_list && gb.peek(MOVE_MENU_TYPE) != 0 {
+            return keys.tap(screen::toward(m, self.worst_move(gb)), GAP);
+        }
+        if in_list {
             let (slot, _) = self.best_move(gb);
             let at = cy.saturating_sub(MOVE_ROW);
             let key = match at.cmp(&slot) {
@@ -218,8 +230,7 @@ impl Battle {
             let no = screen::shows(gb, b"change") || screen::shows(gb, b"nickname");
             return keys.tap(if no { B } else { A }, GAP);
         }
-        if screen::shows(gb, b"forgotten") || (cx == 4 && m.max == 3 && !screen::shows(gb, b"ITEM"))
-        {
+        if screen::shows(gb, b"forgotten") {
             return keys.tap(screen::toward(m, self.worst_move(gb)), GAP);
         }
         // The bag, the party screen or anything else it did not open.
