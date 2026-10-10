@@ -108,7 +108,12 @@ game starts at the door.
 
 From there it follows the story: a starter (`POKEMON_STARTER`, random by
 default), the rival, Oak's Parcel, the Pokédex, then levels before each gym,
-Brock, Mt. Moon, Misty. A route planner reads every map's walkable squares,
+Brock, Mt. Moon, Misty, then Cut: a Pokémon that can learn it (an Oddish or
+Bellsprout caught on Route 24 with Poké Balls bought in Cerulean, when the
+starter cannot), Bill's S.S. Ticket, HM01 from the S.S. Anne's captain,
+taught from the bag. Then Lt. Surge, behind the trash cans whose switches it
+reads from RAM, and through Rock Tunnel and the Underground Path to Erika,
+cutting trees from the party menu where the route needs it. A route planner reads every map's walkable squares,
 ledges, cave edges, doors and edge connections from the cartridge and finds
 the way across maps; it walks around people and remembers walls it bumps.
 Battles go through the game's menus: the move with the best expected damage
@@ -124,16 +129,18 @@ somewhere else.
 
 In the author's tests on Red, from power-on (game time):
 
-| Game, starter   | Pokédex | Boulder Badge | Cascade Badge |
-| --------------- | ------- | ------------- | ------------- |
-| Red, Bulbasaur  | 7 min   | 45 min        | 85 min        |
-| Red, Charmander | 8 min   | 91 min        | 183 min       |
-| Red, Squirtle   | 8 min   | 44 min        | 110 min       |
-| Yellow, Pikachu | 6 min   | 118 min       | 138 min       |
+| Game, starter   | Pokédex | Boulder | Cascade | Thunder | Rainbow |
+| --------------- | ------- | ------- | ------- | ------- | ------- |
+| Red, Bulbasaur  | 7 min   | 45 min  | 80 min  | 130 min | 159 min |
+| Red, Charmander | 8 min   | 91 min  | 184 min | 212 min | 236 min |
+| Red, Squirtle   | 8 min   | 44 min  | 104 min | 160 min | 223 min |
+| Blue, Bulbasaur | 7 min   | 53 min  | 98 min  | 160 min | 269 min |
+| Yellow, Pikachu | 6 min   | 118 min | 134 min | 182 min | 306 min |
 
 Charmander and Pikachu grind longer: Brock's rock types shrug off fire and
-electricity. After Misty there is no further story yet, and the bot
-wanders.
+electricity. Squirtle and Pikachu grind longest for Erika. After Erika
+there is no further story yet (Koga needs the Bicycle or the Poké Flute,
+Saffron a drink for its guards), and the bot wanders.
 
 The mirror page's **↺ Restart** (`POST /restart?saver=gameboy`) is a
 power-on reset: the cartridge boots again with no battery save, so the bot
@@ -141,7 +148,11 @@ takes NEW GAME.
 
 It does not beat the game. That needs either a longer route through the
 story (every key item, gym and cutscene) or a tool-assisted movie replayed
-input for input. TASVideos' Pokémon movies are BizHawk recordings on Gambatte or
+input for input. No open Pokémon AI was worth porting instead: the
+reinforcement-learning agents (PokemonRedExperiments, pokemonred_puffer)
+stop around Cerulean or lean on scripted helpers and unreleased weights,
+and PokéBot, the MIT speedrun bot that does finish Red, soft-resets
+whenever a run goes wrong. TASVideos' Pokémon movies are BizHawk recordings on Gambatte or
 GBHawk, from power-on with Nintendo's GBC boot ROM, which afterglow cannot
 ship. Tried here with the 75-second Red "save glitch" movie (4329M): the
 menus sync (the game is saving at the frame the movie cuts the power), but

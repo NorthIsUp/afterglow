@@ -8,7 +8,7 @@ use mizu_core::GameBoy;
 use super::super::pilot::{A, B, LEFT, RIGHT};
 use super::super::ram::word;
 use super::input::{Keys, GAP};
-use super::{screen, Ram};
+use super::{field, screen, Ram};
 
 /// `wBattleMon` and `wEnemyMon`, `battle_struct` in pokered.
 const BATTLE_MON: u16 = 0xD014;
@@ -136,9 +136,9 @@ impl Battle {
 
     /// The slot holding the move least worth keeping, for "which move
     /// should be forgotten?": the one that does the least to a neutral
-    /// target, status moves first.
-    fn worst_move(&self, gb: &mut GameBoy) -> u8 {
-        let me = self.ram.at(BATTLE_MON);
+    /// target, status moves first. `me` is a battle or party struct: both
+    /// keep types and moves at the same offsets.
+    pub fn worst_move(&self, gb: &mut GameBoy, me: u16) -> u8 {
         (0..4u16)
             .min_by_key(|&slot| {
                 let id = gb.peek(me + MOVES + slot);
@@ -160,20 +160,29 @@ impl Battle {
         })
     }
 
-    pub fn buttons(&mut self, gb: &mut GameBoy, keys: &mut Keys, grind: bool) -> u8 {
+    /// `catch`: species worth a Poké Ball, if the story wants one.
+    pub fn buttons(&mut self, gb: &mut GameBoy, keys: &mut Keys, grind: bool, catch: &[u8]) -> u8 {
         self.learn(gb.rom());
         let text = keys.text_ready(gb);
         let Some((cx, cy)) = screen::cursor(gb) else {
             return if text { keys.tap(A, GAP) } else { 0 };
         };
         let m = screen::menu(gb);
+        let wild = gb.peek(self.ram.in_battle) == WILD;
+        let ball = field::bag_index(gb, self.ram, field::POKE_BALL);
+        let throw = wild && ball.is_some() && catch.contains(&gb.peek(self.ram.at(ENEMY_MON)));
         if screen::shows(gb, b"FIGHT") && screen::shows(gb, b"RUN") {
-            let wild = gb.peek(self.ram.in_battle) == WILD;
             let (_, damage) = self.best_move(gb);
             // A wild battle is worth it for the levels, and only when the
             // lead can hurt it.
             let run = wild && (!grind || damage == 0);
-            let (want_x, want_item) = if run { (15, 1) } else { (9, 0) };
+            let (want_x, want_item) = if throw {
+                (9, 1)
+            } else if run {
+                (15, 1)
+            } else {
+                (9, 0)
+            };
             let key = match m.x.cmp(&want_x) {
                 std::cmp::Ordering::Less => RIGHT,
                 std::cmp::Ordering::Greater => LEFT,
@@ -186,11 +195,29 @@ impl Battle {
         // TYPE box, so it is known by where its cursor sits.
         let in_list = cx == 5 && (MOVE_ROW..MOVE_ROW + 4).contains(&cy);
         if in_list && gb.peek(MOVE_MENU_TYPE) != 0 {
-            return keys.tap(screen::toward(m.item, self.worst_move(gb)), GAP);
+            return keys.tap(
+                screen::toward(m.item, self.worst_move(gb, self.ram.at(BATTLE_MON))),
+                GAP,
+            );
         }
         if in_list {
             let (slot, _) = self.best_move(gb);
             return keys.tap(screen::toward(cy - MOVE_ROW, slot), GAP);
+        }
+        // The bag: a list in the top half, where the move list is below.
+        if let (true, Some(i), true) = (throw, ball, cx == 5 && cy < 12) {
+            let at = m.item.wrapping_add(gb.peek(field::LIST_SCROLL));
+            return keys.tap(screen::toward(at, i), GAP);
+        }
+        // The lead fainted: the first one standing goes in.
+        if screen::shows(gb, b"Bring out") {
+            let alive = field::slot(gb, self.ram, |gb, s| {
+                word(gb, field::mon(self.ram, s) + 1) > 0
+            });
+            return keys.tap(screen::toward(m.item, alive.unwrap_or(0)), GAP);
+        }
+        if screen::shows(gb, b"SWITCH") && screen::shows(gb, b"STATS") {
+            return keys.tap(screen::toward(m.item, 0), GAP);
         }
         if screen::shows(gb, b"YES") {
             // Keep the lead in, never nickname; learn every new move (the
@@ -199,7 +226,10 @@ impl Battle {
             return keys.tap(if no { B } else { A }, GAP);
         }
         if screen::shows(gb, b"forgotten") {
-            return keys.tap(screen::toward(m.item, self.worst_move(gb)), GAP);
+            return keys.tap(
+                screen::toward(m.item, self.worst_move(gb, self.ram.at(BATTLE_MON))),
+                GAP,
+            );
         }
         // The bag, the party screen or anything else it did not open.
         if text {
