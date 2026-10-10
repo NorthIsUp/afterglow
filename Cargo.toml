@@ -54,6 +54,10 @@ micropolis = ["dep:cc"]
 # own ROM and disks. Builds `mac-engine` (Mini vMac, GPL-2.0, C) beside the
 # screensaver; the `-gpl` image ships both.
 mac = ["dep:cc"]
+# `gba`: mGBA's Game Boy Advance core (MPL-2.0, C) compiled in. MPL is
+# per-file copyleft, so the MIT image can carry it: both images build with
+# it, and only a C compiler is the price.
+gba = ["dep:cc"]
 
 [build-dependencies]
 cc = { version = "1", optional = true, features = ["parallel"] }

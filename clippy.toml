@@ -1,2 +1,2 @@
 # Proper nouns in doc prose, not code: `..` keeps clippy's default list.
-doc-valid-idents = ["..", "DoubleSlap", "EvoYellow", "JavaScriptCore", "TacTiles"]
+doc-valid-idents = ["..", "DoubleSlap", "EvoYellow", "FireRed", "JavaScriptCore", "LeafGreen", "TacTiles"]
