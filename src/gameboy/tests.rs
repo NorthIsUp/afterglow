@@ -15,6 +15,7 @@ fn want(width: usize, mode: Mode) -> Want {
         width,
         mode,
         rotate: None,
+        snap_every: None,
         seed: 7,
         restart: 0,
         pokemon: pokemon::Knobs {

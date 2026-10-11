@@ -80,6 +80,10 @@
 //! * `SAVER_DUMP`     — render to PPM files in this directory instead of to a
 //!   display, then exit. Not with `SAVER_TERM`. Also honours `SAVER_DUMP_FRAMES`, `SAVER_DUMP_EVERY`,
 //!   `SAVER_DUMP_PACED`, `SAVER_WIDTH`, `SAVER_HEIGHT`.
+//! * `SAVER_STATE_DIR` — a writable directory where the emulator savers
+//!   (`gameboy`, `gba`) keep each ROM's save state, so a game resumes across
+//!   a restart. Unset (the default), states live in memory for the process.
+//!   See `docs/savers/gameboy.md#save-states`.
 //! * `SAVER_TERM`     — 1 animates the saver in this terminal instead of on a
 //!   display, until Ctrl-C or `q`. Any OS with a truecolor terminal, no card
 //!   needed. See `term.rs`.
@@ -140,6 +144,7 @@ mod rotate;
 mod sakura;
 mod satori;
 mod saver;
+mod savestate;
 mod scaled;
 mod speeder;
 mod strings;

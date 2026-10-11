@@ -83,9 +83,8 @@ pub fn color(rom: &[u8]) -> bool {
     rom.get(0x143).is_some_and(|b| b & 0x80 != 0)
 }
 
-pub fn revision(rom: &[u8]) -> Option<Revision> {
-    let hex = sha1_hex(rom);
-    POKEMON.iter().find(|(h, _)| *h == hex).map(|&(_, r)| r)
+pub fn revision(sha1: &str) -> Option<Revision> {
+    POKEMON.iter().find(|(h, _)| *h == sha1).map(|&(_, r)| r)
 }
 
 /// A cartridge ready to boot: its bytes, a name for the log, how to play it,
@@ -93,6 +92,8 @@ pub fn revision(rom: &[u8]) -> Option<Revision> {
 pub struct Cart {
     pub name: String,
     pub rom: Vec<u8>,
+    /// The ROM's SHA-1, hex.
+    pub sha1: String,
     pub pilot: Pilot,
     pub sram: Option<Vec<u8>>,
 }
@@ -108,6 +109,7 @@ pub fn load(rom: &str, sav: &str) -> Vec<Cart> {
             .map(|b| Cart {
                 name: b.name.into(),
                 rom: b.rom.to_vec(),
+                sha1: sha1_hex(b.rom),
                 pilot: b.pilot,
                 sram: None,
             })
@@ -132,7 +134,8 @@ pub fn load(rom: &str, sav: &str) -> Vec<Cart> {
             let bytes = std::fs::read(p)
                 .map_err(|e| eprintln!("[screensaver] gameboy: {}: {e}", p.display()))
                 .ok()?;
-            let pilot = match revision(&bytes) {
+            let sha1 = sha1_hex(&bytes);
+            let pilot = match revision(&sha1) {
                 Some(r) => Pilot::Pokemon(r),
                 None => Pilot::Mash,
             };
@@ -140,8 +143,7 @@ pub fn load(rom: &str, sav: &str) -> Vec<Cart> {
                 .file_stem()
                 .map_or(String::new(), |s| s.to_string_lossy().into());
             eprintln!(
-                "[screensaver] gameboy: {name}: sha1 {}{}",
-                sha1_hex(&bytes),
+                "[screensaver] gameboy: {name}: sha1 {sha1}{}",
                 match pilot {
                     Pilot::Pokemon(r) => format!(", Pokémon {r:?}: bot and world view"),
                     _ => String::new(),
@@ -150,6 +152,7 @@ pub fn load(rom: &str, sav: &str) -> Vec<Cart> {
             Some(Cart {
                 name,
                 rom: bytes,
+                sha1,
                 pilot,
                 sram: sram.clone(),
             })
@@ -225,7 +228,7 @@ mod tests {
     #[test]
     fn bundled_roms_boot_and_are_not_pokemon() {
         for b in BUNDLED {
-            assert_eq!(revision(b.rom), None, "{}", b.name);
+            assert_eq!(revision(&sha1_hex(b.rom)), None, "{}", b.name);
             assert!(
                 mizu_core::GameBoy::from_rom(b.rom.to_vec(), None, GameBoyConfig::default())
                     .is_ok(),

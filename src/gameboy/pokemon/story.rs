@@ -27,6 +27,7 @@ const SECOND_LOCK: u16 = 0x160;
 /// `wFirstLockTrashCanIndex`, the second lock's after it.
 const TRASH_CAN: u16 = 0xD743;
 pub const BADGES: u16 = 0xD356;
+const PLAYER_STARTER: u16 = 0xD717;
 /// `wToggleableObjectFlags`: a set bit hides that object.
 const TOGGLED_OFF: u16 = 0xD5A6;
 const GAME_CORNER_ROCKET: u16 = 0x46;
@@ -175,6 +176,17 @@ pub enum Starter {
 impl Starter {
     pub fn of(n: u32) -> Self {
         [Self::Bulbasaur, Self::Charmander, Self::Squirtle][n as usize % 3]
+    }
+
+    /// The one the player took, from `wPlayerStarter`; `None` before Oak's
+    /// lab, or in Yellow, where it is always Pikachu.
+    pub fn in_game(gb: &mut GameBoy, ram: Ram) -> Option<Self> {
+        match gb.peek(ram.at(PLAYER_STARTER)) {
+            0x99 => Some(Self::Bulbasaur),
+            0xB0 => Some(Self::Charmander),
+            0xB1 => Some(Self::Squirtle),
+            _ => None,
+        }
     }
 
     /// The level the lead should reach before each of `GYMS`. A starter

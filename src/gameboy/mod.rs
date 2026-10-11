@@ -50,6 +50,7 @@ impl GameBoySaver {
         let wide = env_num(&["GAMEBOY_WIDE"], 1, 0, 1) == 1;
         let palette = env_str(&["GAMEBOY_PALETTE"], "auto");
         let rotate = env_num(&["GAMEBOY_ROTATE_SECS"], 600, 0, 86_400) as u64;
+        let snap = env_num(&["GAMEBOY_STATE_SECS"], 300, 0, 86_400) as u64;
         let seed = saver_seed(&["GAMEBOY_SEED"], 1);
         let pokemon = Knobs {
             text_ms: env_num(&["POKEMON_TEXT_MS"], 200, 0, 2000) as u32,
@@ -64,6 +65,7 @@ impl GameBoySaver {
             width,
             mode: if wide { Mode::Wide } else { Mode::Frame },
             rotate: (rotate > 0).then(|| Duration::from_secs(rotate)),
+            snap_every: (snap > 0).then(|| Duration::from_secs(snap)),
             seed,
             restart: crate::saver::restarts("gameboy"),
             pokemon,
@@ -99,5 +101,7 @@ impl Saver for GameBoySaver {
     }
 }
 
+#[cfg(test)]
+mod resume_tests;
 #[cfg(test)]
 mod tests;

@@ -46,6 +46,18 @@ impl Driver {
         matches!(self, Self::Pokemon(b) if b.fast())
     }
 
+    /// Whether a save state now would be one worth resuming from.
+    pub fn can_snap(&self) -> bool {
+        !matches!(self, Self::Pokemon(b) if !b.resumable())
+    }
+
+    /// The game was just loaded from a save state.
+    pub fn resumed(&mut self, gb: &mut GameBoy) {
+        if let Self::Pokemon(b) = self {
+            b.resumed(gb);
+        }
+    }
+
     /// The buttons to hold for the next frame.
     pub fn buttons(&mut self, gb: &mut GameBoy, frame: u64) -> u8 {
         match self {

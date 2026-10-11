@@ -29,8 +29,9 @@ read only after the last is dropped, so a 32 MiB cartridge fits the pod's
 128 MiB. The volume is 256 MiB, which holds about a dozen 16 MiB games.
 
 The ROM must be one you have the right to use: dump a cartridge you own
-with a cartridge reader (a GBxCart RW, an Epilogue GB Operator). Saves are
-never read or written; every boot is a new game.
+with a cartridge reader (a GBxCart RW, an Epilogue GB Operator). Battery
+saves are never read from or written to the ROM folder; each game's
+progress is kept in a save state instead (below).
 
 ## BIOS
 
@@ -64,6 +65,19 @@ project.
 
 `GBA_ROTATE_SECS` moves to the next ROM (default 15 minutes), which also
 gets any game out of a spot the walk cannot leave.
+
+## Save states
+
+As [`gameboy`'s](gameboy.md#save-states), from the same shared runner: a
+save state of the playing ROM when it rotates away, when another saver
+takes the panel and every `GBA_STATE_SECS`, loaded on its next boot, which
+then skips straight to the pilot's explore phase. A state is mGBA's own
+(`mCoreSaveStateNamed`) with the game's battery save and clock in it:
+about 516 KiB for FireRed (a 128 KiB flash save), taken in 0.1 ms and
+written in under a millisecond on an M-series Mac. With `SAVER_STATE_DIR`
+set it is `$SAVER_STATE_DIR/gba/<sha1>.state` (and `.prev`); unset, memory
+for the life of the process. A bad one is dropped for the previous one or a
+fresh boot; ↺ Restart deletes the playing ROM's.
 
 ## How it runs
 
@@ -112,6 +126,9 @@ Source: [`src/gba/`](../../src/gba/mod.rs),
   Lower is slow motion for less CPU.
 - `GBA_ROTATE_SECS`: seconds per ROM when there are several, 0..86400
   (default 900; 0 never moves on).
+- `GBA_STATE_SECS`: seconds between save states of the playing ROM,
+  0..86400 (default 300; 0 saves only when it rotates away or the saver
+  switches).
 - `GBA_SEED`: pins which ROM plays first and the pilot's rolls (default:
   from the clock).
 

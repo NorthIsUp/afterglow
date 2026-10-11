@@ -43,6 +43,7 @@ pub fn pokemon(sha1: &str) -> Option<Pokemon> {
 pub struct Cart {
     pub name: String,
     pub rom: Vec<u8>,
+    pub sha1: String,
     pub pokemon: Option<Pokemon>,
 }
 
@@ -79,5 +80,10 @@ pub fn read(path: &Path) -> Option<Cart> {
         "[screensaver] gba: {name}: sha1 {sha1}{}",
         pokemon.map_or(String::new(), |p| format!(", Pokémon {p:?}"))
     );
-    Some(Cart { name, rom, pokemon })
+    Some(Cart {
+        name,
+        rom,
+        sha1,
+        pokemon,
+    })
 }

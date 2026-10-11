@@ -106,9 +106,26 @@ impl<W, F, X> Slot<W, F, X> {
     /// For the engine thread: block while parked, or while `park` says so.
     /// True if it blocked, so the caller's clock restarts.
     pub fn wait(&self, park: impl Fn(&Ctl<W, X>) -> bool) -> (MutexGuard<'_, Ctl<W, X>>, bool) {
+        self.wait_or_idle(park, || {})
+    }
+
+    /// As [`Self::wait`], running `idle` once, unlocked, before it first
+    /// blocks.
+    pub fn wait_or_idle(
+        &self,
+        park: impl Fn(&Ctl<W, X>) -> bool,
+        idle: impl FnOnce(),
+    ) -> (MutexGuard<'_, Ctl<W, X>>, bool) {
         let mut c = lock(&self.ctl);
         let mut parked = false;
+        let mut idle = Some(idle);
         while c.owner == 0 || c.want.is_none() || park(&c) {
+            if let Some(f) = idle.take() {
+                drop(c);
+                f();
+                c = lock(&self.ctl);
+                continue;
+            }
             c = self.wake.wait(c).unwrap_or_else(PoisonError::into_inner);
             parked = true;
         }

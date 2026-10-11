@@ -3,11 +3,17 @@
 //! boot skipped, a panic caught at the frame boundary and the next booted,
 //! and the loop that paces frames into the slot. What a cartridge is, and
 //! how one boots and plays, is the [`Deck`]'s.
+//!
+//! A cartridge picks up where it left off: a save state is taken when it
+//! rotates away, when the saver is switched away, when the deck reloads and
+//! every [`Deck::snap_every`], and its next boot (in this process or, under
+//! `SAVER_STATE_DIR`, the next) loads it. See `savestate.rs`.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
 use crate::engine_slot::{pace, Slot, View};
+use crate::savestate::Store;
 
 pub trait Deck: Sized {
     type Want: Clone;
@@ -30,6 +36,17 @@ pub trait Deck: Sized {
     }
     fn width(want: &Self::Want) -> usize;
     fn rotate(want: &Self::Want) -> Option<Duration>;
+    /// How often a save state is taken while it plays.
+    fn snap_every(want: &Self::Want) -> Option<Duration>;
+    /// The core's save-state format, so a state from another is not loaded.
+    const FORMAT: &'static str;
+    /// The playing ROM's SHA-1, hex: whose save state is whose.
+    fn rom_id(s: &Self::Session) -> &str;
+    /// Append a save state to `out`; false when this is no moment for one.
+    fn snap(s: &mut Self::Session, out: &mut Vec<u8>) -> bool;
+    /// Load what `snap` wrote into a fresh boot. An error leaves the
+    /// session unusable.
+    fn restore(s: &mut Self::Session, state: &[u8]) -> Result<(), String>;
     fn period(want: &Self::Want) -> Duration;
     /// A new want from the saver, `old` the one before.
     fn take(r: &mut Runner<Self>, old: Option<&Self::Want>, want: &Self::Want);
@@ -44,6 +61,15 @@ pub struct Runner<D: Deck> {
     started: Instant,
     seed: u32,
     pub view: Vec<u16>,
+    pub store: Store,
+    /// When the playing cartridge was last saved, or booted.
+    snapped: Instant,
+    /// It has played a frame since.
+    dirty: bool,
+    snap_buf: Vec<u8>,
+    /// Boots that loaded a save state.
+    #[cfg(test)]
+    pub resumes: u32,
 }
 
 impl<D: Deck> Runner<D> {
@@ -56,6 +82,12 @@ impl<D: Deck> Runner<D> {
             started: Instant::now(),
             seed: 1,
             view: vec![0; view_len],
+            store: Store::new(D::NAME),
+            snapped: Instant::now(),
+            dirty: false,
+            snap_buf: Vec::new(),
+            #[cfg(test)]
+            resumes: 0,
         }
     }
 
@@ -65,8 +97,9 @@ impl<D: Deck> Runner<D> {
     }
 
     /// A new deck, starting from the cartridge `seed` picks. The playing
-    /// one is dropped first.
+    /// one is saved and dropped first.
     pub fn reload(&mut self, deck: impl FnOnce() -> D, seed: u32) {
+        self.snap();
         self.session = None;
         self.deck = deck();
         self.bad = vec![false; self.deck.len()];
@@ -89,10 +122,18 @@ impl<D: Deck> Runner<D> {
             }
             self.seed = self.seed.wrapping_mul(0x9E37_79B9).wrapping_add(1);
             match self.deck.boot(i, want, self.seed) {
-                Ok(s) => {
+                Ok(mut s) => {
+                    if !self.resume(&mut s) {
+                        match self.deck.boot(i, want, self.seed) {
+                            Ok(fresh) => s = fresh,
+                            Err(_) => continue,
+                        }
+                    }
                     eprintln!("[screensaver] {}: playing {}", D::NAME, D::name(&s));
                     self.session = Some(s);
                     self.started = Instant::now();
+                    self.snapped = self.started;
+                    self.dirty = false;
                     // Rotation and a crash move on from the one playing.
                     self.idx = i;
                     return true;
@@ -107,9 +148,69 @@ impl<D: Deck> Runner<D> {
         false
     }
 
-    /// Drop the playing cartridge before the next is booted, so two are
-    /// never running at once.
-    fn next(&mut self) {
+    /// Load a fresh boot's saved state, if it has one. False if loading
+    /// failed and the session must be booted again.
+    fn resume(&mut self, s: &mut D::Session) -> bool {
+        let id = D::rom_id(s).to_owned();
+        let Some(state) = self.store.get(&id, D::FORMAT) else {
+            return true;
+        };
+        let loaded = catch_unwind(AssertUnwindSafe(|| D::restore(s, &state)))
+            .unwrap_or_else(|_| Err("the core panicked".into()));
+        match loaded {
+            Ok(()) => {
+                eprintln!("[screensaver] {}: resuming {}", D::NAME, D::name(s));
+                #[cfg(test)]
+                {
+                    self.resumes += 1;
+                }
+                true
+            }
+            Err(e) => {
+                eprintln!(
+                    "[screensaver] {}: {}'s save state will not load ({e}); dropped",
+                    D::NAME,
+                    D::name(s)
+                );
+                self.store.discard(&id);
+                false
+            }
+        }
+    }
+
+    /// Save the playing cartridge, if it has played since it was last saved.
+    pub fn snap(&mut self) {
+        let Some(s) = self.session.as_mut().filter(|_| self.dirty) else {
+            return;
+        };
+        let t = Instant::now();
+        self.snap_buf.clear();
+        if D::snap(s, &mut self.snap_buf) {
+            self.store.put(D::rom_id(s), D::FORMAT, &self.snap_buf);
+            eprintln!(
+                "[screensaver] {}: saved {} ({} KiB in {:.1?})",
+                D::NAME,
+                D::name(s),
+                self.snap_buf.len() / 1024,
+                t.elapsed()
+            );
+        }
+        self.snapped = Instant::now();
+        self.dirty = false;
+    }
+
+    /// Drop the playing cartridge and its save states: a deliberate fresh
+    /// start.
+    pub fn forget(&mut self) {
+        if let Some(s) = self.session.take() {
+            self.store.forget(D::rom_id(&s));
+        }
+    }
+
+    /// Save and drop the playing cartridge before the next is booted, so
+    /// two are never running at once.
+    pub fn next(&mut self) {
+        self.snap();
         self.session = None;
         self.idx = (self.idx + 1) % self.deck.len().max(1);
     }
@@ -125,6 +226,8 @@ impl<D: Deck> Runner<D> {
             if !self.ensure(want) {
                 return false;
             }
+        } else if D::snap_every(want).is_some_and(|d| self.snapped.elapsed() >= d) {
+            self.snap();
         }
         let s = self.session.as_mut().expect("ensured above");
         let view = &mut self.view;
@@ -135,10 +238,15 @@ impl<D: Deck> Runner<D> {
                 D::NAME,
                 D::name(s)
             );
+            // Its newest state may be what crashes it: the next turn loads
+            // the one before.
+            self.store.discard(D::rom_id(s));
             self.bad[self.idx] = D::RETIRE;
-            self.next();
+            self.session = None;
+            self.idx = (self.idx + 1) % self.deck.len().max(1);
             return self.ensure(want);
         }
+        self.dirty = true;
         true
     }
 }
@@ -152,7 +260,9 @@ pub fn run<D: Deck>(slot: &Slot<D::Want, View<u16, ()>>, mut r: Runner<D>) -> ! 
     loop {
         let mut claimed = None;
         {
-            let (c, parked) = slot.wait(|_| false);
+            // Saved before it parks: the pod may restart before it is shown
+            // again.
+            let (c, parked) = slot.wait_or_idle(|_| false, || r.snap());
             if parked {
                 next = Instant::now();
             }

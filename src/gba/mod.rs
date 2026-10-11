@@ -44,6 +44,7 @@ fn layout(panel: &Panel, aspect: usize) -> (usize, usize, usize) {
 impl Gba {
     pub fn new(panel: &Panel, _fps: u32) -> Self {
         let rotate = env_num(&["GBA_ROTATE_SECS"], 900, 0, 86_400) as u64;
+        let snap = env_num(&["GBA_STATE_SECS"], 300, 0, 86_400) as u64;
         let aspect = pixel_aspect();
         let want = Want {
             rom: env_str(&["GBA_ROM"], "/roms/gba"),
@@ -51,6 +52,7 @@ impl Gba {
             width: layout(panel, aspect).0,
             fps: env_num(&["GBA_FPS"], 60, 1, 60) as u32,
             rotate: (rotate > 0).then(|| Duration::from_secs(rotate)),
+            snap_every: (snap > 0).then(|| Duration::from_secs(snap)),
             seed: saver_seed(&["GBA_SEED"], 1),
             restart: crate::saver::restarts("gba"),
         };
