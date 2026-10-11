@@ -98,6 +98,7 @@ mod ascii_rest;
 mod battlechess;
 #[cfg(test)]
 mod bench;
+mod cart_runner;
 mod chess;
 mod city;
 mod confetti;
@@ -134,8 +135,6 @@ mod plasma;
 mod podracer;
 mod pov;
 mod rain;
-// gba's for now; gameboy's mod.rs is the same code and moves onto it next.
-#[cfg(feature = "gba")]
 mod rgb555;
 mod rotate;
 mod sakura;

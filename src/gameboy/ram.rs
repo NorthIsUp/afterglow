@@ -6,11 +6,8 @@ use mizu_core::GameBoy;
 
 use super::carts::Revision;
 
-/// The WRAM addresses the bot and the world view read. Red and Blue share
-/// one layout; Yellow's sits a byte lower from `wOnSGB` up.
-/// EvoYellow is Yellow with a 252-Pokémon Pokédex (two 32-byte flag
-/// arrays, not 19), a 30-item bag, and 20 bytes of unused game-progress
-/// flags given back after them.
+/// The WRAM addresses the bot and the world view read: Red's, moved by
+/// [`moves`] in the other revisions.
 #[derive(Clone, Copy, Debug)]
 pub struct Ram {
     pub font_loaded: u16,
@@ -66,26 +63,32 @@ pub fn word(gb: &mut GameBoy, at: u16) -> u16 {
     u16::from(gb.peek(at)) << 8 | u16::from(gb.peek(at + 1))
 }
 
-const fn shift(r: Revision, red: u16) -> u16 {
+/// Where a revision's WRAM moved from Red's: from each Red address on, in
+/// order, how far. Yellow sits a byte lower from `wOnSGB` up. EvoYellow
+/// then grows at Red's `wPokedexSeen` (a 252-Pokémon Pokédex),
+/// `wNumBagItems` (a 30-item bag) and `wPlayerMoney`, and gives 20 unused
+/// game-progress flag bytes back from `wGameProgressFlagsEnd`.
+const fn moves(r: Revision) -> &'static [(u16, i16)] {
     match r {
-        Revision::Yellow if red >= 0xCF1B => red - 1,
-        Revision::Red | Revision::Blue | Revision::Yellow => red,
-        Revision::EvoYellow => shift(Revision::Yellow, red) + evo_over_yellow(red),
+        Revision::Red | Revision::Blue => &[],
+        Revision::Yellow => &[(0xCF1B, -1)],
+        Revision::EvoYellow => &[
+            (0xCF1B, -1),
+            (0xD30A, 12),
+            (0xD31D, 25),
+            (0xD347, 45),
+            (0xD6B8, 25),
+        ],
     }
 }
 
-/// From Red's `wPokedexSeen`, `wNumBagItems`, `wPlayerMoney` and
-/// `wGameProgressFlagsEnd` on.
-const fn evo_over_yellow(red: u16) -> u16 {
-    if red < 0xD30A {
-        0
-    } else if red < 0xD31D {
-        13
-    } else if red < 0xD347 || red >= 0xD6B8 {
-        26
-    } else {
-        46
+const fn shift(r: Revision, red: u16) -> u16 {
+    let (m, mut i, mut by) = (moves(r), 0, 0);
+    while i < m.len() && red >= m[i].0 {
+        by = m[i].1;
+        i += 1;
     }
+    red.wrapping_add_signed(by)
 }
 
 #[cfg(test)]
@@ -125,5 +128,14 @@ mod tests {
         for (i, (got, want)) in want.into_iter().enumerate() {
             assert_eq!(got, want, "row {i}: {got:04X} != {want:04X}");
         }
+    }
+
+    /// pokeyellow's symbols either side of `wOnSGB`, and Red's own.
+    #[test]
+    fn yellow_sits_a_byte_lower_from_wonsgb() {
+        let (red, y) = (Ram::of(Revision::Red), Ram::of(Revision::Yellow));
+        assert_eq!(y.at(0xCD6B), 0xCD6B); // wJoyIgnore
+        assert_eq!((y.party_count, y.cur_map), (0xD162, 0xD35D));
+        assert_eq!((red.party_count, red.cur_map), (0xD163, 0xD35E));
     }
 }

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::carts::{files, pokemon, sha1_hex, Pokemon};
-use super::engine::{Runner, Session, PANIC_NEXT};
+use super::engine::{runner, Session, PANIC_NEXT};
 use super::pilot::{Phase, Pilot};
 use super::*;
 use crate::grid::with_test_aspect;
@@ -203,7 +203,7 @@ fn bad_and_crashing_roms_move_on() {
         &[("a-empty.gba", b""), ("b-stripes.gba", &stripes_rom())],
     );
     let w = want(dir.to_str().unwrap(), 284);
-    let mut r = Runner::new();
+    let mut r = runner();
     r.take(None, &w);
     assert!(r.frame(&w), "the good ROM plays");
     assert_eq!(r.session.as_ref().unwrap().name, "b-stripes");

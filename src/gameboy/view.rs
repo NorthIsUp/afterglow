@@ -15,8 +15,7 @@ use mizu_core::GameBoy;
 use super::carts::Pilot;
 use super::engine::{H, SCREEN_W};
 use super::world::World;
-
-pub const DIM: u16 = 0x8000;
+use crate::rgb555::{glow, DIM};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -83,7 +82,7 @@ impl Composer {
                 *o = tone[p as usize];
             }
         }
-        glow(out, w, x0);
+        glow::<H>(out, w, x0, SCREEN_W, GLOW_ROWS);
         if self.mode == Mode::Frame || w == SCREEN_W {
             return;
         }
@@ -131,53 +130,8 @@ fn blend(a: u16, b: u16, t: u32, n: u32) -> u16 {
     mix(0) | mix(5) << 5 | mix(10) << 10
 }
 
-/// Columns of the screen's edge the glow averages, and rows it blurs over.
-const GLOW_COLS: usize = 8;
+/// Rows the glow blurs over.
 const GLOW_ROWS: usize = 6;
-
-/// Each side, outside the screen, in the average colour of the screen's
-/// edge beside it, blurred down the rows and dimmed: one row's edge pixel
-/// alone stripes the sides with every brick and letter.
-fn glow(out: &mut [u16], w: usize, x0: usize) {
-    if x0 == 0 {
-        return;
-    }
-    let sum = |row: &[u16]| {
-        row.iter().fold([0u32; 3], |a, &c| {
-            [
-                a[0] + u32::from(c & 31),
-                a[1] + u32::from(c >> 5 & 31),
-                a[2] + u32::from(c >> 10 & 31),
-            ]
-        })
-    };
-    let mut edges = [[[0u32; 3]; 2]; H];
-    for (y, e) in edges.iter_mut().enumerate() {
-        let row = &out[y * w..][..w];
-        *e = [
-            sum(&row[x0..x0 + GLOW_COLS]),
-            sum(&row[x0 + SCREEN_W - GLOW_COLS..x0 + SCREEN_W]),
-        ];
-    }
-    for y in 0..H {
-        let (a, b) = (y.saturating_sub(GLOW_ROWS), (y + GLOW_ROWS + 1).min(H));
-        let mut acc = [[0u32; 3]; 2];
-        for e in &edges[a..b] {
-            for side in 0..2 {
-                for ch in 0..3 {
-                    acc[side][ch] += e[side][ch];
-                }
-            }
-        }
-        let n = ((b - a) * GLOW_COLS) as u32;
-        let px = |c: [u32; 3]| {
-            (c[0] / n) as u16 | ((c[1] / n) as u16) << 5 | ((c[2] / n) as u16) << 10 | DIM
-        };
-        let row = &mut out[y * w..][..w];
-        row[..x0].fill(px(acc[0]));
-        row[x0 + SCREEN_W..].fill(px(acc[1]));
-    }
-}
 
 const CW: usize = 1024;
 const CH: usize = 512;

@@ -2,6 +2,8 @@ use super::carts::{load, Cart, Pilot, BUNDLED};
 use super::engine::Session;
 use super::*;
 use crate::grid::with_test_aspect;
+use crate::next_rand;
+use crate::rgb555::{xrgb, DIM};
 use crate::saver;
 use crate::testalloc::allocs_during;
 
@@ -80,10 +82,10 @@ fn views_scale_onto_the_panel_and_report_exactly_what_moved() {
             GameBoySaver::build(&p, aspect, want(vw, Mode::Frame))
         });
         g.claim.want = None;
-        g.shown = true;
-        let vw = g.view.width();
+        g.screen.shown = true;
+        let vw = g.screen.width();
         let mut rng = 3u32;
-        for px in &mut g.pix[..vw * H] {
+        for px in &mut g.screen.pix[..vw * H] {
             *px = next_rand(&mut rng) as u16;
         }
         let mut buf = vec![0u32; p.buf_len()];
@@ -91,10 +93,10 @@ fn views_scale_onto_the_panel_and_report_exactly_what_moved() {
         let mut prev_dmg_px = usize::MAX;
         for step in 0..3 {
             if step == 1 {
-                g.pix[17 * vw + 5] ^= 1;
-                g.pix[140 * vw + vw - 1] ^= 1;
+                g.screen.pix[17 * vw + 5] ^= 1;
+                g.screen.pix[140 * vw + vw - 1] ^= 1;
             }
-            g.fresh = step != 2;
+            g.screen.fresh = step != 2;
             let before = buf.clone();
             let mut dmg = None;
             let n = allocs_during(|| dmg = Some(saver::frame(&mut g, &mut buf, &p)));
@@ -103,13 +105,13 @@ fn views_scale_onto_the_panel_and_report_exactly_what_moved() {
             verify(&before, &buf, &dmg, &p, step).unwrap_or_else(|e| panic!("{case}: {e}"));
             match step {
                 0 => {
-                    let (x0, x1, y0, y1) = g.view.px_rect();
+                    let (x0, x1, y0, y1) = g.screen.px_rect();
                     for (y, x) in [(y0, x0), (y1 - 1, x1 - 1), ((y0 + y1) / 2, (x0 + x1) / 2)] {
                         let sy = (y - y0) * H / (y1 - y0);
                         let sx = (x - x0) * vw / (x1 - x0);
                         assert_eq!(
                             buf[y * w + x],
-                            g.lut[g.pix[sy * vw + sx] as usize],
+                            xrgb(g.screen.pix[sy * vw + sx]),
                             "{case} ({x},{y})"
                         );
                     }
@@ -185,7 +187,7 @@ fn the_tobu_pilot_plays_a_level() {
 #[test]
 fn a_crashing_cartridge_moves_on() {
     let carts = load("", "");
-    let mut r = engine::Runner::new(carts);
+    let mut r = engine::runner(carts);
     let w = want(256, Mode::Frame);
     assert!(r.frame(&w));
     let first = r.playing();
@@ -205,7 +207,7 @@ fn a_cartridge_the_core_panics_on_is_skipped() {
         .iter()
         .fold(0u8, |c, &b| c.wrapping_sub(b).wrapping_sub(1));
     assert!(Session::boot(&bad, &want(256, Mode::Frame), 7).is_err());
-    let mut r = engine::Runner::new(vec![bad, bundled("life")]);
+    let mut r = engine::runner(vec![bad, bundled("life")]);
     assert!(r.frame(&want(256, Mode::Frame)));
     assert_eq!(r.playing(), "life");
 }
@@ -214,7 +216,7 @@ fn a_cartridge_the_core_panics_on_is_skipped() {
 /// though nothing else about the saver changed. A knob change is not.
 #[test]
 fn a_restart_starts_the_cartridge_over() {
-    let mut r = engine::Runner::new(Vec::new());
+    let mut r = engine::runner(Vec::new());
     let w = want(256, Mode::Frame);
     r.take(None, &w);
     for _ in 0..120 {
@@ -236,22 +238,6 @@ fn a_restart_starts_the_cartridge_over() {
     assert_eq!(r.frames(), 1, "the restart kept the old game");
 }
 
-/// The user's Pokémon ROMs, read in place and never copied:
-/// `POKEMON_TEST_ROM` names a ROM or a folder (only the Pokémon revisions in
-/// it are used). Unset, the tests skip, so CI needs no commercial ROM.
-fn pokemon_roms() -> Vec<Cart> {
-    let Ok(path) = std::env::var("POKEMON_TEST_ROM") else {
-        eprintln!("POKEMON_TEST_ROM unset; skipping");
-        return Vec::new();
-    };
-    let carts: Vec<Cart> = load(&path, "")
-        .into_iter()
-        .filter(|c| matches!(c.pilot, Pilot::Pokemon(_)))
-        .collect();
-    assert!(!carts.is_empty(), "{path}: no known Pokémon revision");
-    carts
-}
-
 fn ram_of(cart: &Cart) -> ram::Ram {
     match cart.pilot {
         Pilot::Pokemon(r) => ram::Ram::of(r),
@@ -263,7 +249,7 @@ fn ram_of(cart: &Cart) -> ram::Ram {
 /// view lines up with the real screen wherever it is drawn.
 #[test]
 fn pokemon_bot_leaves_home_and_the_world_lines_up() {
-    let Some(cart) = pokemon_roms().into_iter().next() else {
+    let Some(cart) = carts::test_roms().into_iter().next() else {
         return;
     };
     let mut s = Session::boot(&cart, &want(461, Mode::Wide), 7).expect("boots");
@@ -419,7 +405,7 @@ fn bench_blit() {
     let p = Panel::new(1920, 1080, 1920);
     let mut g = with_test_aspect(180, || GameBoySaver::build(&p, 180, want(461, Mode::Wide)));
     g.claim.want = None;
-    g.shown = true;
+    g.screen.shown = true;
     let mut buf = vec![0u32; p.buf_len()];
     let mut rng = 1u32;
     for (name, region) in [("everything", 0..461), ("the screen only", 150..310)] {
@@ -428,10 +414,10 @@ fn bench_blit() {
         for _ in 0..n {
             for y in 0..H {
                 for x in region.clone() {
-                    g.pix[y * 461 + x] = next_rand(&mut rng) as u16;
+                    g.screen.pix[y * 461 + x] = next_rand(&mut rng) as u16;
                 }
             }
-            g.fresh = true;
+            g.screen.fresh = true;
             saver::frame(&mut g, &mut buf, &p);
         }
         eprintln!("{name}: {:?}/frame", t0.elapsed() / n);
@@ -485,7 +471,7 @@ fn the_sides_never_strobe() {
 
 #[test]
 fn the_sides_never_strobe_in_pokemon() {
-    for cart in pokemon_roms() {
+    for cart in carts::test_roms() {
         assert_no_strobe(&cart, 60 * 60 * 4);
     }
 }

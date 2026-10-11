@@ -56,13 +56,6 @@ pub enum Revision {
     EvoYellow,
 }
 
-impl Revision {
-    /// Yellow's story and its follower in sprite slot 15.
-    pub fn yellow(self) -> bool {
-        matches!(self, Self::Yellow | Self::EvoYellow)
-    }
-}
-
 /// pret's `roms.sha1` for pokered and pokeyellow: the USA/Europe releases;
 /// then EvoYellow's 3.9 UPS applied to that Yellow.
 const POKEMON: &[(&str, Revision)] = &[
@@ -81,6 +74,13 @@ pub fn sha1_hex(rom: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
         s
     })
+}
+
+/// A colour cartridge, by its header. A monochrome game runs as one on a
+/// DMG: the core's GBC mode would colour it with a palette of its own
+/// choosing.
+pub fn color(rom: &[u8]) -> bool {
+    rom.get(0x143).is_some_and(|b| b & 0x80 != 0)
 }
 
 pub fn revision(rom: &[u8]) -> Option<Revision> {
@@ -190,6 +190,31 @@ pub fn shades(name: &str, pilot: Pilot) -> Shades {
 
 /// The greys the core paints a monochrome game in, lightest first.
 pub const DMG_GREYS: Shades = [0x7FFF, 0x56B5, 0x294A, 0x0000];
+
+/// The user's Pokémon ROMs, read in place and never copied:
+/// `POKEMON_TEST_ROM` and `POKEMON_TEST_HACKS` (patched ROMs, EvoYellow)
+/// each name a ROM or a folder, of which only the Pokémon revisions are
+/// used. Unset, the tests skip, so CI needs no commercial ROM.
+#[cfg(test)]
+pub fn test_roms() -> Vec<Cart> {
+    let paths: Vec<String> = ["POKEMON_TEST_ROM", "POKEMON_TEST_HACKS"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .collect();
+    if paths.is_empty() {
+        eprintln!("POKEMON_TEST_ROM and POKEMON_TEST_HACKS unset; skipping");
+    }
+    let carts: Vec<Cart> = paths
+        .iter()
+        .flat_map(|p| load(p, ""))
+        .filter(|c| matches!(c.pilot, Pilot::Pokemon(_)))
+        .collect();
+    assert!(
+        paths.is_empty() || !carts.is_empty(),
+        "{paths:?}: no known Pokémon revision"
+    );
+    carts
+}
 
 #[cfg(test)]
 mod tests {
