@@ -126,8 +126,10 @@ Brock on. It stops before Erika: EvoYellow's Celadon Gym fields ground
 types and her team is six grass Pokémon at levels 46 to 50, more than a
 lone Raichu takes on.
 
-The bot plays the story from the game's own RAM, from power-on with a blank
-battery save (a `GAMEBOY_SAV` is not used for Pokémon). The intro runs
+The bot plays the story from the game's own RAM. The first time it sees a
+ROM it starts from power-on with a blank battery save (a `GAMEBOY_SAV` is
+not used for Pokémon); after that it resumes from that ROM's
+[save state](#save-states). The intro runs
 unseen at the emulator's full speed: it sets the options to fast text, no
 battle animations and SET, takes NEW GAME, picks the first preset name for
 the player and the rival, and walks out of the house, checking each step in
@@ -172,8 +174,8 @@ there is no further story yet (Koga needs the Bicycle or the Poké Flute,
 Saffron a drink for its guards), and the bot wanders.
 
 The mirror page's **↺ Restart** (`POST /restart?saver=gameboy`) is a
-power-on reset: the cartridge boots again with no battery save, so the bot
-takes NEW GAME.
+power-on reset: the playing cartridge's save states are deleted and it boots
+again with no battery save, so the bot takes NEW GAME.
 
 It does not beat the game. That needs either a longer route through the
 story (every key item, gym and cutscene) or a tool-assisted movie replayed
@@ -188,6 +190,36 @@ menus sync (the game is saving at the frame the movie cuts the power), but
 the full run does not, across 630 boot-offset and power-cut timings. A
 movie would need your own boot ROM dump to start from the same state, which
 the emulator could load but this saver does not take yet.
+
+## Save states
+
+A cartridge picks up where it left off. The `gameboy` thread takes a save
+state of the playing cartridge when it rotates to the next, when another
+saver takes the panel, and every `GAMEBOY_STATE_SECS` (5 minutes by
+default) while it plays; the next time that cartridge boots, it loads the
+state instead of powering on. That is what lets the Pokémon bot get through
+the story across rotations: it reads where it is from RAM, so a resumed game
+goes on from the same goal. Its rewind snapshots and remembered walls start
+empty, and the intro is never saved (it is seconds long, and replayed).
+
+What is saved is the emulator's whole machine (mizu-core's own save-state
+format: CPU, memory, cartridge mapper and battery RAM), about 80 KiB for
+Pokémon Red. Taking and writing one costs under a millisecond on an M-series
+Mac, on the `gameboy` thread, never the render thread.
+
+- `SAVER_STATE_DIR` set: one file per ROM, `$SAVER_STATE_DIR/gameboy/<sha1>.state`
+  (the ROM's SHA-1, as the log prints it), and the one before it as
+  `<sha1>.prev`. A state is written beside its name and renamed over it, so
+  a crash mid-write leaves the old one. The ROM folder is never written.
+- Unset (the default): states live in memory, so a game resumes after a
+  rotation or a saver switch, and a restart of the process starts over.
+
+A state that does not read back (a torn write, a hand edit, one from another
+version of the emulator, or one that crashes the game) is logged and
+dropped, and the cartridge boots from its previous state or from power-on;
+it never stops the saver. To start a game over, use the page's ↺ Restart,
+or delete its file (`$SAVER_STATE_DIR/gameboy/<sha1>.*`, or the whole
+folder for every game) while the saver is not showing.
 
 ## How it runs
 
@@ -222,6 +254,9 @@ Source: [`src/gameboy/`](../../src/gameboy/mod.rs),
   `green`, `pocket`, `grey`, `red`, `blue`. Colour games keep their own.
 - `GAMEBOY_ROTATE_SECS`: seconds per cartridge when there are several,
   0..86400 (default 600; 0 never moves on).
+- `GAMEBOY_STATE_SECS`: seconds between save states of the playing
+  cartridge, 0..86400 (default 300; 0 saves only when it rotates away or
+  the saver switches).
 - `GAMEBOY_SEED`: pins which cartridge plays first and the pilots' choices
   (default: from the clock).
 - `POKEMON_TEXT_MS`: how long printed text stays up before the bot presses

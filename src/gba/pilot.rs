@@ -66,6 +66,11 @@ impl Pilot {
         self.phase
     }
 
+    /// The game was loaded from a save state, past its title screens.
+    pub fn resumed(&mut self) {
+        self.phase = Phase::Explore;
+    }
+
     fn roll(&mut self, n: u32) -> u32 {
         next_rand(&mut self.rng) % n
     }

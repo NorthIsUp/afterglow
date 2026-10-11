@@ -39,6 +39,8 @@ pub struct Want {
     /// that much less.
     pub fps: u32,
     pub rotate: Option<Duration>,
+    /// How often the playing cartridge is saved.
+    pub snap_every: Option<Duration>,
     pub seed: u32,
     /// `saver::restarts("gba")` when built: a new value is a power-on reset.
     pub restart: u64,
@@ -106,6 +108,7 @@ fn main_struct(p: Pokemon) -> u32 {
 pub struct Session {
     core: Core,
     pub name: String,
+    sha1: String,
     pokemon: Option<Pokemon>,
     pilot: Pilot,
     keys: u32,
@@ -118,6 +121,7 @@ impl Session {
         Ok(Self {
             core,
             name: cart.name,
+            sha1: cart.sha1,
             pokemon: cart.pokemon,
             pilot: Pilot::new(cart.pokemon, seed),
             keys: 0,
@@ -138,6 +142,16 @@ impl Session {
         self.keys = self.pilot.keys(self.core.pixels(), overworld);
         view::compose(self.core.pixels(), width, out);
         true
+    }
+
+    /// Picked up from a save state: the game is past any title screen.
+    fn restore(&mut self, state: &[u8]) -> Result<(), String> {
+        if !self.core.load(state) {
+            return Err("mGBA rejected it".into());
+        }
+        self.pilot.resumed();
+        self.keys = 0;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -205,6 +219,25 @@ impl Deck for Files {
         want.rotate
     }
 
+    fn snap_every(want: &Want) -> Option<Duration> {
+        want.snap_every
+    }
+
+    // mGBA checks its own state version too; this names it in the log.
+    const FORMAT: &'static str = "mgba-0.10.5";
+
+    fn rom_id(s: &Session) -> &str {
+        &s.sha1
+    }
+
+    fn snap(s: &mut Session, out: &mut Vec<u8>) -> bool {
+        s.core.save(out)
+    }
+
+    fn restore(s: &mut Session, state: &[u8]) -> Result<(), String> {
+        s.restore(state)
+    }
+
     fn period(want: &Want) -> Duration {
         want.period()
     }
@@ -214,6 +247,10 @@ impl Deck for Files {
     fn take(r: &mut Runner, old: Option<&Want>, w: &Want) {
         if old.is_some_and(|o| o.same_carts(w)) {
             return;
+        }
+        // A restart is a deliberate fresh start: power-on, no save state.
+        if old.is_some_and(|o| o.restart != w.restart) {
+            r.forget();
         }
         r.reload(
             || Files {

@@ -12,7 +12,7 @@ use std::panic::catch_unwind;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use mizu_core::{GameBoy, GameBoyConfig};
+use mizu_core::{GameBoy, GameBoyConfig, SAVE_STATE_VERSION};
 
 use super::carts::{self, Cart, Pilot, DMG_GREYS};
 use super::pilot::Driver;
@@ -25,6 +25,10 @@ pub const H: usize = 144;
 pub const SCREEN_W: usize = 160;
 /// The widest view: 5.3:1 glass at a square Game Boy pixel.
 pub const MAX_W: usize = 768;
+const _: () = assert!(
+    SAVE_STATE_VERSION == 2,
+    "a new mizu state: bump Carts::FORMAT"
+);
 /// 70224 dots at 4.194304 MHz.
 const FRAME: Duration = Duration::from_nanos(16_742_706);
 
@@ -39,6 +43,8 @@ pub struct Want {
     pub width: usize,
     pub mode: Mode,
     pub rotate: Option<Duration>,
+    /// How often the playing cartridge is saved.
+    pub snap_every: Option<Duration>,
     pub seed: u32,
     /// `saver::restarts("gameboy")` when built: a new value is a power-on reset.
     pub restart: u64,
@@ -120,6 +126,7 @@ pub fn tone_map(color: bool, shades: carts::Shades) -> Box<[u16]> {
 pub struct Session {
     pub gb: GameBoy,
     pub name: String,
+    sha1: String,
     driver: Driver,
     tone: Box<[u16]>,
     color: bool,
@@ -131,8 +138,9 @@ impl Session {
     pub fn boot(cart: &Cart, want: &Want, seed: u32) -> Result<Self, String> {
         let color = carts::color(&cart.rom);
         let config = GameBoyConfig { is_dmg: !color };
-        // The Pokémon bot plays a new game from power-on: a battery save
-        // would put it somewhere its intro does not know.
+        // The Pokémon bot plays a new game from power-on, or its own save
+        // state: a battery save would put it somewhere its intro does not
+        // know.
         let sram = match cart.pilot {
             Pilot::Pokemon(_) => None,
             _ => cart.sram.as_deref(),
@@ -146,6 +154,7 @@ impl Session {
         Ok(Self {
             gb,
             name: cart.name.clone(),
+            sha1: cart.sha1.clone(),
             driver: Driver::new(cart.pilot, seed, want.pokemon),
             tone: tone_map(color, carts::shades(&want.palette, cart.pilot)),
             color,
@@ -189,7 +198,7 @@ impl Session {
 pub static PANIC_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The cartridges `GAMEBOY_ROM` names, held in memory.
-pub struct Carts(Vec<Cart>);
+pub struct Carts(pub Vec<Cart>);
 
 pub type Runner = cart_runner::Runner<Carts>;
 
@@ -252,6 +261,26 @@ impl Deck for Carts {
         want.rotate
     }
 
+    fn snap_every(want: &Want) -> Option<Duration> {
+        want.snap_every
+    }
+
+    const FORMAT: &'static str = "mizu-1.3.0/2";
+
+    fn rom_id(s: &Session) -> &str {
+        &s.sha1
+    }
+
+    fn snap(s: &mut Session, out: &mut Vec<u8>) -> bool {
+        s.driver.can_snap() && s.gb.save_state(out).is_ok()
+    }
+
+    fn restore(s: &mut Session, state: &[u8]) -> Result<(), String> {
+        s.gb.load_state(state).map_err(|e| e.to_string())?;
+        s.driver.resumed(&mut s.gb);
+        Ok(())
+    }
+
     fn period(_: &Want) -> Duration {
         FRAME
     }
@@ -260,9 +289,12 @@ impl Deck for Carts {
     /// the game going under the new view.
     fn take(r: &mut Runner, old: Option<&Want>, w: &Want) {
         if old.is_none_or(|o| !o.same_carts(w)) {
-            // A restart is a fresh cartridge: no battery save, so the game
-            // starts from NEW GAME.
+            // A restart is a fresh cartridge: no battery save and no save
+            // state, so the game starts from NEW GAME.
             let restarted = old.is_some_and(|o| o.restart != w.restart);
+            if restarted {
+                r.forget();
+            }
             let sav = if restarted { "" } else { &w.sav };
             r.reload(|| Carts(carts::load(&w.rom, sav)), w.seed);
         } else if let Some(s) = &mut r.session {

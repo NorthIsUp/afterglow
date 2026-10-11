@@ -123,6 +123,23 @@ impl Bot {
         !self.intro.done
     }
 
+    /// Past the intro, which is never saved: it runs from power-on (or its
+    /// cached door state) in seconds, and a state from the middle of it
+    /// would land the bot somewhere it does not track.
+    pub fn resumable(&self) -> bool {
+        self.intro.done
+    }
+
+    /// Picked up from a save state, which only [`Self::resumable`] takes:
+    /// the intro is behind it, and the starter is whatever the game holds.
+    pub fn resumed(&mut self, gb: &mut GameBoy) {
+        self.started = true;
+        self.intro.done = true;
+        if let Some(s) = Starter::in_game(gb, self.ram) {
+            self.story.starter = s;
+        }
+    }
+
     /// One line on where the bot is, for the bench log.
     #[cfg(test)]
     pub fn status(&self, gb: &mut GameBoy) -> String {

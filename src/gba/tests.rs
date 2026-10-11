@@ -1,13 +1,15 @@
 use std::path::PathBuf;
 
 use super::carts::{files, pokemon, sha1_hex, Pokemon};
-use super::engine::{runner, Session, PANIC_NEXT};
+use super::engine::{runner, Files, Session, PANIC_NEXT};
 use super::pilot::{Phase, Pilot};
 use super::*;
+use crate::cart_runner::Deck;
 use crate::grid::with_test_aspect;
 use crate::next_rand;
 use crate::rgb555::DIM;
 use crate::saver;
+use crate::savestate::Store;
 use crate::testalloc::allocs_during;
 
 /// A ROM of our own, so CI plays something: mode 3, diagonal stripes that
@@ -61,6 +63,7 @@ fn want(rom: &str, width: usize) -> Want {
         width,
         fps: 60,
         rotate: None,
+        snap_every: None,
         seed: 7,
         restart: 0,
     }
@@ -304,4 +307,110 @@ fn bench_core() {
         path.display(),
         us * 59.73 / 1000.0
     );
+}
+
+/// Each frame's pixels, hashed, under the same scripted keys whichever
+/// machine plays them.
+fn hashes(core: &mut agb::Core, from: u32, n: u32) -> Vec<u64> {
+    (from..from + n)
+        .map(|f| {
+            let keys = [agb::keys::A, agb::keys::RIGHT, 0, agb::keys::START][(f / 20 % 4) as usize];
+            assert!(core.frame(keys));
+            core.pixels()
+                .iter()
+                .fold(0xcbf2_9ce4_8422_2325u64, |h, &p| {
+                    (h ^ u64::from(p)).wrapping_mul(0x100_0000_01b3)
+                })
+        })
+        .collect()
+}
+
+/// A state taken mid-game and loaded into a fresh machine plays on frame
+/// for frame as the one it came from: the stripes, and `GBA_TEST_ROM`.
+#[test]
+fn a_restored_state_plays_the_same_frames_as_the_original() {
+    let mut roms = vec![stripes_rom()];
+    if let Ok(path) = std::env::var("GBA_TEST_ROM") {
+        roms.push(std::fs::read(path).unwrap());
+    }
+    for rom in roms {
+        let mut a = agb::Core::new(rom.clone().into_boxed_slice(), &[]).unwrap();
+        hashes(&mut a, 0, 1200);
+        let mut state = Vec::new();
+        assert!(a.save(&mut state));
+        let mut b = agb::Core::new(rom.into_boxed_slice(), &[]).unwrap();
+        assert!(b.load(&state));
+        let (on, resumed) = (hashes(&mut a, 1200, 600), hashes(&mut b, 1200, 600));
+        let differ = on.iter().zip(&resumed).filter(|(x, y)| x != y).count();
+        assert_eq!(differ, 0, "{differ} of 600 frames differ");
+        assert!(on.windows(2).any(|w| w[0] != w[1]), "never moved");
+    }
+}
+
+/// Away to the next ROM and back resumes it; the page's restart drops
+/// the playing ROM's state and powers it on.
+#[test]
+fn rotation_resumes_and_a_restart_starts_over() {
+    let mut other = stripes_rom();
+    other.push(0);
+    let dir = folder("resume", &[("a.gba", &stripes_rom()), ("b.gba", &other)]);
+    let w = want(dir.to_str().unwrap(), 284);
+    let mut r = runner();
+    r.store = Store::at("gba", Some(dir.join("state")));
+    r.take(None, &w);
+    for _ in 0..3 {
+        for _ in 0..30 {
+            assert!(r.frame(&w));
+        }
+        r.next();
+    }
+    assert!(r.frame(&w));
+    assert_eq!(r.resumes, 2);
+    let sha1 = sha1_hex(&stripes_rom());
+    let playing = r.session.as_ref().unwrap().name.clone();
+    let id = if playing == "a" {
+        sha1
+    } else {
+        sha1_hex(&other)
+    };
+    assert!(r.store.get(&id, Files::FORMAT).is_some());
+    let restarted = Want {
+        restart: 1,
+        ..w.clone()
+    };
+    r.take(Some(&w), &restarted);
+    assert!(r.store.get(&id, Files::FORMAT).is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A GBA state's size and what it costs to take and write: `GBA_TEST_ROM`,
+/// else the stripes.
+#[test]
+#[ignore = "a benchmark, run by hand"]
+fn bench_snap() {
+    let rom =
+        std::env::var("GBA_TEST_ROM").map_or_else(|_| stripes_rom(), |p| std::fs::read(p).unwrap());
+    let dir = folder("bench-snap", &[]);
+    let mut store = Store::at("gba", Some(dir.clone()));
+    let mut core = agb::Core::new(rom.into_boxed_slice(), &[]).unwrap();
+    hashes(&mut core, 0, 3600);
+    let mut buf = Vec::new();
+    let mut times = Vec::new();
+    for _ in 0..50 {
+        let t = std::time::Instant::now();
+        buf.clear();
+        assert!(core.save(&mut buf));
+        let taken = t.elapsed();
+        store.put("bench", Files::FORMAT, &buf);
+        times.push((taken, t.elapsed()));
+        assert!(core.frame(0));
+    }
+    times.sort();
+    let (snap, all) = times[times.len() / 2];
+    let worst = times.iter().map(|t| t.1).max().unwrap();
+    eprintln!(
+        "{} KiB; median snap {snap:.2?}, snap+write {all:.2?}, worst {worst:.2?}",
+        buf.len() / 1024
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }

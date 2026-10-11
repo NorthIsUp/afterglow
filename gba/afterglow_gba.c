@@ -15,6 +15,7 @@
 
 #include <mgba/core/core.h>
 #include <mgba/core/log.h>
+#include <mgba/core/serialize.h>
 #include <mgba/gba/core.h>
 #include <mgba-util/vfs.h>
 
@@ -159,6 +160,45 @@ uint8_t agb_read8(struct agb* a, uint32_t addr) {
 	uint8_t v = (uint8_t) a->core->rawRead8(a->core, addr, -1);
 	DISARM();
 	return v;
+}
+
+// A save state with the battery save and clock in it, as mGBA's own
+// frontends write one. Its size, copied into `out` only if it fits `cap`;
+// -1 if the core aborted.
+long agb_save(struct agb* a, uint8_t* out, size_t cap) {
+	struct VFile* vf = VFileMemChunk(NULL, 0);
+	if (!vf) {
+		return -1;
+	}
+	long n = -1;
+	ARM(-1);
+	if (mCoreSaveStateNamed(a->core, vf, SAVESTATE_SAVEDATA | SAVESTATE_RTC)) {
+		n = (long) vf->size(vf);
+		if ((size_t) n <= cap) {
+			vf->seek(vf, 0, SEEK_SET);
+			vf->read(vf, out, n);
+		}
+	}
+	DISARM();
+	vf->close(vf);
+	return n;
+}
+
+// 0 once `state` (what `agb_save` wrote) is loaded; -1 if mGBA rejects it or
+// aborted, and the machine must not be run again.
+int agb_load(struct agb* a, const uint8_t* state, size_t len) {
+	struct VFile* vf = VFileFromConstMemory(state, len);
+	if (!vf) {
+		return -1;
+	}
+	int ok = -1;
+	ARM(-1);
+	if (mCoreLoadStateNamed(a->core, vf, SAVESTATE_SAVEDATA | SAVESTATE_RTC)) {
+		ok = 0;
+	}
+	DISARM();
+	vf->close(vf);
+	return ok;
 }
 
 void agb_free(struct agb* a) {

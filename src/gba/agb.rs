@@ -1,6 +1,6 @@
 //! mGBA behind `gba/afterglow_gba.c`: one machine, owned, freed on drop.
 
-use std::ffi::c_int;
+use std::ffi::{c_int, c_long};
 use std::ptr::NonNull;
 
 pub const W: usize = 240;
@@ -16,6 +16,8 @@ extern "C" {
     fn agb_frame(a: *mut Agb, keys: u32) -> c_int;
     fn agb_pixels(a: *const Agb) -> *const u32;
     fn agb_read8(a: *mut Agb, addr: u32) -> u8;
+    fn agb_save(a: *mut Agb, out: *mut u8, cap: usize) -> c_long;
+    fn agb_load(a: *mut Agb, state: *const u8, len: usize) -> c_int;
     fn agb_free(a: *mut Agb);
 }
 
@@ -74,6 +76,36 @@ impl Core {
 
     pub fn read32(&mut self, addr: u32) -> u32 {
         (0..4).fold(0, |v, i| v | u32::from(self.read8(addr + i)) << (8 * i))
+    }
+}
+
+impl Core {
+    /// Append a save state, battery save included, to `out`. False if the
+    /// core aborted.
+    pub fn save(&mut self, out: &mut Vec<u8>) -> bool {
+        loop {
+            let at = out.len();
+            let cap = out.capacity() - at;
+            // SAFETY: as `frame`; the glue writes at most `cap` bytes into
+            // the spare capacity.
+            let n = unsafe { agb_save(self.agb.as_ptr(), out.as_mut_ptr().add(at), cap) };
+            let Ok(n) = usize::try_from(n) else {
+                return false;
+            };
+            if n <= cap {
+                // SAFETY: the glue wrote all `n`.
+                unsafe { out.set_len(at + n) };
+                return true;
+            }
+            out.reserve(n);
+        }
+    }
+
+    /// Load what `save` wrote. False if mGBA rejects it: the machine is done
+    /// and must be dropped.
+    pub fn load(&mut self, state: &[u8]) -> bool {
+        // SAFETY: as `frame`; the state is only read.
+        unsafe { agb_load(self.agb.as_ptr(), state.as_ptr(), state.len()) == 0 }
     }
 }
 
