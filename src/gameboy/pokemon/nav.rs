@@ -11,6 +11,7 @@ use mizu_core::GameBoy;
 use super::super::carts::Revision;
 use super::super::kanto::{self, Kanto};
 use super::super::pilot::{A, B, DOWN, LEFT, RIGHT, UP};
+use super::edition::Edition;
 use super::grid::{is_tree, Bfs, Grid, Rules, Side, WALL};
 use super::{screen, Ram};
 
@@ -148,7 +149,7 @@ pub struct Nav {
     bfs: Bfs,
     /// Squares a person stands on, this map.
     people: Vec<(usize, usize)>,
-    /// Yellow's Pikachu walks behind the player in this sprite slot.
+    /// Yellow's follower walks behind the player in this sprite slot.
     skip_sprite: Option<u16>,
     /// The Poké Ball picture's id, and the squares of the ones on this map:
     /// an item lying in a corridor is picked up, not waited out.
@@ -192,8 +193,8 @@ impl Nav {
             leg: None,
             bfs: Bfs::default(),
             people: Vec::new(),
-            skip_sprite: rev.yellow().then_some(15),
-            ball: if rev.yellow() { 0x47 } else { 0x3D },
+            skip_sprite: Edition::of(rev).follower,
+            ball: Edition::of(rev).ball_sprite,
             balls: Vec::new(),
             still: Vec::new(),
             stills: (0xFF, [None; 16]),

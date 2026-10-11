@@ -12,6 +12,7 @@
 //! save state and never stands on that square again.
 
 mod battle;
+mod edition;
 mod field;
 mod grid;
 mod input;

@@ -18,7 +18,7 @@ use super::carts::Revision;
 use super::engine::{H, SCREEN_W};
 use super::kanto::{decode, pixel, Kanto, Placed, TILES};
 use super::ram::Ram;
-use super::view::DIM;
+use crate::rgb555::DIM;
 
 /// Maps further than this from the player, in blocks, are not placed: the
 /// widest view is about twelve blocks across.

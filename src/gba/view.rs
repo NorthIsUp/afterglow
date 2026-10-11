@@ -6,10 +6,9 @@
 //! A view pixel is RGB555, bit 15 marking it dimmed.
 
 use super::agb::{H, W};
-use crate::rgb555::DIM;
+use crate::rgb555::glow;
 
-/// Columns of the screen's edge the glow averages, and rows it blurs over.
-const GLOW_COLS: usize = 8;
+/// Rows the glow blurs over.
 const GLOW_ROWS: usize = 8;
 
 /// mGBA's XBGR8888 (red low) to RGB555 (red low).
@@ -25,49 +24,13 @@ pub fn compose(screen: &[u32], w: usize, out: &mut [u16]) {
             *o = rgb555(p);
         }
     }
-    if x0 == 0 {
-        return;
-    }
-    let sum = |row: &[u16]| {
-        row.iter().fold([0u32; 3], |a, &c| {
-            [
-                a[0] + u32::from(c & 31),
-                a[1] + u32::from(c >> 5 & 31),
-                a[2] + u32::from(c >> 10 & 31),
-            ]
-        })
-    };
-    let mut edges = [[[0u32; 3]; 2]; H];
-    for (y, e) in edges.iter_mut().enumerate() {
-        let row = &out[y * w..][..w];
-        *e = [
-            sum(&row[x0..x0 + GLOW_COLS]),
-            sum(&row[x0 + W - GLOW_COLS..x0 + W]),
-        ];
-    }
-    for y in 0..H {
-        let (a, b) = (y.saturating_sub(GLOW_ROWS), (y + GLOW_ROWS + 1).min(H));
-        let mut acc = [[0u32; 3]; 2];
-        for e in &edges[a..b] {
-            for side in 0..2 {
-                for ch in 0..3 {
-                    acc[side][ch] += e[side][ch];
-                }
-            }
-        }
-        let n = ((b - a) * GLOW_COLS) as u32;
-        let px = |c: [u32; 3]| {
-            (c[0] / n) as u16 | ((c[1] / n) as u16) << 5 | ((c[2] / n) as u16) << 10 | DIM
-        };
-        let row = &mut out[y * w..][..w];
-        row[..x0].fill(px(acc[0]));
-        row[x0 + W..].fill(px(acc[1]));
-    }
+    glow::<H>(out, w, x0, W, GLOW_ROWS);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rgb555::DIM;
 
     /// The screen lands in the middle untouched, and each side is its edge's
     /// colour, dimmed.

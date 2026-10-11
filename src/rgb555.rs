@@ -32,13 +32,61 @@ pub struct Screen {
 }
 
 /// RGB555 to XRGB8888, at full strength or dimmed to the glow's level.
-fn xrgb(c: u16) -> u32 {
+pub fn xrgb(c: u16) -> u32 {
     let k = if c & DIM != 0 { 85 } else { 256 };
     let ch = |s: u32| {
         let c5 = u32::from(c) >> s & 31;
         ((c5 << 3 | c5 >> 2) * k) >> 8
     };
     ch(0) << 16 | ch(5) << 8 | ch(10)
+}
+
+/// Columns of the screen's edge the glow averages.
+const GLOW_COLS: usize = 8;
+
+/// Each side of the `screen_w`-wide screen at `x0` in a `w`-wide view, in
+/// the average colour of the screen's edge beside it, blurred over `rows`
+/// rows either way and dimmed: one row's edge pixel alone stripes the
+/// sides with every brick and letter.
+pub fn glow<const H: usize>(out: &mut [u16], w: usize, x0: usize, screen_w: usize, rows: usize) {
+    if x0 == 0 {
+        return;
+    }
+    let sum = |row: &[u16]| {
+        row.iter().fold([0u32; 3], |a, &c| {
+            [
+                a[0] + u32::from(c & 31),
+                a[1] + u32::from(c >> 5 & 31),
+                a[2] + u32::from(c >> 10 & 31),
+            ]
+        })
+    };
+    let mut edges = [[[0u32; 3]; 2]; H];
+    for (y, e) in edges.iter_mut().enumerate() {
+        let row = &out[y * w..][..w];
+        *e = [
+            sum(&row[x0..x0 + GLOW_COLS]),
+            sum(&row[x0 + screen_w - GLOW_COLS..x0 + screen_w]),
+        ];
+    }
+    for y in 0..H {
+        let (a, b) = (y.saturating_sub(rows), (y + rows + 1).min(H));
+        let mut acc = [[0u32; 3]; 2];
+        for e in &edges[a..b] {
+            for side in 0..2 {
+                for ch in 0..3 {
+                    acc[side][ch] += e[side][ch];
+                }
+            }
+        }
+        let n = ((b - a) * GLOW_COLS) as u32;
+        let px = |c: [u32; 3]| {
+            (c[0] / n) as u16 | ((c[1] / n) as u16) << 5 | ((c[2] / n) as u16) << 10 | DIM
+        };
+        let row = &mut out[y * w..][..w];
+        row[..x0].fill(px(acc[0]));
+        row[x0 + screen_w..].fill(px(acc[1]));
+    }
 }
 
 fn grid_colour(c: u16) -> u16 {
@@ -78,6 +126,7 @@ impl Screen {
         }
     }
 
+    #[cfg(any(test, feature = "gba"))]
     pub fn width(&self) -> usize {
         self.view.width()
     }
@@ -117,6 +166,12 @@ impl Screen {
             |p| lut[p as usize],
             grid_colour,
         );
+    }
+
+    /// The panel pixels the view is drawn over.
+    #[cfg(test)]
+    pub fn px_rect(&self) -> (usize, usize, usize, usize) {
+        self.view.px_rect()
     }
 
     pub fn grid(&self) -> &Grid {

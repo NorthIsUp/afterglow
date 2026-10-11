@@ -9,6 +9,7 @@ use super::super::carts::Revision;
 use super::super::pilot::{A, DOWN, LEFT, RIGHT, UP};
 use super::super::ram::word;
 use super::battle;
+use super::edition::Edition;
 use super::field::{self, Kind};
 use super::grid::Grid;
 use super::input::{Keys, GAP};
@@ -97,12 +98,12 @@ const GYMS: [(u8, Square); 6] = [
 /// Lt. Surge's index in `GYMS`: Cut and two trash cans stand before him.
 const SURGE: usize = 2;
 /// Erika's: the Bicycle first, on the way back through Cerulean.
-const ERIKA: usize = 3;
+pub const ERIKA: usize = 3;
 /// Koga's: the Poké Flute stands before him.
 const KOGA: usize = 4;
 /// Sabrina's: Team Rocket holds Silph Co., and a guard who wants a drink
 /// stands at every gate into Saffron.
-const SABRINA: usize = 5;
+pub const SABRINA: usize = 5;
 /// Silph Co.'s card-key doors, each a block a script shuts until its
 /// event: the event, the floor, and the block (x, y).
 const DOORS: [(u16, u8, (u8, u8)); 19] = [
@@ -138,13 +139,6 @@ const LOCKS: [(u16, u8, Squares); 6] = [
     (ROUTE_12_SNORLAX, ROUTE_12, &[(SNORLAX.1, SNORLAX.2)]),
     (ROUTE_16_SNORLAX, ROUTE_16, &[(26, 10)]),
 ];
-/// Species that can learn Cut: the two starters that can, and the two
-/// grass Pokémon on Route 24 in every revision, Oddish and Bellsprout.
-/// EvoYellow renumbers the species.
-const CUTTERS: [u8; 10] = [0x99, 0x09, 0x9A, 0xB0, 0xB2, 0xB4, 0xB9, 0xBA, 0xBC, 0xBD];
-const EVO_CUTTERS: [u8; 10] = [0xE7, 0xE8, 0xE9, 0xE5, 0xEA, 0xED, 0x87, 0x88, 0x8A, 0x8B];
-const CATCH: [u8; 2] = [0xB9, 0xBC];
-const EVO_CATCH: [u8; 2] = [0x87, 0x8A];
 const POKECENTER: u8 = 6;
 /// Every mart but the department store: its clerk across the counter from
 /// (2, 5).
@@ -185,9 +179,9 @@ impl Starter {
 
     /// The level the lead should reach before each of `GYMS`. A starter
     /// weak against one grinds longer.
-    fn levels(self, rev: Revision) -> [u8; GYMS.len()] {
-        if rev.yellow() {
-            return [16, 18, 30, 40, 48, 0];
+    fn levels(self, ed: &Edition) -> [u8; GYMS.len()] {
+        if let Some(l) = ed.levels {
+            return l;
         }
         match self {
             Self::Bulbasaur => [14, 21, 26, 32, 44, 50],
@@ -213,7 +207,8 @@ pub enum Goal {
     Errand(Square, u8, Kind),
     /// Teach Cut to this party slot.
     Teach(u8),
-    /// Walk this map's grass with a Poké Ball for anything in `CATCH`.
+    /// Walk this map's grass with a Poké Ball for anything in
+    /// [`Edition::catch`].
     Catch(u8),
     /// A Pokémon Center's nurse, whichever is nearest.
     Heal,
@@ -253,7 +248,7 @@ pub fn cutter(gb: &mut GameBoy, ram: Ram) -> Option<u8> {
 }
 
 pub struct Story {
-    rev: Revision,
+    ed: &'static Edition,
     ram: Ram,
     pub starter: Starter,
     goal: Option<Goal>,
@@ -268,7 +263,7 @@ pub struct Story {
 impl Story {
     pub fn new(rev: Revision, starter: Starter) -> Self {
         Self {
-            rev,
+            ed: Edition::of(rev),
             ram: Ram::of(rev),
             starter,
             goal: None,
@@ -284,20 +279,10 @@ impl Story {
 
     /// Species worth a Poké Ball now.
     pub fn catching(&self) -> &'static [u8] {
-        if !matches!(self.goal, Some(Goal::Catch(_))) {
+        if matches!(self.goal, Some(Goal::Catch(_))) {
+            &self.ed.catch
+        } else {
             &[]
-        } else if self.rev == Revision::EvoYellow {
-            &EVO_CATCH
-        } else {
-            &CATCH
-        }
-    }
-
-    fn cutters(&self) -> &'static [u8] {
-        if self.rev == Revision::EvoYellow {
-            &EVO_CUTTERS
-        } else {
-            &CUTTERS
         }
     }
 
@@ -307,7 +292,7 @@ impl Story {
         // The ghost on Pokémon Tower's sixth floor turns back anyone who runs.
         matches!(self.goal, Some(Goal::Grind(_))) || gb.peek(self.ram.cur_map) == TOWER_6F || {
             let b = self.badges(gb);
-            let levels = self.starter.levels(self.rev);
+            let levels = self.starter.levels(self.ed);
             let want = levels[(b.trailing_ones() as usize).min(levels.len() - 1)];
             lead(gb, self.ram).level < want
         }
@@ -319,7 +304,7 @@ impl Story {
         if gb.peek(r.party_count) == 0 {
             if gb.peek(r.cur_map) == OAKS_LAB {
                 let i = self.starter as usize;
-                let x = if self.rev.yellow() { 7 } else { BALLS[i] };
+                let x = self.ed.starter_ball.unwrap_or(BALLS[i]);
                 return Some(Goal::Talk((OAKS_LAB, x, 3)));
             }
             // Oak stops the player at the edge of the grass and walks them
@@ -360,14 +345,7 @@ impl Story {
             return Some(Goal::Shop);
         }
         let next = badges.trailing_ones() as usize;
-        // Yellow's Pikachu keeps only electric moves, and Silph Co.'s
-        // Giovanni leads with ground types: no Marsh Badge there.
-        if next == SABRINA && self.rev.yellow() {
-            return None;
-        }
-        // EvoYellow's Celadon Gym fields ground types, and Erika six grass
-        // Pokémon at levels 46 to 50.
-        if next == ERIKA && self.rev == Revision::EvoYellow {
+        if self.ed.stop_before == Some(next) {
             return None;
         }
         let &(grind, leader) = GYMS.get(next)?;
@@ -381,7 +359,7 @@ impl Story {
         if let Some(g) = errand {
             return Some(g);
         }
-        if me.level < self.starter.levels(self.rev)[next] {
+        if me.level < self.starter.levels(self.ed)[next] {
             return Some(Goal::Grind(grind));
         }
         // Then on to it, through the cave: the Helix Fossil.
@@ -403,7 +381,7 @@ impl Story {
     /// HM01 from the S.S. Anne's captain.
     fn to_vermilion(&self, gb: &mut GameBoy) -> Option<Goal> {
         let r = self.ram;
-        let cutters = self.cutters();
+        let cutters = self.ed.cutters;
         let Some(learner) =
             field::slot(gb, r, |gb, s| cutters.contains(&gb.peek(field::mon(r, s))))
         else {
@@ -508,7 +486,7 @@ impl Story {
             return Goal::Talk((HIDEOUT_B4F, x, 2));
         }
         // Yellow's Jessie and James step out instead, and there is no door.
-        if !self.rev.yellow() && !event(gb, r, HIDEOUT_DOOR) {
+        if self.ed.hideout_door && !event(gb, r, HIDEOUT_DOOR) {
             let x = if event(gb, r, BEAT_DOOR_ROCKET) {
                 26
             } else {
@@ -545,7 +523,7 @@ impl Story {
             self.goal = Some(goal);
         }
         for (e, map, squares) in LOCKS {
-            let open = event(gb, self.ram, e) || e == HIDEOUT_DOOR && self.rev.yellow();
+            let open = event(gb, self.ram, e) || e == HIDEOUT_DOOR && !self.ed.hideout_door;
             nav.set_open(gb.rom(), map, squares, open);
         }
         self.doors(gb, nav);

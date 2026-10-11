@@ -11,16 +11,16 @@
 //! and the next one boots. One that will not boot is skipped for the life of
 //! the process.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::agb::{Core, H};
 use super::carts::{self, Pokemon};
 use super::pilot::Pilot;
 use super::view;
-use crate::engine_slot::{self, pace, Slot, View};
+use crate::cart_runner::{self, Deck};
+use crate::engine_slot::{self, Slot, View};
 
 /// The widest view: 5.4:1 glass at a square GBA pixel.
 pub const MAX_W: usize = 864;
@@ -66,7 +66,7 @@ impl Engine {
         E.get_or_init(|| {
             std::thread::Builder::new()
                 .name("gba".into())
-                .spawn(|| run(Engine::get()))
+                .spawn(|| cart_runner::run(&Engine::get().0, runner()))
                 .expect("spawning the gba thread");
             Engine(Slot::new(View::new(MAX_W, H), ()))
         })
@@ -153,149 +153,85 @@ thread_local! {
     pub static PANIC_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-pub struct Runner {
+/// The ROM files `GBA_ROM` names, each read when it boots, and the BIOS.
+pub struct Files {
     files: Vec<PathBuf>,
-    /// Files that would not boot, never tried again.
-    bad: Vec<bool>,
     bios: Vec<u8>,
-    idx: usize,
-    pub session: Option<Session>,
-    started: Instant,
-    seed: u32,
-    pub view: Vec<u16>,
 }
 
-impl Runner {
-    pub fn new() -> Self {
-        Self {
+pub type Runner = cart_runner::Runner<Files>;
+
+pub fn runner() -> Runner {
+    Runner::new(
+        Files {
             files: Vec::new(),
-            bad: Vec::new(),
             bios: Vec::new(),
-            idx: 0,
-            session: None,
-            started: Instant::now(),
-            seed: 1,
-            view: vec![0; MAX_W * H],
-        }
+        },
+        MAX_W * H,
+    )
+}
+
+impl Deck for Files {
+    type Want = Want;
+    type Session = Session;
+    const NAME: &'static str = "gba";
+    const RETIRE: bool = true;
+
+    fn len(&self) -> usize {
+        self.files.len()
     }
 
-    /// Boot the current cartridge, skipping any that will not. False when
-    /// none will.
-    fn ensure(&mut self) -> bool {
-        if self.session.is_some() {
-            return true;
-        }
-        for _ in 0..self.files.len() {
-            let i = self.idx;
-            self.idx = (i + 1) % self.files.len();
-            if self.bad[i] {
-                continue;
-            }
-            self.seed = self.seed.wrapping_mul(0x9E37_79B9).wrapping_add(1);
-            match Session::boot(&self.files[i], &self.bios, self.seed) {
-                Ok(s) => {
-                    eprintln!("[screensaver] gba: playing {}", s.name);
-                    self.session = Some(s);
-                    self.started = Instant::now();
-                    // Rotation and a crash move on from the one playing.
-                    self.idx = i;
-                    return true;
-                }
-                Err(e) => {
-                    eprintln!(
-                        "[screensaver] gba: {} will not boot: {e}",
-                        self.files[i].display()
-                    );
-                    self.bad[i] = true;
-                }
-            }
-        }
-        false
+    fn label(&self, i: usize) -> String {
+        self.files[i].display().to_string()
     }
 
-    /// A new want from the saver: rescan the ROMs when they changed (or on
-    /// a restart), else keep the game going under the new view.
-    pub fn take(&mut self, old: Option<&Want>, w: &Want) {
+    fn boot(&self, i: usize, _: &Want, seed: u32) -> Result<Session, String> {
+        Session::boot(&self.files[i], &self.bios, seed)
+    }
+
+    fn name(s: &Session) -> &str {
+        &s.name
+    }
+
+    fn step(s: &mut Session, want: &Want, view: &mut [u16]) -> bool {
+        s.step(want.width, view)
+    }
+
+    fn width(want: &Want) -> usize {
+        want.width
+    }
+
+    fn rotate(want: &Want) -> Option<Duration> {
+        want.rotate
+    }
+
+    fn period(want: &Want) -> Duration {
+        want.period()
+    }
+
+    /// Rescan the ROMs when they changed (or on a restart), else keep the
+    /// game going under the new view.
+    fn take(r: &mut Runner, old: Option<&Want>, w: &Want) {
         if old.is_some_and(|o| o.same_carts(w)) {
             return;
         }
-        self.session = None;
-        self.files = carts::files(&w.rom);
-        self.bad = vec![false; self.files.len()];
-        self.bios = if w.bios.is_empty() {
-            Vec::new()
-        } else {
-            std::fs::read(&w.bios).unwrap_or_else(|e| {
-                eprintln!(
-                    "[screensaver] gba: GBA_BIOS {}: {e}; using mGBA's HLE BIOS",
-                    w.bios
-                );
-                Vec::new()
-            })
-        };
-        self.idx = (w.seed as usize) % self.files.len().max(1);
-        self.seed = w.seed;
-    }
-
-    /// Drop the playing cartridge before the next is read, so two ROMs are
-    /// never in memory at once.
-    fn next(&mut self) {
-        self.session = None;
-        self.idx = (self.idx + 1) % self.files.len().max(1);
-    }
-
-    /// One frame. False when there is nothing to show.
-    pub fn frame(&mut self, want: &Want) -> bool {
-        if !self.ensure() {
-            return false;
-        }
-        let rotate = want.rotate.filter(|_| self.files.len() > 1);
-        if rotate.is_some_and(|d| self.started.elapsed() >= d) {
-            self.next();
-            if !self.ensure() {
-                return false;
-            }
-        }
-        let s = self.session.as_mut().expect("ensured above");
-        let view = &mut self.view;
-        let ok = catch_unwind(AssertUnwindSafe(|| s.step(want.width, view))).unwrap_or(false);
-        if !ok {
-            eprintln!(
-                "[screensaver] gba: {} crashed; moving to the next cartridge",
-                s.name
-            );
-            self.bad[self.idx] = true;
-            self.next();
-            return self.ensure();
-        }
-        true
+        r.reload(
+            || Files {
+                files: carts::files(&w.rom),
+                bios: read_bios(&w.bios),
+            },
+            w.seed,
+        );
     }
 }
 
-fn run(e: &Engine) {
-    let mut r = Runner::new();
-    let mut rev = 0;
-    let mut want: Option<Want> = None;
-    let mut next = Instant::now();
-    loop {
-        let mut claimed = None;
-        {
-            let (c, parked) = e.0.wait(|_| false);
-            if parked {
-                next = Instant::now();
-            }
-            c.take(&mut rev, &mut claimed);
-        }
-        if let Some(w) = claimed {
-            r.take(want.as_ref(), &w);
-            want = Some(w);
-        }
-        let w = want.as_ref().expect("set on the first claim");
-        if r.frame(w) {
-            e.0.frame().publish(&r.view, w.width, ());
-        } else {
-            e.0.frame().blank();
-        }
-        pace(&mut next, w.period());
+/// `GBA_BIOS`, or nothing for mGBA's HLE BIOS.
+fn read_bios(path: &str) -> Vec<u8> {
+    if path.is_empty() {
+        return Vec::new();
     }
+    std::fs::read(path).unwrap_or_else(|e| {
+        eprintln!("[screensaver] gba: GBA_BIOS {path}: {e}; using mGBA's HLE BIOS");
+        Vec::new()
+    })
 }

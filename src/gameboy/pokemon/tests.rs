@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use mizu_core::{GameBoy, GameBoyConfig};
 
-use super::super::carts::{load, Pilot, Revision};
+use super::super::carts::{color, load, test_roms, Pilot, Revision};
 use super::super::pilot::{A, B, DOWN, LEFT, RIGHT, START, UP};
 use super::intro::{Intro, DOOR, PALLET, STEPS};
 use super::nav::Nav;
@@ -22,6 +22,13 @@ fn rom() -> Option<(Vec<u8>, Revision)> {
         panic!("{path}: not a known Pokémon revision");
     };
     Some((c.rom, rev))
+}
+
+/// The core's mode the saver boots this ROM in: Yellow is a colour game.
+fn config(rom: &[u8]) -> GameBoyConfig {
+    GameBoyConfig {
+        is_dmg: !color(rom),
+    }
 }
 
 fn env(k: &str, d: &str) -> String {
@@ -107,7 +114,8 @@ fn pokebot_bench() {
     let hours: f64 = env("POKEBOT_HOURS", "4").parse().unwrap();
     let seed: u32 = env("POKEBOT_SEED", "7").parse().unwrap();
     let dir = env("POKEBOT_STATE_DIR", "");
-    let mut gb = GameBoy::from_rom(rom, None, GameBoyConfig { is_dmg: true }).unwrap();
+    let cfg = config(&rom);
+    let mut gb = GameBoy::from_rom(rom, None, cfg).unwrap();
     let load = env("POKEBOT_LOAD", "");
     if !load.is_empty() {
         gb.load_state(std::fs::File::open(&load).unwrap()).unwrap();
@@ -210,7 +218,8 @@ fn pokebot_bench() {
 #[ignore = "an explorer, run by hand"]
 fn pokebot_explore() {
     let Some((rom, _)) = rom() else { return };
-    let mut gb = GameBoy::from_rom(rom, None, GameBoyConfig { is_dmg: true }).unwrap();
+    let cfg = config(&rom);
+    let mut gb = GameBoy::from_rom(rom, None, cfg).unwrap();
     let load = env("POKEBOT_LOAD", "");
     if !load.is_empty() {
         gb.load_state(std::fs::File::open(&load).unwrap()).unwrap();
@@ -335,25 +344,16 @@ fn shot(gb: &GameBoy, path: &str) {
 #[test]
 fn pokemon_intro_passes_every_step() {
     const BOUND: u64 = 60 * 60 * 4;
-    let paths: Vec<String> = ["POKEMON_TEST_ROM", "POKEMON_TEST_HACKS"]
-        .iter()
-        .filter_map(|k| std::env::var(k).ok())
-        .collect();
-    if paths.is_empty() {
-        eprintln!("POKEMON_TEST_ROM and POKEMON_TEST_HACKS unset; skipping");
-        return;
-    }
     let shots = std::env::var("POKEBOT_SHOT_DIR").ok();
-    for cart in paths.iter().flat_map(|p| load(p, "")) {
+    for cart in test_roms() {
         let Pilot::Pokemon(rev) = cart.pilot else {
-            continue;
+            unreachable!("test_roms keeps Pokémon only");
         };
         let r = Ram::of(rev);
         let mut frames = Vec::new();
         for offset in 0..10u64 {
             Intro::forget();
-            let mut gb =
-                GameBoy::from_rom(cart.rom.clone(), None, GameBoyConfig { is_dmg: true }).unwrap();
+            let mut gb = GameBoy::from_rom(cart.rom.clone(), None, config(&cart.rom)).unwrap();
             for _ in 0..offset * 37 {
                 gb.clock_for_frame().unwrap();
             }

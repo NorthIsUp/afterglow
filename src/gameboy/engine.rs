@@ -8,9 +8,9 @@
 //! A panic anywhere in a frame (the core, a pilot, a view) is caught at the
 //! frame boundary: that cartridge is dropped and the next one boots.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::catch_unwind;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use mizu_core::{GameBoy, GameBoyConfig};
 
@@ -18,7 +18,8 @@ use super::carts::{self, Cart, Pilot, DMG_GREYS};
 use super::pilot::Driver;
 use super::pokemon::Knobs;
 use super::view::{Composer, Mode};
-use crate::engine_slot::{self, pace, Slot, View};
+use crate::cart_runner::{self, Deck};
+use crate::engine_slot::{self, Slot, View};
 
 pub const H: usize = 144;
 pub const SCREEN_W: usize = 160;
@@ -61,7 +62,7 @@ impl Engine {
         E.get_or_init(|| {
             std::thread::Builder::new()
                 .name("gameboy".into())
-                .spawn(|| run(Engine::get()))
+                .spawn(|| cart_runner::run(&Engine::get().0, runner(Vec::new())))
                 .expect("spawning the gameboy thread");
             Engine(Slot::new(View::new(MAX_W, H), ()))
         })
@@ -128,9 +129,7 @@ pub struct Session {
 
 impl Session {
     pub fn boot(cart: &Cart, want: &Want, seed: u32) -> Result<Self, String> {
-        // A monochrome game runs as one on a DMG: the core's GBC mode would
-        // colour it with a palette of its own choosing.
-        let color = cart.rom.get(0x143).is_some_and(|b| b & 0x80 != 0);
+        let color = carts::color(&cart.rom);
         let config = GameBoyConfig { is_dmg: !color };
         // The Pokémon bot plays a new game from power-on: a battery save
         // would put it somewhere its intro does not know.
@@ -189,6 +188,15 @@ impl Session {
 #[cfg(test)]
 pub static PANIC_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The cartridges `GAMEBOY_ROM` names, held in memory.
+pub struct Carts(Vec<Cart>);
+
+pub type Runner = cart_runner::Runner<Carts>;
+
+pub fn runner(carts: Vec<Cart>) -> Runner {
+    Runner::new(Carts(carts), MAX_W * H)
+}
+
 #[cfg(test)]
 impl Runner {
     pub fn frames(&self) -> u64 {
@@ -202,131 +210,64 @@ impl Runner {
     }
 }
 
-pub struct Runner {
-    carts: Vec<Cart>,
-    idx: usize,
-    session: Option<Session>,
-    started: Instant,
-    seed: u32,
-    view: Vec<u16>,
-}
+impl Deck for Carts {
+    type Want = Want;
+    type Session = Session;
+    const NAME: &'static str = "gameboy";
+    // A cartridge that will not boot is tried again on its next turn.
+    const RETIRE: bool = false;
 
-impl Runner {
-    pub(super) fn new(carts: Vec<Cart>) -> Self {
-        Self {
-            carts,
-            idx: 0,
-            session: None,
-            started: Instant::now(),
-            seed: 1,
-            view: vec![0; MAX_W * H],
-        }
+    fn len(&self) -> usize {
+        self.0.len()
     }
 
-    /// Boot the current cartridge, skipping any that will not load. False
-    /// when none will.
-    fn ensure(&mut self, want: &Want) -> bool {
-        if self.session.is_some() {
-            return true;
-        }
-        for _ in 0..self.carts.len() {
-            let cart = &self.carts[self.idx];
-            self.seed = self.seed.wrapping_mul(0x9E37_79B9).wrapping_add(1);
-            match Session::boot(cart, want, self.seed) {
-                Ok(s) => {
-                    eprintln!("[screensaver] gameboy: playing {}", cart.name);
-                    self.session = Some(s);
-                    self.started = Instant::now();
-                    return true;
-                }
-                Err(e) => {
-                    eprintln!("[screensaver] gameboy: {} will not boot: {e}", cart.name);
-                    self.idx = (self.idx + 1) % self.carts.len();
-                }
-            }
-        }
-        false
+    fn label(&self, i: usize) -> String {
+        self.0[i].name.clone()
     }
 
-    /// A new want from the saver: reload the cartridges when they changed
-    /// (or on a restart), else keep the game going under the new view.
-    pub(super) fn take(&mut self, old: Option<&Want>, w: &Want) {
+    fn boot(&self, i: usize, want: &Want, seed: u32) -> Result<Session, String> {
+        Session::boot(&self.0[i], want, seed)
+    }
+
+    fn name(s: &Session) -> &str {
+        &s.name
+    }
+
+    fn step(s: &mut Session, _: &Want, view: &mut [u16]) -> bool {
+        s.step(view);
+        true
+    }
+
+    /// The Pokémon intro runs unseen at the core's own speed; the view
+    /// shows the last frame until it is out of the house.
+    fn fast(s: &Session) -> bool {
+        s.fast()
+    }
+
+    fn width(want: &Want) -> usize {
+        want.width
+    }
+
+    fn rotate(want: &Want) -> Option<Duration> {
+        want.rotate
+    }
+
+    fn period(_: &Want) -> Duration {
+        FRAME
+    }
+
+    /// Reload the cartridges when they changed (or on a restart), else keep
+    /// the game going under the new view.
+    fn take(r: &mut Runner, old: Option<&Want>, w: &Want) {
         if old.is_none_or(|o| !o.same_carts(w)) {
             // A restart is a fresh cartridge: no battery save, so the game
             // starts from NEW GAME.
             let restarted = old.is_some_and(|o| o.restart != w.restart);
-            self.carts = carts::load(&w.rom, if restarted { "" } else { &w.sav });
-            self.idx = (w.seed as usize) % self.carts.len().max(1);
-            self.seed = w.seed;
-            self.session = None;
-        } else if let Some(s) = &mut self.session {
+            let sav = if restarted { "" } else { &w.sav };
+            r.reload(|| Carts(carts::load(&w.rom, sav)), w.seed);
+        } else if let Some(s) = &mut r.session {
             s.composer = Composer::new(w.width, w.mode, s.pilot());
             s.repaint(&w.palette);
         }
-    }
-
-    fn next(&mut self) {
-        self.session = None;
-        self.idx = (self.idx + 1) % self.carts.len().max(1);
-    }
-
-    /// One frame. False when there is nothing to show.
-    pub(super) fn frame(&mut self, want: &Want) -> bool {
-        if !self.ensure(want) {
-            return false;
-        }
-        let rotate = want.rotate.filter(|_| self.carts.len() > 1);
-        if rotate.is_some_and(|d| self.started.elapsed() >= d) {
-            self.next();
-            if !self.ensure(want) {
-                return false;
-            }
-        }
-        let s = self.session.as_mut().expect("ensured above");
-        let view = &mut self.view;
-        if catch_unwind(AssertUnwindSafe(|| s.step(view))).is_err() {
-            eprintln!(
-                "[screensaver] gameboy: {} crashed; moving to the next cartridge",
-                s.name
-            );
-            self.next();
-            return self.ensure(want);
-        }
-        true
-    }
-}
-
-fn run(e: &Engine) {
-    let mut r = Runner::new(Vec::new());
-    let mut rev = 0;
-    let mut want: Option<Want> = None;
-    let mut next = Instant::now();
-    loop {
-        let mut claimed = None;
-        {
-            let (c, parked) = e.0.wait(|_| false);
-            if parked {
-                next = Instant::now();
-            }
-            c.take(&mut rev, &mut claimed);
-        }
-        if let Some(w) = claimed {
-            r.take(want.as_ref(), &w);
-            want = Some(w);
-        }
-        let w = want.as_ref().expect("set on the first claim");
-        // The Pokémon intro runs unseen at the core's own speed; the view
-        // shows the last frame until it is out of the house.
-        if r.session.as_ref().is_some_and(Session::fast) {
-            r.frame(w);
-            next = Instant::now();
-            continue;
-        }
-        if r.frame(w) {
-            e.0.frame().publish(&r.view, w.width, ());
-        } else {
-            e.0.frame().blank();
-        }
-        pace(&mut next, FRAME);
     }
 }

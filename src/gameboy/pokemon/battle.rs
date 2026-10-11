@@ -37,8 +37,12 @@ const WILD: u8 = 1;
 /// `TypeEffects`' first entries (water on fire, fire on grass, both
 /// double): how it is found in any revision.
 const TYPE_CHART: [u8; 6] = [0x15, 0x14, 0x14, 0x14, 0x16, 0x14];
+/// A moves table row: animation (the move's id), effect, power, type,
+/// accuracy, PP.
+const MOVE_BYTES: usize = 6;
 /// The moves table's first three rows (Pound, Karate Chop, DoubleSlap) as
-/// id, effect and PP: EvoYellow changes their power and types.
+/// byte offset and value, id, effect and PP only: EvoYellow changes their
+/// power and types.
 const MOVE_TABLE: [(usize, u8); 7] = [(0, 1), (1, 0), (5, 35), (6, 2), (11, 25), (12, 3), (17, 10)];
 /// Types from this one up hit with Special.
 const FIRST_SPECIAL_TYPE: u8 = 0x14;
@@ -49,7 +53,7 @@ pub struct Battle {
     ram: Ram,
     /// Attacking type, defending type, multiplier in tenths.
     chart: Vec<(u8, u8, u8)>,
-    /// ROM offset of the moves table, 6 bytes per move from move 1.
+    /// ROM offset of the moves table, from move 1.
     moves: Option<usize>,
     /// The ROM has been searched, found or not: a miss is not searched again.
     learned: bool,
@@ -71,7 +75,7 @@ impl Battle {
         }
         self.learned = true;
         self.moves = rom
-            .windows(18)
+            .windows(3 * MOVE_BYTES)
             .position(|w| MOVE_TABLE.iter().all(|&(i, b)| w[i] == b));
         if let Some(at) = rom.windows(TYPE_CHART.len()).position(|w| w == TYPE_CHART) {
             self.chart = rom[at..]
@@ -91,10 +95,10 @@ impl Battle {
 
     /// Move `id`'s power, type and accuracy (out of 255).
     fn move_data(&self, rom: &[u8], id: u8) -> (u32, u8, u32) {
-        let Some(row) = self
-            .moves
-            .and_then(|at| rom.get(at + 6 * (usize::from(id).max(1) - 1)..)?.get(..6))
-        else {
+        let Some(row) = self.moves.and_then(|at| {
+            rom.get(at + MOVE_BYTES * (usize::from(id).max(1) - 1)..)?
+                .get(..MOVE_BYTES)
+        }) else {
             return (0, 0, 0);
         };
         (u32::from(row[2]), row[3], u32::from(row[4]))
